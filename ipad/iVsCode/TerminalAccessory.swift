@@ -156,11 +156,64 @@ final class CollapsibleAccessory: UIInputView {
     }
 }
 
-/// TerminalView con los atajos de Terminal.app de macOS.
+/// TerminalView con los atajos y gestos de Terminal.app de macOS.
 final class MacTerminalView: TerminalView {
     /// ⌘+ / ⌘− / ⌘0 (y sus equivalentes con Control) para el tamaño de letra
     var onFontSizeDelta: ((CGFloat) -> Void)?
     var onFontSizeReset: (() -> Void)?
+
+    private var scrollPan: UIPanGestureRecognizer?
+    private var scrollAccum: CGFloat = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setupScroll()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupScroll()
+    }
+
+    /// Scroll de historial con trackpad y dos dedos: SwiftTerm no traduce el
+    /// gesto, así que se envían eventos de rueda al programa remoto (tmux con
+    /// el ratón activo los convierte en desplazamiento del historial).
+    private func setupScroll() {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleScroll(_:)))
+        pan.allowedScrollTypesMask = .all      // rueda y trackpad
+        pan.maximumNumberOfTouches = 2
+        pan.minimumNumberOfTouches = 2         // un dedo sigue seleccionando
+        pan.delegate = self
+        addGestureRecognizer(pan)
+        scrollPan = pan
+    }
+
+    @objc private func handleScroll(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            scrollAccum = 0
+        case .changed:
+            let dy = gesture.translation(in: self).y
+            gesture.setTranslation(.zero, in: self)
+            scrollAccum += dy
+            let lineHeight: CGFloat = 22
+            while abs(scrollAccum) >= lineHeight {
+                let up = scrollAccum > 0
+                scrollAccum += up ? -lineHeight : lineHeight
+                sendWheel(up: up)
+            }
+        default:
+            scrollAccum = 0
+        }
+    }
+
+    /// Rueda en codificación SGR (la que entiende tmux con `mouse on`)
+    private func sendWheel(up: Bool) {
+        let button = up ? 64 : 65
+        send(txt: "\u{1b}[<\(button);1;1M")
+    }
+
+    // MARK: - Atajos
 
     override var keyCommands: [UIKeyCommand]? {
         var cmds = super.keyCommands ?? []
@@ -179,9 +232,39 @@ final class MacTerminalView: TerminalView {
         return cmds
     }
 
+    /// Red de seguridad: si SwiftTerm consume la pulsación antes de que actúen
+    /// los UIKeyCommand, se atiende aquí (es lo que pasaba con ⌘+ / ⌘−).
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses {
+            guard let key = press.key else { continue }
+            let mods = key.modifierFlags
+            guard mods.contains(.command) || mods.contains(.control) else { continue }
+            switch key.charactersIgnoringModifiers {
+            case "+", "=":
+                onFontSizeDelta?(1); return
+            case "-", "_":
+                onFontSizeDelta?(-1); return
+            case "0":
+                onFontSizeReset?(); return
+            case "k" where mods.contains(.command):
+                clearScreen(); return
+            default:
+                break
+            }
+        }
+        super.pressesBegan(presses, with: event)
+    }
+
     @objc private func fontBigger() { onFontSizeDelta?(1) }
     @objc private func fontSmaller() { onFontSizeDelta?(-1) }
     @objc private func fontReset() { onFontSizeReset?() }
     /// ⌘K en Terminal.app limpia la pantalla y el scrollback
     @objc private func clearScreen() { send(txt: "\u{0c}") }
+}
+
+extension MacTerminalView: UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
+    }
 }

@@ -240,6 +240,8 @@ struct FloatingTerminal: View {
     @State private var size = CGSize(width: 600, height: 380)
     @AppStorage("terminalFontSize") private var fontSize: Double = 13
     @State private var centered = false
+    @State private var dropMessage: String?
+    @State private var dropTargeted = false
 
     /// Mantiene el panel dentro de la ventana visible de la app.
     private func clamped(_ point: CGPoint, in container: CGSize) -> CGPoint {
@@ -289,12 +291,58 @@ struct FloatingTerminal: View {
         .onDisappear { session?.close() }
     }
 
+    /// Sube los archivos soltados desde Archivos/Fotos a la sesión actual.
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let mgrURL = server.managerURL,
+              let pw = Keychain.password(for: server.id) else { return false }
+        let client = ManagerClient(baseURL: mgrURL, password: pw)
+        let machine = server.dockerMachineName
+        for provider in providers {
+            provider.loadDataRepresentation(forTypeIdentifier: "public.data") { data, _ in
+                guard let data else { return }
+                let name = provider.suggestedName ?? "archivo"
+                Task {
+                    do {
+                        let dest = try await client.upload(data: data, filename: name,
+                                                           machine: machine)
+                        await MainActor.run {
+                            dropMessage = "\(name) → \(dest)"
+                            session?.terminalView?.feed(
+                                byteArray: ArraySlice(Array("\r\n[recibido: \(name) en \(dest)]\r\n".utf8)))
+                        }
+                    } catch {
+                        await MainActor.run {
+                            dropMessage = "Error subiendo \(name): \(error.localizedDescription)"
+                        }
+                    }
+                }
+            }
+        }
+        return true
+    }
+
     private var panelContent: some View {
         VStack(spacing: 0) {
             header
             if let session {
                 SwiftTermView(session: session, fontSize: CGFloat(fontSize)) { newSize in
                     fontSize = Double(newSize)
+                }
+                .onDrop(of: ["public.data"], isTargeted: $dropTargeted) { providers in
+                    handleDrop(providers)
+                }
+                .overlay(alignment: .center) {
+                    if dropTargeted {
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(Color.cyan, style: StrokeStyle(lineWidth: 3, dash: [10]))
+                            .background(Color.cyan.opacity(0.08))
+                            .overlay(
+                                Label("Soltar para subir", systemImage: "arrow.down.doc")
+                                    .font(.headline)
+                                    .foregroundStyle(.cyan))
+                            .padding(6)
+                            .allowsHitTesting(false)
+                    }
                 }
             } else {
                 Color(uiColor: MacTerminalTheme.background)

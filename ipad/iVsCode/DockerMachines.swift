@@ -86,6 +86,27 @@ struct ManagerClient {
         return (r?.files ?? [], r?.dest ?? "")
     }
 
+    /// Sube un archivo (arrastrado desde Archivos/Fotos) al host o a una máquina.
+    func upload(data: Data, filename: String, machine: String, dest: String = "") async throws -> String {
+        struct Result: Codable { let file: String?; let dest: String? }
+        var req = URLRequest(url: baseURL.appendingPathComponent("upload"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 600
+        req.setValue(password, forHTTPHeaderField: "X-Password")
+        req.setValue(filename, forHTTPHeaderField: "X-Filename")
+        req.setValue(machine, forHTTPHeaderField: "X-Machine")
+        req.setValue(dest, forHTTPHeaderField: "X-Dest")
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        let (respData, response) = try await URLSession.shared.upload(for: req, from: data)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            let msg = (try? JSONDecoder().decode([String: String].self, from: respData))?["error"]
+            throw NSError(domain: "manager", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: msg ?? "error \(http.statusCode)"])
+        }
+        let r = try? JSONDecoder().decode(Result.self, from: respData)
+        return r?.dest ?? ""
+    }
+
     /// Lista un directorio del host (machine: "") o de una máquina Docker.
     func fsList(machine: String, path: String) async throws -> (String, [FSEntry]) {
         struct Result: Codable { let path: String; let entries: [FSEntry] }

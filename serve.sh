@@ -676,6 +676,33 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             return
         try:
+            if self.path == "/upload":
+                name = os.path.basename(self.headers.get("X-Filename", "archivo"))
+                if not name or name in (".", ".."):
+                    raise ValueError("nombre de archivo invalido")
+                machine = valid_machine(self.headers.get("X-Machine", ""))
+                dest = self.headers.get("X-Dest", "").strip()
+                n = min(int(self.headers.get("Content-Length", 0) or 0), 512 << 20)
+                os.makedirs(STAGE, exist_ok=True)
+                tmp = os.path.join(STAGE, name)
+                remaining = n
+                with open(tmp, "wb") as fh:
+                    while remaining > 0:
+                        chunk = self.rfile.read(min(65536, remaining))
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                        remaining -= len(chunk)
+                target = resolve_dest(machine, dest)
+                if machine:
+                    rc, out, err = sh("docker", "cp", tmp, "ivsc_%s:%s/" % (machine, target))
+                else:
+                    rc, out, err = sh("cp", tmp, target + "/")
+                os.remove(tmp)
+                if rc != 0:
+                    raise RuntimeError((err or out)[-200:])
+                self._send(200, {"ok": True, "file": name, "dest": target})
+                return
             if self.path == "/clipboard":
                 data = json.loads(self._body() or b"{}")
                 op = data.get("op", "")

@@ -1,6 +1,19 @@
 import SwiftUI
 import WebKit
 
+/// Contenedor del WebView: fuerza el relayout en cada cambio de tamaño de la
+/// ventana, incluidos los que llegan sin pasar por SwiftUI.
+final class WebContainerView: UIView {
+    weak var webView: WKWebView?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // relayout explícito: WKWebView a veces conserva su viewport anterior
+        webView?.setNeedsLayout()
+        webView?.layoutIfNeeded()
+    }
+}
+
 struct CodeWebView: UIViewRepresentable {
     let url: URL
     /// Aísla cookies y Service Workers por servidor: los SW de dos sesiones
@@ -49,7 +62,7 @@ struct CodeWebView: UIViewRepresentable {
         """
     }
 
-    func makeUIView(context: Context) -> WKWebView {
+    func makeUIView(context: Context) -> WebContainerView {
         let config = WKWebViewConfiguration()
         if let dataStoreID {
             config.websiteDataStore = WKWebsiteDataStore(forIdentifier: dataStoreID)
@@ -156,22 +169,33 @@ struct CodeWebView: UIViewRepresentable {
         webView.addGestureRecognizer(tap)
 
         webView.overrideUserInterfaceStyle = interfaceStyle
-        // el WebView se estira SIEMPRE con su contenedor: si no, al aparecer o
-        // desaparecer el teclado quedaba una franja negra sin dibujar
-        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         webView.load(URLRequest(url: url))
-        return webView
+
+        // El WebView va anclado por restricciones a un contenedor: cuando
+        // iPadOS redimensiona la ventana (p. ej. al abrir la ventana-terminal),
+        // el marco que da SwiftUI puede llegar tarde y quedaba una franja negra.
+        let container = WebContainerView()
+        container.backgroundColor = .black
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        container.webView = webView
+        return container
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {
-        uiView.overrideUserInterfaceStyle = interfaceStyle
+    func updateUIView(_ uiView: WebContainerView, context: Context) {
+        guard let webView = uiView.webView as? KeyboardWebView else { return }
+        webView.overrideUserInterfaceStyle = interfaceStyle
         // los callbacks capturan el servidor actual: sin refrescarlos, los
         // atajos podían apuntar a una sesión anterior
-        if let kb = uiView as? KeyboardWebView {
-            kb.onFileCopy = onFileCopy
-            kb.onFilePaste = onFilePaste
-            kb.onTerminalToggle = onTerminalToggle
-        }
+        webView.onFileCopy = onFileCopy
+        webView.onFilePaste = onFilePaste
+        webView.onTerminalToggle = onTerminalToggle
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKDownloadDelegate {
