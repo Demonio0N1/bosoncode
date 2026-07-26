@@ -460,6 +460,24 @@ def machines():
         })
     return result
 
+# tmux propio de iVsCode: raton activo (scroll del historial y seleccion),
+# historial largo y sin retardo de escape. No toca el ~/.tmux.conf del usuario.
+TMUX_CONF = os.path.expanduser("~/.ivscode/tmux.conf")
+
+def _tmux_conf():
+    try:
+        with open(TMUX_CONF, "w") as f:
+            f.write(
+                "source-file -q ~/.tmux.conf\n"
+                "set -g mouse on\n"
+                "set -g history-limit 50000\n"
+                "set -sg escape-time 10\n"
+                "set -g default-terminal 'xterm-256color'\n"
+                "set -ga terminal-overrides ',*256col*:Tc'\n"
+            )
+    except Exception:
+        pass
+
 # portapapeles de archivos entre sesiones (host y maquinas del mismo PC)
 STAGE = os.path.expanduser("~/.ivscode/clipboard")
 
@@ -743,14 +761,18 @@ def _term_client(client):
             if not re.fullmatch(r"[a-zA-Z0-9_-]+", machine):
                 return
             argv = ["docker", "exec", "-it", "ivsc_" + machine, "sh", "-lc",
-                    "command -v tmux >/dev/null && exec tmux new-session -A -s ivscode "
-                    "|| exec bash -l"]
+                    "if command -v tmux >/dev/null; then "
+                    "printf '%s\\n' 'set -g mouse on' 'set -g history-limit 50000' "
+                    "> /tmp/ivscode.tmux.conf; "
+                    "exec tmux -f /tmp/ivscode.tmux.conf new-session -A -s ivscode; "
+                    "else exec bash -l; fi"]
             if DOCKER_VIA_SG:
                 argv = ["sg", "docker", "-c", " ".join(shlex.quote(a) for a in argv)]
         else:
             # con tmux, la sesion sobrevive a desconexiones (reattach automatico)
             if shutil.which("tmux"):
-                argv = ["tmux", "new-session", "-A", "-s", "ivscode"]
+                _tmux_conf()
+                argv = ["tmux", "-f", TMUX_CONF, "new-session", "-A", "-s", "ivscode"]
             else:
                 argv = [os.environ.get("SHELL", "/bin/bash"), "-l"]
         pid, master = pty.fork()

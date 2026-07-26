@@ -196,10 +196,19 @@ enum MacTerminalTheme {
 struct SwiftTermView: UIViewRepresentable {
     let session: PTYConnection
     var fontSize: CGFloat = 13
+    var onFontSizeChange: ((CGFloat) -> Void)? = nil
 
     func makeUIView(context: Context) -> TerminalView {
-        let tv = TerminalView(frame: .zero)
+        let tv = MacTerminalView(frame: .zero)
         tv.font = MacTerminalTheme.font(size: fontSize)
+        // barra de teclas colapsada en un botón (no tapa la última línea)
+        tv.inputAccessoryView = CollapsibleAccessory(terminal: tv)
+        // scroll del historial con dos dedos / trackpad
+        tv.allowMouseReporting = true
+        tv.onFontSizeDelta = { delta in
+            onFontSizeChange?(max(9, min(24, fontSize + delta)))
+        }
+        tv.onFontSizeReset = { onFontSizeChange?(13) }
         tv.nativeBackgroundColor = MacTerminalTheme.background
         tv.nativeForegroundColor = MacTerminalTheme.foreground
         tv.backgroundColor = MacTerminalTheme.background
@@ -284,7 +293,9 @@ struct FloatingTerminal: View {
         VStack(spacing: 0) {
             header
             if let session {
-                SwiftTermView(session: session, fontSize: CGFloat(fontSize))
+                SwiftTermView(session: session, fontSize: CGFloat(fontSize)) { newSize in
+                    fontSize = Double(newSize)
+                }
             } else {
                 Color(uiColor: MacTerminalTheme.background)
                     .overlay(Text("Sin conexión").foregroundStyle(.secondary))
