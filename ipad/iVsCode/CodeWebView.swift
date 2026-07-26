@@ -26,11 +26,25 @@ final class WebContainerView: UIView {
 
     private func checkViewport() {
         guard let webView, window != nil, bounds.height > 100 else { return }
+        // Se compara la altura que VS Code está USANDO para maquetar (su
+        // workbench) con la real: innerHeight puede ser correcto y aun así
+        // tener el editor dibujado corto.
         let expected = bounds.height
-        webView.evaluateJavaScript("window.innerHeight") { [weak self] value, _ in
-            guard let self, let inner = value as? CGFloat else { return }
-            // margen amplio: solo actúa ante un desfase real de maquetación
-            if abs(inner - expected) > 40 { self.forceViewportRefresh() }
+        let js = "(document.querySelector('.monaco-workbench')||document.body).getBoundingClientRect().height"
+        webView.evaluateJavaScript(js) { [weak self] value, _ in
+            guard let self, let used = value as? CGFloat, used > 0 else { return }
+            if abs(used - expected) > 24 { self.forceViewportRefresh() }
+        }
+    }
+
+    /// Cambiar de ventana es justo cuando el editor se queda corto: se le
+    /// fuerza un cambio de tamaño real (no solo un evento) al recuperar o
+    /// perder el foco, de modo que las ventanas sean independientes.
+    func refreshOnFocusChange() {
+        for delay in [0.05, 0.4] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.forceViewportRefresh()
+            }
         }
     }
 
@@ -249,12 +263,11 @@ struct CodeWebView: UIViewRepresentable {
         container.startWatchdog()
         // al volver a primer plano (p. ej. tras abrir la ventana-terminal) la
         // página también debe recalcular su tamaño
-        NotificationCenter.default.addObserver(
-            forName: UIScene.didActivateNotification, object: nil, queue: .main
-        ) { [weak webView, weak container] _ in
-            guard let webView, container != nil else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                webView.evaluateJavaScript("window.dispatchEvent(new Event('resize'));")
+        for name in [UIScene.didActivateNotification, UIScene.willDeactivateNotification] {
+            NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak container] _ in
+                container?.refreshOnFocusChange()
             }
         }
         return container

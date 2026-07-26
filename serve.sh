@@ -330,13 +330,13 @@ if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   apt-get install -y --no-install-recommends \
-    git curl wget nano htop unzip zip ca-certificates openssh-client \
+    git curl wget nano htop tmux unzip zip ca-certificates openssh-client \
     build-essential python3 python3-pip python3-venv
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y git curl wget nano htop unzip zip openssh-clients \
+  dnf install -y git curl wget nano htop tmux unzip zip openssh-clients \
     gcc gcc-c++ make python3 python3-pip
 elif command -v pacman >/dev/null 2>&1; then
-  pacman -Sy --noconfirm git curl wget nano htop unzip zip openssh \
+  pacman -Sy --noconfirm git curl wget nano htop tmux unzip zip openssh \
     base-devel python python-pip
 else
   echo "✗ Gestor de paquetes no soportado"; exit 1
@@ -392,11 +392,12 @@ with open(SETTINGS_FILE, "w") as _f:
     }, _f)
 
 def _docker_direct_ok():
-    # OJO: `docker version --format ok` imprime ok y sale 0 aunque el daemon
-    # sea inalcanzable. Hay que tocar el daemon de verdad.
+    # OJO: docker 29 sale con codigo 0 aunque escriba "permission denied", asi
+    # que hay que mirar tambien stderr o la sonda miente.
     try:
-        return subprocess.run(["docker", "ps", "-q"],
-                              capture_output=True, timeout=10).returncode == 0
+        r = subprocess.run(["docker", "ps", "-q"], capture_output=True,
+                           text=True, timeout=10)
+        return r.returncode == 0 and "permission denied" not in (r.stderr or "").lower()
     except Exception:
         return False
 
@@ -843,7 +844,9 @@ def _term_client(client):
                     "> /tmp/ivscode.tmux.conf; "
                     "exec tmux -f /tmp/ivscode.tmux.conf new-session -A -s ivscode; "
                     "else exec bash -l; fi"]
-            if DOCKER_VIA_SG:
+            # el exec del PTY no pasa por sh(), asi que aplica aqui el mismo
+            # rodeo por grupo docker (systemd --user no lo hereda)
+            if DOCKER_VIA_SG or not _docker_direct_ok():
                 argv = ["sg", "docker", "-c", " ".join(shlex.quote(a) for a in argv)]
         else:
             # con tmux, la sesion sobrevive a desconexiones (reattach automatico)
