@@ -676,6 +676,37 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/machines":
                 self._send(200, {"machines": machines()})
+            elif parsed.path == "/download":
+                q = urllib.parse.parse_qs(parsed.query)
+                machine = valid_machine((q.get("machine") or [""])[0])
+                path = (q.get("path") or [""])[0]
+                if not path.startswith("/"):
+                    raise ValueError("ruta invalida")
+                if machine:
+                    os.makedirs(STAGE, exist_ok=True)
+                    tmp = os.path.join(STAGE, os.path.basename(path) or "archivo")
+                    rc, out, err = sh("docker", "cp", "ivsc_%s:%s" % (machine, path), tmp)
+                    if rc != 0:
+                        raise RuntimeError((err or out)[-200:])
+                    src = tmp
+                else:
+                    src = path
+                if os.path.isdir(src):
+                    raise ValueError("es una carpeta: comprimela antes de descargarla")
+                size = os.path.getsize(src)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Disposition",
+                                 'attachment; filename="%s"' % os.path.basename(src))
+                self.end_headers()
+                with open(src, "rb") as fh:
+                    shutil.copyfileobj(fh, self.wfile, 65536)
+                if machine:
+                    try:
+                        os.remove(src)
+                    except Exception:
+                        pass
             elif parsed.path == "/cwd":
                 q = urllib.parse.parse_qs(parsed.query)
                 machine = valid_machine((q.get("machine") or [""])[0])

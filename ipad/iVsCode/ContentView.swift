@@ -149,8 +149,8 @@ struct ContentView: View {
                                 Button {
                                     showFilePicker = true
                                 } label: {
-                                    Label("Copiar eligiendo de una lista…",
-                                          systemImage: "doc.on.doc")
+                                    Label("Explorar archivos (copiar o arrastrar fuera)",
+                                          systemImage: "folder")
                                 }
                                 Button {
                                     Task { await filePaste(server: server) }

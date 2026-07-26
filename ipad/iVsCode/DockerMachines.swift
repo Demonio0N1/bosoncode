@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct DockerMachine: Identifiable, Codable, Equatable {
     let name: String
@@ -107,6 +108,24 @@ struct ManagerClient {
         return r?.dest ?? ""
     }
 
+    /// Descarga un archivo (para arrastrarlo a Archivos o guardarlo).
+    func download(path: String, machine: String) async throws -> Data {
+        var comps = URLComponents(url: baseURL.appendingPathComponent("download"),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "machine", value: machine),
+                            URLQueryItem(name: "path", value: path)]
+        var req = URLRequest(url: comps.url!)
+        req.timeoutInterval = 300
+        req.setValue(password, forHTTPHeaderField: "X-Password")
+        let (data, response) = try await URLSession.shared.data(for: req)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            let msg = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
+            throw NSError(domain: "manager", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: msg ?? "error \(http.statusCode)"])
+        }
+        return data
+    }
+
     /// Lista un directorio del host (machine: "") o de una máquina Docker.
     func fsList(machine: String, path: String) async throws -> (String, [FSEntry]) {
         struct Result: Codable { let path: String; let entries: [FSEntry] }
@@ -176,6 +195,7 @@ struct FilePickerView: View {
                             }
                         }
                         ForEach(entries) { entry in
+                            let fullPath = path == "/" ? "/\(entry.name)" : "\(path)/\(entry.name)"
                             Button {
                                 let full = path == "/" ? "/\(entry.name)" : "\(path)/\(entry.name)"
                                 if entry.dir {
@@ -199,11 +219,26 @@ struct FilePickerView: View {
                                 }
                             }
                             .foregroundStyle(.primary)
+                            // arrastrar el archivo fuera de la app (Archivos,
+                            // Correo, Fotos…): se descarga bajo demanda
+                            .if(!entry.dir) { view in
+                                view.onDrag {
+                                    dragProvider(name: entry.name, path: fullPath)
+                                }
+                            }
                         }
                     }
                 }
             }
-            .navigationTitle(path == "~" ? "Copiar de \(server.name)" : (path as NSString).lastPathComponent)
+            .navigationTitle(path == "~" ? "Archivos de \(server.name)" : (path as NSString).lastPathComponent)
+            .safeAreaInset(edge: .bottom) {
+                Text("Toca un archivo para copiarlo · mantén pulsado y arrástralo a Archivos")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(.bar)
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -219,6 +254,35 @@ struct FilePickerView: View {
             }
             .task { await load() }
         }
+    }
+
+    /// Promesa de archivo: iPadOS pide el contenido solo cuando sueltas.
+    private func dragProvider(name: String, path: String) -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.suggestedName = name
+        let type = UTType(filenameExtension: (name as NSString).pathExtension) ?? .data
+        provider.registerFileRepresentation(forTypeIdentifier: type.identifier,
+                                            fileOptions: [],
+                                            visibility: .all) { completion in
+            Task {
+                do {
+                    guard let client else {
+                        throw NSError(domain: "manager", code: 0,
+                                      userInfo: [NSLocalizedDescriptionKey: "sin gestor"])
+                    }
+                    let data = try await client.download(path: path,
+                                                         machine: server.dockerMachineName)
+                    let tmp = FileManager.default.temporaryDirectory
+                        .appendingPathComponent(name)
+                    try data.write(to: tmp)
+                    completion(tmp, false, nil)
+                } catch {
+                    completion(nil, false, error)
+                }
+            }
+            return nil
+        }
+        return provider
     }
 
     private func load() async {
@@ -524,5 +588,13 @@ struct DockerMachinesView: View {
         store.upsert(target, password: password)
         dismiss()
         onConnect(target)
+    }
+}
+
+extension View {
+    /// Aplica un modificador solo si se cumple la condición.
+    @ViewBuilder func `if`<T: View>(_ condition: Bool,
+                                    transform: (Self) -> T) -> some View {
+        if condition { transform(self) } else { self }
     }
 }
