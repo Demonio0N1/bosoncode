@@ -461,6 +461,11 @@ def machines():
         })
     return result
 
+# token efimero para las descargas iniciadas desde la pagina (arrastrar desde
+# el explorador de VS Code): una URL no puede llevar cabeceras de auth
+import secrets
+DOWNLOAD_TOKEN = secrets.token_hex(16)
+
 # tmux propio de iVsCode: raton activo (scroll del historial y seleccion),
 # historial largo y sin retardo de escape. No toca el ~/.tmux.conf del usuario.
 TMUX_CONF = os.path.expanduser("~/.ivscode/tmux.conf")
@@ -665,6 +670,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _authed(self):
+        # /download tambien acepta el token (llega en la URL, sin cabeceras)
+        if self.path.startswith("/download"):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            tok = (q.get("token") or [""])[0]
+            if tok and hmac.compare_digest(tok, DOWNLOAD_TOKEN):
+                return True
         if not hmac.compare_digest(self.headers.get("X-Password", ""), PASSWORD):
             self._send(401, {"error": "no autorizado"})
             return False
@@ -708,6 +719,8 @@ class Handler(BaseHTTPRequestHandler):
                         os.remove(src)
                     except Exception:
                         pass
+            elif parsed.path == "/token":
+                self._send(200, {"token": DOWNLOAD_TOKEN})
             elif parsed.path == "/cwd":
                 q = urllib.parse.parse_qs(parsed.query)
                 machine = valid_machine((q.get("machine") or [""])[0])

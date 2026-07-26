@@ -207,10 +207,19 @@ final class MacTerminalView: TerminalView {
         }
     }
 
-    /// Rueda en codificación SGR (la que entiende tmux con `mouse on`)
+    /// Si el programa remoto lee el ratón (tmux, vim, htop…) se le manda la
+    /// rueda en codificación SGR; si no (bash pelado), se desplaza el historial
+    /// local — mandar las secuencias a ciegas las escribía como texto basura
+    /// (`64;1;1M64;1;1M…`) en la línea de comandos.
     private func sendWheel(up: Bool) {
-        let button = up ? 64 : 65
-        send(txt: "\u{1b}[<\(button);1;1M")
+        if getTerminal().mouseMode != .off {
+            let button = up ? 64 : 65
+            send(txt: "\u{1b}[<\(button);1;1M")
+        } else if up {
+            scrollUp(lines: 1)
+        } else {
+            scrollDown(lines: 1)
+        }
     }
 
     // MARK: - Atajos

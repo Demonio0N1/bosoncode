@@ -108,6 +108,13 @@ struct ManagerClient {
         return r?.dest ?? ""
     }
 
+    /// Token para que la propia página pueda descargar archivos por URL.
+    func downloadToken() async throws -> String {
+        struct Result: Codable { let token: String }
+        let data = try await request("GET", "token")
+        return try JSONDecoder().decode(Result.self, from: data).token
+    }
+
     /// Descarga un archivo (para arrastrarlo a Archivos o guardarlo).
     func download(path: String, machine: String) async throws -> Data {
         var comps = URLComponents(url: baseURL.appendingPathComponent("download"),

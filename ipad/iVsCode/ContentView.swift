@@ -65,6 +65,7 @@ struct ContentView: View {
                 CodeWebView(
                     url: url,
                     dataStoreID: server.id,
+                    server: server,
                     interfaceStyle: appearance.interfaceStyle,
                     password: Keychain.password(for: server.id),
                     onOpenSettings: { withAnimation { showLauncher = true } },

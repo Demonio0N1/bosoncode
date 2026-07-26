@@ -31,9 +31,12 @@ final class WebContainerView: UIView {
         // tener el editor dibujado corto.
         let expected = bounds.height
         let js = "(document.querySelector('.monaco-workbench')||document.body).getBoundingClientRect().height"
+        let webH = webView.bounds.height
         webView.evaluateJavaScript(js) { [weak self] value, _ in
-            guard let self, let used = value as? CGFloat, used > 0 else { return }
-            if abs(used - expected) > 24 { self.forceViewportRefresh() }
+            guard let self else { return }
+            let used = (value as? CGFloat) ?? -1
+            print("[vp] contenedor=\(Int(expected)) webview=\(Int(webH)) workbench=\(Int(used))")
+            if used > 0, abs(used - expected) > 24 { self.forceViewportRefresh() }
         }
     }
 
@@ -65,6 +68,9 @@ final class WebContainerView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         guard let webView else { return }
+        // marco explícito además de las restricciones: si alguna se rompe, el
+        // WebView deja de llenar la ventana y aparece la franja negra
+        if webView.frame != bounds { webView.frame = bounds }
         webView.setNeedsLayout()
         webView.layoutIfNeeded()
         guard bounds.size != lastSize, bounds.width > 1, bounds.height > 1 else { return }
@@ -92,6 +98,8 @@ struct CodeWebView: UIViewRepresentable {
     /// Aísla cookies y Service Workers por servidor: los SW de dos sesiones
     /// (p. ej. el PC y una máquina Docker del mismo origen) no pueden chocar.
     var dataStoreID: UUID?
+    /// Servidor de esta sesión: necesario para las descargas por arrastre
+    var server: Server?
     /// Claro/oscuro/auto: el WebView lo expone como prefers-color-scheme y
     /// VS Code (con window.autoDetectColorScheme) cambia de tema en vivo.
     var interfaceStyle: UIUserInterfaceStyle = .unspecified
@@ -135,6 +143,41 @@ struct CodeWebView: UIViewRepresentable {
         """
     }
 
+    /// VS Code entrega al arrastrar solo la RUTA como texto (por eso salía un
+    /// .txt). Este script añade el tipo `DownloadURL`, que WebKit convierte en
+    /// una promesa de archivo: al soltar en Archivos llega el archivo real.
+    static func dragOutScript(base: String, machine: String, token: String) -> String {
+        """
+        (() => {
+          if (window.__ivscodeDrag) return;
+          window.__ivscodeDrag = true;
+          const BASE = "\(base)", MACHINE = "\(machine)", TOKEN = "\(token)";
+          document.addEventListener('dragstart', (e) => {
+            try {
+              const dt = e.dataTransfer;
+              if (!dt) return;
+              let path = "";
+              const codeFiles = dt.getData('CodeFiles');
+              if (codeFiles) {
+                const arr = JSON.parse(codeFiles);
+                if (Array.isArray(arr) && arr.length) path = arr[0];
+              }
+              if (!path) {
+                const uris = dt.getData('text/uri-list') || dt.getData('text/plain') || "";
+                path = uris.split('\\n')[0].trim().replace(/^file:\\/\\//, '');
+              }
+              if (!path.startsWith('/')) return;
+              const name = path.split('/').filter(Boolean).pop() || 'archivo';
+              const url = BASE + '/download?machine=' + encodeURIComponent(MACHINE) +
+                          '&path=' + encodeURIComponent(path) +
+                          '&token=' + encodeURIComponent(TOKEN);
+              dt.setData('DownloadURL', 'application/octet-stream:' + name + ':' + url);
+            } catch (err) {}
+          }, true);
+        })();
+        """
+    }
+
     func makeUIView(context: Context) -> WebContainerView {
         let config = WKWebViewConfiguration()
         if let dataStoreID {
@@ -147,6 +190,31 @@ struct CodeWebView: UIViewRepresentable {
         // Habilita Service Workers (los notebooks de VS Code los necesitan):
         // solo funcionan en dominios declarados en WKAppBoundDomains (Info.plist)
         config.limitsNavigationsToAppBoundDomains = true
+
+        // El teclado de OTRA ventana encogía el "visual viewport" de esta
+        // página: VS Code maquetaba 79pt más corto y dejaba una franja negra.
+        // Se ancla el viewport visual al tamaño real de la ventana (el zoom
+        // por pellizco está desactivado, así que no se pierde nada).
+        let pinViewport = """
+        (() => {
+          const vv = window.visualViewport;
+          if (!vv) return;
+          const fix = (prop, get) => {
+            try { Object.defineProperty(vv, prop, { get, configurable: true }); } catch (e) {}
+          };
+          fix('height', () => window.innerHeight);
+          fix('width',  () => window.innerWidth);
+          fix('offsetTop',  () => 0);
+          fix('offsetLeft', () => 0);
+          fix('pageTop',  () => window.scrollY);
+          fix('pageLeft', () => window.scrollX);
+        })();
+        """
+        config.userContentController.addUserScript(
+            WKUserScript(source: pinViewport,
+                         injectionTime: .atDocumentStart,
+                         forMainFrameOnly: false)
+        )
 
         // Bridge de portapapeles: la Clipboard API del WebView pasa por UIPasteboard
         config.userContentController.addScriptMessageHandler(
@@ -210,6 +278,7 @@ struct CodeWebView: UIViewRepresentable {
         }
 
         let webView = KeyboardWebView(frame: .zero, configuration: config)
+        context.coordinator.serverForDragOut = server
         webView.navigationDelegate = context.coordinator
         webView.onFileCopy = onFileCopy
         webView.onFilePaste = onFilePaste
@@ -289,6 +358,8 @@ struct CodeWebView: UIViewRepresentable {
         let password: String?
         let onDownload: ((String) -> Void)?
         let onLoading: ((Bool) -> Void)?
+        /// Servidor de esta sesión (para construir las URLs de descarga)
+        var serverForDragOut: Server?
         private var lastDownloadName = ""
 
         init(onOpenSettings: @escaping () -> Void,
@@ -354,9 +425,29 @@ struct CodeWebView: UIViewRepresentable {
 
         @objc func openSettings() { onOpenSettings() }
 
+        /// Pide el token de descarga al gestor e instala el interceptor de
+        /// arrastre para que salga el archivo y no un .txt con la ruta.
+        private func installDragOut(in webView: WKWebView) {
+            guard let server = serverForDragOut,
+                  let mgr = server.managerURL,
+                  let pw = Keychain.password(for: server.id) else { return }
+            Task {
+                do {
+                    let client = ManagerClient(baseURL: mgr, password: pw)
+                    let token = try await client.downloadToken()
+                    let js = CodeWebView.dragOutScript(
+                        base: mgr.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")),
+                        machine: server.dockerMachineName,
+                        token: token)
+                    await MainActor.run { webView.evaluateJavaScript(js) }
+                } catch { /* sin token: se mantiene el comportamiento normal */ }
+            }
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             let onLoginPage = webView.url?.path.contains("/login") == true
             onLoading?(onLoginPage)
+            if !onLoginPage { installDragOut(in: webView) }
             // refuerzo del auto-login: si seguimos en /login con clave conocida,
             // reintenta (el user script pudo no ejecutarse en cargas raras)
             guard let password, !password.isEmpty, onLoginPage else { return }
