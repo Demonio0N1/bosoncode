@@ -1,0 +1,22 @@
+# Secretos — nunca versionar
+backend/.env
+*.pem
+*.key
+
+# Xcode (el .xcodeproj se regenera con `xcodegen` desde project.yml)
+ipad/iVsCode.xcodeproj/
+ipad/*.xcworkspace/
+ipad/.swiftpm/
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+
+# Workspace del backend (código del usuario, no del proyecto)
+backend/workspace/
+
+# macOS
+.DS_Store
+
+# Salida regenerable de graphify (contiene rutas locales)
+graphify-out/

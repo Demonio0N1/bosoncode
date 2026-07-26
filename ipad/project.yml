@@ -1,0 +1,32 @@
+name: iVsCode
+options:
+  bundleIdPrefix: com.garyguaman
+  deploymentTarget:
+    iOS: "17.0"
+
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: 1.2.0
+
+targets:
+  iVsCode:
+    type: application
+    platform: iOS
+    sources:
+      - path: iVsCode
+        excludes:
+          - Fonts
+      - path: iVsCode/Fonts
+        buildPhase: resources
+    dependencies:
+      - package: SwiftTerm
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "2"            # solo iPad
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: iVsCode/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.garyguaman.ivscode
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: QJ2824WK6Q
