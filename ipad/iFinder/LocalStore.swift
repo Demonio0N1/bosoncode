@@ -29,14 +29,21 @@ final class LocalStore: ObservableObject {
         }
     }
 
-    func add(url: URL) {
+    /// Guarda el permiso de una carpeta concedida en el selector.
+    /// OJO: hay que abrir el ámbito de seguridad ANTES de crear el marcador;
+    /// si no, se guarda un permiso inválido y la carpeta no vuelve a abrirse.
+    @discardableResult
+    func add(url: URL) -> Bool {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         guard let bookmark = try? url.bookmarkData(options: .minimalBookmark,
                                                    includingResourceValuesForKeys: nil,
-                                                   relativeTo: nil) else { return }
+                                                   relativeTo: nil) else { return false }
         let folder = Folder(id: UUID(), name: url.lastPathComponent, bookmark: bookmark)
         folders.removeAll { $0.name == folder.name }
         folders.append(folder)
         persist()
+        return true
     }
 
     func remove(_ folder: Folder) {

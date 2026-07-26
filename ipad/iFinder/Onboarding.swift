@@ -40,6 +40,13 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 30)
 
+            Label("En el selector, abre la barra lateral y elige la ubicación completa (En mi iPad, iCloud Drive…), luego pulsa Abrir.",
+                  systemImage: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal, 30)
+
             VStack(spacing: 12) {
                 ForEach(LocalRoot.allCases) { root in
                     Button {
@@ -107,17 +114,7 @@ enum LocalRoot: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Carpeta donde abrir el selector para que el usuario la conceda de un toque.
-    var suggestedURL: URL? {
-        let fm = FileManager.default
-        switch self {
-        case .iCloud:
-            return fm.url(forUbiquityContainerIdentifier: nil)?
-                .deletingLastPathComponent().deletingLastPathComponent()
-        case .downloads:
-            return fm.urls(for: .downloadsDirectory, in: .userDomainMask).first
-        case .onMyIPad:
-            return fm.urls(for: .documentDirectory, in: .userDomainMask).first
-        }
-    }
+    /// iPadOS no expone rutas para "En mi iPad" ni "iCloud Drive": el selector
+    /// debe abrirse en su ubicación por defecto y el usuario elige ahí.
+    var suggestedURL: URL? { nil }
 }
