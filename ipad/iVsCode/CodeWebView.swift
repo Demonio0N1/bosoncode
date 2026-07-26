@@ -5,12 +5,31 @@ import WebKit
 /// ventana, incluidos los que llegan sin pasar por SwiftUI.
 final class WebContainerView: UIView {
     weak var webView: WKWebView?
+    private var lastSize: CGSize = .zero
+    private var resizeWork: DispatchWorkItem?
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // relayout explícito: WKWebView a veces conserva su viewport anterior
-        webView?.setNeedsLayout()
-        webView?.layoutIfNeeded()
+        guard let webView else { return }
+        webView.setNeedsLayout()
+        webView.layoutIfNeeded()
+        guard bounds.size != lastSize, bounds.width > 1, bounds.height > 1 else { return }
+        lastSize = bounds.size
+
+        // VS Code maqueta con el tamaño del último evento 'resize'. Si la
+        // ventana cambia mientras la página no está activa, ese evento no
+        // llega y el editor se queda dibujado a la altura vieja (franja negra
+        // debajo). Se le fuerza el evento tras asentar el layout.
+        resizeWork?.cancel()
+        let work = DispatchWorkItem { [weak webView] in
+            webView?.evaluateJavaScript("window.dispatchEvent(new Event('resize'));")
+        }
+        resizeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+        // segundo aviso por si el primero llegó a mitad de la animación
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak webView] in
+            webView?.evaluateJavaScript("window.dispatchEvent(new Event('resize'));")
+        }
     }
 }
 
@@ -185,6 +204,16 @@ struct CodeWebView: UIViewRepresentable {
             webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         container.webView = webView
+        // al volver a primer plano (p. ej. tras abrir la ventana-terminal) la
+        // página también debe recalcular su tamaño
+        NotificationCenter.default.addObserver(
+            forName: UIScene.didActivateNotification, object: nil, queue: .main
+        ) { [weak webView, weak container] _ in
+            guard let webView, container != nil else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                webView.evaluateJavaScript("window.dispatchEvent(new Event('resize'));")
+            }
+        }
         return container
     }
 

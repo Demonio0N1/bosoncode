@@ -314,7 +314,7 @@ struct FloatingTerminal: View {
                 Task {
                     do {
                         let dest = try await client.upload(data: data, filename: name,
-                                                           machine: machine)
+                                                           machine: machine, dest: "@cwd")
                         await MainActor.run {
                             dropMessage = "\(name) → \(dest)"
                             session?.terminalView?.feed(

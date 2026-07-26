@@ -497,9 +497,24 @@ def clip_copy(path, machine):
         raise RuntimeError((err or out)[-200:])
     return os.listdir(STAGE)
 
+def session_cwd(machine):
+    """Directorio de trabajo actual de la terminal (panel de tmux)."""
+    if machine:
+        rc, out, _ = sh("docker", "exec", "ivsc_" + machine, "tmux",
+                        "display-message", "-p", "-t", "ivscode",
+                        "-F", "#{pane_current_path}")
+    else:
+        rc, out, _ = sh("tmux", "display-message", "-p", "-t", "ivscode",
+                        "-F", "#{pane_current_path}")
+    out = (out or "").strip().splitlines()[0].strip() if out.strip() else ""
+    return out if rc == 0 and out.startswith("/") else ""
+
 def resolve_dest(machine, dest):
     home = "/root" if machine else os.path.expanduser("~")
     d = (dest or "").strip()
+    # "@cwd": el destino es donde esté la terminal en ese momento
+    if d == "@cwd":
+        return session_cwd(machine) or home
     if not d.startswith("/"):
         return home
     if machine:
@@ -661,6 +676,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/machines":
                 self._send(200, {"machines": machines()})
+            elif parsed.path == "/cwd":
+                q = urllib.parse.parse_qs(parsed.query)
+                machine = valid_machine((q.get("machine") or [""])[0])
+                self._send(200, {"cwd": session_cwd(machine)})
             elif parsed.path == "/fs/list":
                 q = urllib.parse.parse_qs(parsed.query)
                 machine = (q.get("machine") or [""])[0]

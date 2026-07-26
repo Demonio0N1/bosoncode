@@ -43,6 +43,7 @@ struct ContentView: View {
     @State private var reloadToken = UUID()
     @State private var downloadToast: String?
     @State private var toastToken = UUID()
+    @State private var editorDropTargeted = false
     @State private var showFilePicker = false
     @State private var showTerminal = false
     @State private var connecting = true
@@ -104,6 +105,25 @@ struct ContentView: View {
                 // el teclado en pantalla no debe encoger el editor: VS Code
                 // gestiona su propio desplazamiento
                 .ignoresSafeArea(.all)
+                // arrastrar archivos del iPad al editor: se suben a la carpeta
+                // de trabajo de la sesión
+                .onDrop(of: ["public.data"], isTargeted: $editorDropTargeted) { providers in
+                    uploadDropped(providers, to: server)
+                }
+                .overlay(alignment: .center) {
+                    if editorDropTargeted {
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.cyan, style: StrokeStyle(lineWidth: 4, dash: [12]))
+                            .background(Color.cyan.opacity(0.07))
+                            .overlay(
+                                Label("Soltar para subir a \(server.name)",
+                                      systemImage: "arrow.down.doc.fill")
+                                    .font(.title3.bold())
+                                    .foregroundStyle(.cyan))
+                            .padding(10)
+                            .allowsHitTesting(false)
+                    }
+                }
 
                 if !showLauncher {
                     // botón flotante: toque = lista de PCs; mantener pulsado =
@@ -270,6 +290,33 @@ struct ContentView: View {
             guard toastToken == token else { return }
             withAnimation { downloadToast = nil }
         }
+    }
+
+    /// Sube al servidor los archivos arrastrados desde Archivos/Fotos.
+    private func uploadDropped(_ providers: [NSItemProvider], to server: Server) -> Bool {
+        guard let client = manager(for: server) else {
+            showToast("Este servidor no admite subir archivos")
+            return false
+        }
+        let machine = server.dockerMachineName
+        for provider in providers {
+            provider.loadDataRepresentation(forTypeIdentifier: "public.data") { data, _ in
+                guard let data else { return }
+                let name = provider.suggestedName ?? "archivo"
+                Task {
+                    do {
+                        let dest = try await client.upload(data: data, filename: name,
+                                                           machine: machine, dest: "@cwd")
+                        await MainActor.run { showToast("Subido: \(name) → \(dest)") }
+                    } catch {
+                        await MainActor.run {
+                            showToast("Error subiendo \(name): \(error.localizedDescription)")
+                        }
+                    }
+                }
+            }
+        }
+        return true
     }
 
     private func manager(for server: Server) -> ManagerClient? {
