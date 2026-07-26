@@ -100,7 +100,10 @@ struct ContentView: View {
                 // incluir la URL en la identidad: si una tarjeta se repara
                 // (URL nueva), el WebView se recrea sí o sí
                 .id("\(server.id.uuidString)-\(server.urlString)-\(reloadToken.uuidString)")
-                .ignoresSafeArea()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // el teclado en pantalla no debe encoger el editor: VS Code
+                // gestiona su propio desplazamiento
+                .ignoresSafeArea(.all)
 
                 if !showLauncher {
                     // botón flotante: toque = lista de PCs; mantener pulsado =

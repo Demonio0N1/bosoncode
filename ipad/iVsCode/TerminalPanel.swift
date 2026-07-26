@@ -226,7 +226,6 @@ struct FloatingTerminal: View {
     var onClose: () -> Void
 
     @State private var session: PTYConnection?
-    @StateObject private var pip = PiPManager()
     @Environment(\.openWindow) private var openWindow
     @State private var center = CGPoint(x: 480, y: 340)
     @State private var size = CGSize(width: 600, height: 380)
@@ -277,14 +276,8 @@ struct FloatingTerminal: View {
                 }
             }
         }
-        .onAppear {
-            openSession()
-            pip.attach { [weak session] in session?.terminalView }
-        }
-        .onDisappear {
-            pip.detach()
-            session?.close()
-        }
+        .onAppear { openSession() }
+        .onDisappear { session?.close() }
     }
 
     private var panelContent: some View {
@@ -321,7 +314,13 @@ struct FloatingTerminal: View {
                 .padding(.horizontal, 120)
 
             HStack(spacing: 8) {
-                trafficLights
+                // en ventana propia los controles de ventana los dibuja iPadOS
+                // en esta misma esquina: los nuestros solo estorbarían
+                if fullscreen {
+                    Color.clear.frame(width: 78, height: 1)
+                } else {
+                    trafficLights
+                }
                 Spacer()
                 rightControls
             }
@@ -355,11 +354,6 @@ struct FloatingTerminal: View {
                          symbol: "xmark", enabled: !fullscreen) {
                 session?.close()
                 onClose()
-            }
-            // amarillo: mandar a PiP (se "minimiza" fuera de la app)
-            trafficLight(color: SwiftUI.Color(red: 1.0, green: 0.74, blue: 0.18),
-                         symbol: "minus", enabled: pip.isPossible) {
-                pip.toggle()
             }
             // verde: abrir como ventana independiente
             trafficLight(color: SwiftUI.Color(red: 0.24, green: 0.79, blue: 0.25),
@@ -401,12 +395,6 @@ struct FloatingTerminal: View {
                     .foregroundStyle(.white.opacity(0.5))
             }
             .buttonStyle(.plain)
-            // mini-monitor: es la capa de video del PiP (iOS exige que esté
-            // visible en pantalla para permitirlo)
-            PiPHostView(layer: pip.displayLayer)
-                .frame(width: 34, height: 20)
-                .clipShape(RoundedRectangle(cornerRadius: 3))
-                .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.15)))
         }
     }
 

@@ -12,6 +12,7 @@ struct iVsCodeApp: App {
         WindowGroup {
             ContentView()
                 .ignoresSafeArea()
+                .background(MainWindowUnrestrictor())
                 .statusBarHidden(true)
                 .persistentSystemOverlays(.hidden)   // oculta el indicador de Home
                 .defersSystemGestures(on: .all)      // el primer swipe de borde va a la app
@@ -56,12 +57,36 @@ struct WindowSizer: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            guard let restrictions = view.window?.windowScene?.sizeRestrictions else { return }
+            guard let scene = view.window?.windowScene,
+                  let restrictions = scene.sizeRestrictions else { return }
+            // marca la escena como "terminal": la ventana principal usa esto
+            // para NO heredar el tamaño pequeño
+            scene.session.userInfo?["ivscodeRole"] = "terminal"
             restrictions.minimumSize = size
             restrictions.maximumSize = size
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                 restrictions.minimumSize = CGSize(width: 320, height: 220)
                 restrictions.maximumSize = CGSize(width: 4000, height: 4000)
+            }
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
+}
+
+/// La ventana principal debe poder ocupar toda la pantalla: si una escena
+/// heredó las restricciones pequeñas de una ventana-terminal, se relajan.
+struct MainWindowUnrestrictor: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        for delay in [0.2, 1.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard let scene = view.window?.windowScene,
+                      let restrictions = scene.sizeRestrictions else { return }
+                if (scene.session.userInfo?["ivscodeRole"] as? String) == "terminal" { return }
+                restrictions.minimumSize = CGSize(width: 480, height: 400)
+                restrictions.maximumSize = CGSize(width: 10000, height: 10000)
             }
         }
         return view

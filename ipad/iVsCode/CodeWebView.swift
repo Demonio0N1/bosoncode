@@ -156,12 +156,22 @@ struct CodeWebView: UIViewRepresentable {
         webView.addGestureRecognizer(tap)
 
         webView.overrideUserInterfaceStyle = interfaceStyle
+        // el WebView se estira SIEMPRE con su contenedor: si no, al aparecer o
+        // desaparecer el teclado quedaba una franja negra sin dibujar
+        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         webView.load(URLRequest(url: url))
         return webView
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
         uiView.overrideUserInterfaceStyle = interfaceStyle
+        // los callbacks capturan el servidor actual: sin refrescarlos, los
+        // atajos podían apuntar a una sesión anterior
+        if let kb = uiView as? KeyboardWebView {
+            kb.onFileCopy = onFileCopy
+            kb.onFilePaste = onFilePaste
+            kb.onTerminalToggle = onTerminalToggle
+        }
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKDownloadDelegate {
