@@ -108,6 +108,14 @@ struct ManagerClient {
         return r?.dest ?? ""
     }
 
+    /// Operaciones del explorador: mkdir, rename, move, copy, delete.
+    func fsOp(machine: String, op: String, path: String, target: String = "") async throws {
+        _ = try await request("POST", "fs/op",
+                              body: ["machine": machine, "op": op,
+                                     "path": path, "target": target],
+                              timeout: 120)
+    }
+
     /// Token para que la propia página pueda descargar archivos por URL.
     func downloadToken() async throws -> String {
         struct Result: Codable { let token: String }
@@ -157,6 +165,8 @@ struct ManagerClient {
 struct FSEntry: Codable, Identifiable {
     let name: String
     let dir: Bool
+    let size: Int?
+    let mtime: Double?
     var id: String { name }
 }
 

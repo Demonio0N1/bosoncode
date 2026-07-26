@@ -565,18 +565,55 @@ def fs_list(machine, path):
         raise ValueError("ruta invalida")
     entries = []
     if machine:
-        rc, out, err = sh("docker", "exec", "ivsc_" + machine, "ls", "-1Ap", "--", path)
+        # formato: tipo|tamaño|mtime|nombre
+        rc, out, err = sh("docker", "exec", "ivsc_" + machine, "sh", "-c",
+                          "cd %s 2>/dev/null && ls -A | while IFS= read -r f; do "
+                          "if [ -d \"$f\" ]; then t=d; else t=f; fi; "
+                          "s=$(stat -c %%s \"$f\" 2>/dev/null || echo 0); "
+                          "m=$(stat -c %%Y \"$f\" 2>/dev/null || echo 0); "
+                          "printf '%%s|%%s|%%s|%%s\\n' \"$t\" \"$s\" \"$m\" \"$f\"; done"
+                          % shlex.quote(path))
         if rc != 0:
             raise RuntimeError((err or out)[-200:] or "no pude listar (maquina apagada?)")
         for line in out.splitlines():
-            if line:
-                entries.append({"name": line.rstrip("/"), "dir": line.endswith("/")})
+            parts = line.split("|", 3)
+            if len(parts) == 4:
+                entries.append({"name": parts[3], "dir": parts[0] == "d",
+                                "size": int(parts[1] or 0), "mtime": float(parts[2] or 0)})
     else:
         for name in sorted(os.listdir(path), key=str.lower):
             full = os.path.join(path, name)
-            entries.append({"name": name, "dir": os.path.isdir(full)})
+            try:
+                st = os.stat(full)
+                entries.append({"name": name, "dir": os.path.isdir(full),
+                                "size": st.st_size, "mtime": st.st_mtime})
+            except OSError:
+                entries.append({"name": name, "dir": False, "size": 0, "mtime": 0})
     entries.sort(key=lambda e: (not e["dir"], e["name"].lower()))
     return path, entries
+
+def fs_op(machine, op, path, target=""):
+    """Operaciones del explorador: crear carpeta, renombrar, mover, borrar."""
+    machine = valid_machine(machine)
+    if not path.startswith("/"):
+        raise ValueError("ruta invalida")
+    if op in ("rename", "move", "copy") and not target.startswith("/"):
+        raise ValueError("destino invalido")
+    cmds = {
+        "mkdir":  ["mkdir", "-p", path],
+        "rename": ["mv", path, target],
+        "move":   ["mv", path, target],
+        "copy":   ["cp", "-r", path, target],
+        "delete": ["rm", "-rf", path],
+    }
+    if op not in cmds:
+        raise ValueError("operacion invalida")
+    if machine:
+        rc, out, err = sh("docker", "exec", "ivsc_" + machine, *cmds[op])
+    else:
+        rc, out, err = sh(*cmds[op])
+    if rc != 0:
+        raise RuntimeError((err or out)[-200:])
 
 def mount(name, port):
     sh("tailscale", "serve", "--bg", "--https=%d" % HTTPS_PORT,
@@ -740,6 +777,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             return
         try:
+            if self.path == "/fs/op":
+                data = json.loads(self._body() or b"{}")
+                fs_op(data.get("machine", ""), data.get("op", ""),
+                      data.get("path", ""), data.get("target", ""))
+                self._send(200, {"ok": True})
+                return
             if self.path == "/upload":
                 name = os.path.basename(self.headers.get("X-Filename", "archivo"))
                 if not name or name in (".", ".."):

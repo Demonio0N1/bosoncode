@@ -30,3 +30,21 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.garyguaman.ivscode
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: QJ2824WK6Q
+
+  iFinder:
+    type: application
+    platform: iOS
+    sources:
+      - path: iFinder
+      # comparte el cliente del gestor, el almacén de servidores y el Llavero
+      - path: iVsCode/Server.swift
+      - path: iVsCode/DockerMachines.swift
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: iFinder/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.garyguaman.ifinder
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: QJ2824WK6Q
