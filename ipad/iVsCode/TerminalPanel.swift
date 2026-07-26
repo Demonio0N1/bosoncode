@@ -205,8 +205,11 @@ struct SwiftTermView: UIViewRepresentable {
         tv.inputAccessoryView = CollapsibleAccessory(terminal: tv)
         // scroll del historial con dos dedos / trackpad
         tv.allowMouseReporting = true
-        tv.onFontSizeDelta = { delta in
-            onFontSizeChange?(max(9, min(24, fontSize + delta)))
+        // el tamaño se lee de la vista, no de la copia capturada: si no, cada
+        // pulsación partía del valor inicial y solo funcionaba una vez
+        tv.onFontSizeDelta = { [weak tv] delta in
+            guard let tv else { return }
+            onFontSizeChange?(max(9, min(24, tv.font.pointSize + delta)))
         }
         tv.onFontSizeReset = { onFontSizeChange?(13) }
         tv.nativeBackgroundColor = MacTerminalTheme.background
@@ -222,6 +225,13 @@ struct SwiftTermView: UIViewRepresentable {
     func updateUIView(_ uiView: TerminalView, context: Context) {
         if uiView.font.pointSize != fontSize {
             uiView.font = MacTerminalTheme.font(size: fontSize)
+        }
+        if let mac = uiView as? MacTerminalView {
+            mac.onFontSizeDelta = { [weak mac] delta in
+                guard let mac else { return }
+                onFontSizeChange?(max(9, min(24, mac.font.pointSize + delta)))
+            }
+            mac.onFontSizeReset = { onFontSizeChange?(13) }
         }
     }
 }

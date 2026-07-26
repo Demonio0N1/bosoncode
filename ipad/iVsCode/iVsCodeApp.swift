@@ -45,6 +45,19 @@ enum TerminalScene {
         UIApplication.shared.requestSceneSessionActivation(
             nil, userActivity: activity, options: options, errorHandler: nil)
     }
+
+    /// Si no hay ninguna ventana principal (VS Code) conectada, la abre.
+    static func ensureMainWindow() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            let hasMain = UIApplication.shared.connectedScenes.contains { scene in
+                (scene.session.userInfo?["ivscodeRole"] as? String) == "main"
+            }
+            guard !hasMain else { return }
+            // userActivity nil ⇒ la escena por defecto: la ventana de VS Code
+            UIApplication.shared.requestSceneSessionActivation(
+                nil, userActivity: nil, options: nil, errorHandler: nil)
+        }
+    }
 }
 
 /// Fuerza el tamaño inicial de la ventana (iPadOS abre las escenas nuevas a
@@ -57,11 +70,12 @@ struct WindowSizer: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            guard let scene = view.window?.windowScene,
-                  let restrictions = scene.sizeRestrictions else { return }
+            guard let scene = view.window?.windowScene else { return }
             // marca la escena como "terminal": la ventana principal usa esto
             // para NO heredar el tamaño pequeño
+            if scene.session.userInfo == nil { scene.session.userInfo = [:] }
             scene.session.userInfo?["ivscodeRole"] = "terminal"
+            guard let restrictions = scene.sizeRestrictions else { return }
             restrictions.minimumSize = size
             restrictions.maximumSize = size
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
@@ -85,6 +99,10 @@ struct MainWindowUnrestrictor: UIViewRepresentable {
                 guard let scene = view.window?.windowScene,
                       let restrictions = scene.sizeRestrictions else { return }
                 if (scene.session.userInfo?["ivscodeRole"] as? String) == "terminal" { return }
+                // marca la escena como principal para que la ventana-terminal
+                // sepa que ya existe VS Code y no abra otra
+                if scene.session.userInfo == nil { scene.session.userInfo = [:] }
+                scene.session.userInfo?["ivscodeRole"] = "main"
                 restrictions.minimumSize = CGSize(width: 480, height: 400)
                 restrictions.maximumSize = CGSize(width: 10000, height: 10000)
             }
@@ -121,6 +139,12 @@ struct TerminalWindowView: View {
         }
         .ignoresSafeArea(edges: .bottom)
         .background(WindowSizer(size: CGSize(width: 640, height: 420)))
+        .onAppear {
+            // iPadOS restaura la última ventana usada: si la app arranca
+            // directamente en una terminal, se abre además la ventana
+            // principal para no quedarse sin VS Code
+            TerminalScene.ensureMainWindow()
+        }
         .onContinueUserActivity(TerminalScene.activityType) { activity in
             if let raw = activity.userInfo?["serverID"] as? String,
                let id = UUID(uuidString: raw) {
