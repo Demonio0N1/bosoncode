@@ -58,6 +58,11 @@ final class FinderModel: ObservableObject {
     @Published var location: FinderLocation?
     @Published var loading = false
     @Published var error: String?
+    /// Archivo elegido (para el panel de vista previa) y su copia local
+    @Published var selectedItem: FinderItem?
+    @Published var previewURL: URL?
+    @Published var quickLookURL: URL?
+    @Published var preparing = false
 
     private var store: ServerStore?
     private var localStore: LocalStore?
@@ -134,6 +139,9 @@ final class FinderModel: ObservableObject {
     func select(_ item: FinderItem, at level: Int) async {
         guard level < columns.count else { return }
         columns[level].selection = item.path
+        selectedItem = item
+        previewURL = nil
+        if !item.dir { await loadPreview(item) }
         // cerrar columnas a la derecha
         if columns.count > level + 1 {
             columns.removeSubrange((level + 1)...)
@@ -189,6 +197,47 @@ final class FinderModel: ObservableObject {
         return (path, items)
     }
 
+    /// Descarga imágenes pequeñas para la miniatura del panel derecho.
+    private func loadPreview(_ item: FinderItem) async {
+        let ext = (item.name as NSString).pathExtension.lowercased()
+        let esImagen = ["png", "jpg", "jpeg", "gif", "heic", "webp"].contains(ext)
+        guard esImagen, item.size < 12_000_000 else { return }
+        if let url = try? await localCopy(of: item), selectedItem?.path == item.path {
+            previewURL = url
+        }
+    }
+
+    /// Copia local del archivo (para vista previa o para abrirlo).
+    private func localCopy(of item: FinderItem) async throws -> URL {
+        switch location?.kind {
+        case .local:
+            return URL(fileURLWithPath: item.path)
+        case let .remote(serverID, machine):
+            guard let client = client(for: serverID) else {
+                throw NSError(domain: "finder", code: 0,
+                              userInfo: [NSLocalizedDescriptionKey: "servidor no disponible"])
+            }
+            let data = try await client.download(path: item.path, machine: machine)
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent(item.name)
+            try data.write(to: url)
+            return url
+        case .none:
+            throw NSError(domain: "finder", code: 0,
+                          userInfo: [NSLocalizedDescriptionKey: "sin ubicación"])
+        }
+    }
+
+    /// Abre el archivo con la vista rápida del sistema (tecla espacio).
+    func quickLook(_ item: FinderItem? = nil) async {
+        guard let item = item ?? selectedItem, !item.dir else { return }
+        preparing = true
+        defer { preparing = false }
+        do {
+            quickLookURL = try await localCopy(of: item)
+        } catch { self.error = error.localizedDescription }
+    }
+
     // MARK: - Operaciones
 
     func createFolder(named name: String) async {
@@ -222,8 +271,8 @@ final class FinderModel: ObservableObject {
     }
 
     /// Guarda una copia en la carpeta local del iPad (visible en Archivos).
-    func share(_ item: FinderItem) async {
-        guard case let .remote(serverID, machine) = location?.kind,
+    func share(_ item: FinderItem?) async {
+        guard let item, case let .remote(serverID, machine) = location?.kind,
               let client = client(for: serverID) else { return }
         do {
             let data = try await client.download(path: item.path, machine: machine)

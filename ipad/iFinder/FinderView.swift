@@ -10,6 +10,16 @@ struct FinderView: View {
     @State private var showFolderPicker = false
     @State private var showNewFolder = false
     @State private var newFolderName = ""
+    @AppStorage("finderAppearance") private var appearanceRaw = "auto"
+    @AppStorage("finderColumnWidth") private var columnWidth: Double = 280
+
+    private var colorScheme: ColorScheme? {
+        switch appearanceRaw {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -18,7 +28,12 @@ struct FinderView: View {
             columns
         }
         .navigationSplitViewStyle(.balanced)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(colorScheme)
+        .fullScreenCover(item: Binding(get: { model.quickLookURL.map(QLItem.init) },
+                                       set: { if $0 == nil { model.quickLookURL = nil } })) { item in
+            QuickLookView(url: item.url) { model.quickLookURL = nil }
+                .ignoresSafeArea()
+        }
         .task { model.attach(store: store, local: local) }
         .sheet(isPresented: $showFolderPicker) {
             FolderPicker { url in
@@ -93,10 +108,18 @@ struct FinderView: View {
                         HStack(spacing: 0) {
                             ForEach(Array(model.columns.enumerated()), id: \.element.id) { index, column in
                                 columnView(column, level: index)
-                                    .frame(width: 280)
+                                    .frame(width: columnWidth)
                                     .id(column.id)
                                 Divider()
                             }
+                            // columna de vista previa, como en Finder
+                            PreviewPanel(item: model.selectedItem,
+                                         previewURL: model.previewURL,
+                                         loading: model.preparing,
+                                         onOpen: { Task { await model.quickLook() } },
+                                         onSave: { Task { await model.share(model.selectedItem) } })
+                                .frame(width: max(260, columnWidth))
+                                .id("preview")
                         }
                     }
                     .onChange(of: model.columns.count) { _, _ in
@@ -107,6 +130,7 @@ struct FinderView: View {
                 }
             }
         }
+        .overlay(alignment: .topLeading) { shortcuts }
         .navigationTitle(model.title)
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -137,6 +161,24 @@ struct FinderView: View {
                 Image(systemName: "arrow.clockwise")
             }
             .disabled(model.location == nil)
+
+            // ancho de columnas: se ajusta a cualquier tamaño de ventana
+            Menu {
+                Picker("Ancho de columna", selection: $columnWidth) {
+                    Text("Estrecha").tag(220.0)
+                    Text("Normal").tag(280.0)
+                    Text("Ancha").tag(360.0)
+                    Text("Muy ancha").tag(440.0)
+                }
+                Divider()
+                Picker("Apariencia", selection: $appearanceRaw) {
+                    Label("Automático", systemImage: "circle.lefthalf.filled").tag("auto")
+                    Label("Claro", systemImage: "sun.max.fill").tag("light")
+                    Label("Oscuro", systemImage: "moon.fill").tag("dark")
+                }
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -179,14 +221,30 @@ struct FinderView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
+        .padding(.horizontal, 6)
         .contentShape(Rectangle())
-        .listRowBackground(selected ? Color.accentColor.opacity(0.25) : Color.clear)
+        .foregroundStyle(selected ? Color.white : Color.primary)
+        .background(selected ? Color.accentColor : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 6))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)          // sin las líneas del iPad
+        .listRowInsets(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 8))
+        .onTapGesture(count: 2) {
+            if item.dir {
+                Task { await model.select(item, at: level) }
+            } else {
+                Task { await model.quickLook(item) }
+            }
+        }
         .onTapGesture { Task { await model.select(item, at: level) } }
         .draggable(model.transfer(for: item)) {
             Label(item.name, systemImage: item.icon)
         }
         .contextMenu {
+            Button {
+                Task { await model.quickLook(item) }
+            } label: { Label("Abrir", systemImage: "eye") }
             Button {
                 Task { await model.share(item) }
             } label: { Label("Guardar en el iPad", systemImage: "square.and.arrow.down") }
@@ -194,6 +252,20 @@ struct FinderView: View {
                 Task { await model.delete(item) }
             } label: { Label("Eliminar", systemImage: "trash") }
         }
+    }
+
+    /// Atajos de Finder: espacio = vista rápida, ⌘↓ = abrir
+    private var shortcuts: some View {
+        Group {
+            Button("") { Task { await model.quickLook() } }
+                .keyboardShortcut(.space, modifiers: [])
+            Button("") { Task { await model.quickLook() } }
+                .keyboardShortcut(.downArrow, modifiers: .command)
+            Button("") { Task { await model.goUp() } }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
     }
 
     private func groupedItems(_ items: [FinderItem]) -> [(String, [FinderItem])] {
