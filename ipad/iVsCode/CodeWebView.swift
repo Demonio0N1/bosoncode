@@ -5,8 +5,48 @@ import WebKit
 /// ventana, incluidos los que llegan sin pasar por SwiftUI.
 final class WebContainerView: UIView {
     weak var webView: WKWebView?
+    /// Restricción inferior: se "pellizca" 1pt para forzar a WebKit a recalcular
+    /// el viewport cuando la página se queda maquetada más pequeña.
+    var bottomConstraint: NSLayoutConstraint?
     private var lastSize: CGSize = .zero
     private var resizeWork: DispatchWorkItem?
+    private var watchdog: Timer?
+
+    /// Vigilante: la página puede quedarse con un viewport viejo sin que cambie
+    /// el marco (pasa al activar otra ventana de la app). Se compara lo que la
+    /// página cree medir con el tamaño real y se corrige solo si difieren.
+    func startWatchdog() {
+        watchdog?.invalidate()
+        let timer = Timer(timeInterval: 1.5, repeats: true) { [weak self] _ in
+            self?.checkViewport()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watchdog = timer
+    }
+
+    private func checkViewport() {
+        guard let webView, window != nil, bounds.height > 100 else { return }
+        let expected = bounds.height
+        webView.evaluateJavaScript("window.innerHeight") { [weak self] value, _ in
+            guard let self, let inner = value as? CGFloat else { return }
+            // margen amplio: solo actúa ante un desfase real de maquetación
+            if abs(inner - expected) > 40 { self.forceViewportRefresh() }
+        }
+    }
+
+    private func forceViewportRefresh() {
+        guard let webView, let bottom = bottomConstraint else { return }
+        bottom.constant = -1
+        layoutIfNeeded()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            bottom.constant = 0
+            self.layoutIfNeeded()
+            webView.evaluateJavaScript("window.dispatchEvent(new Event('resize'));")
+        }
+    }
+
+    deinit { watchdog?.invalidate() }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -197,13 +237,16 @@ struct CodeWebView: UIViewRepresentable {
         container.backgroundColor = .black
         webView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(webView)
+        let bottom = webView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         NSLayoutConstraint.activate([
             webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             webView.topAnchor.constraint(equalTo: container.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            bottom,
         ])
+        container.bottomConstraint = bottom
         container.webView = webView
+        container.startWatchdog()
         // al volver a primer plano (p. ej. tras abrir la ventana-terminal) la
         // página también debe recalcular su tamaño
         NotificationCenter.default.addObserver(
