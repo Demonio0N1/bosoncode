@@ -12,6 +12,8 @@ struct FinderView: View {
     @State private var newFolderName = ""
     @AppStorage("finderAppearance") private var appearanceRaw = "auto"
     @AppStorage("finderColumnWidth") private var columnWidth: Double = 280
+    @AppStorage("finderOnboarded") private var onboarded = false
+    @State private var pickerStart: URL?
 
     private var colorScheme: ColorScheme? {
         switch appearanceRaw {
@@ -35,12 +37,26 @@ struct FinderView: View {
                 .ignoresSafeArea()
         }
         .task { model.attach(store: store, local: local) }
+        .background(WindowFreeResize())
         .sheet(isPresented: $showFolderPicker) {
-            FolderPicker { url in
+            FolderPicker(startAt: pickerStart) { url in
                 local.add(url: url)
                 model.refreshLocal()
+                pickerStart = nil
             }
             .ignoresSafeArea()
+        }
+        .sheet(isPresented: Binding(get: { !onboarded }, set: { if !$0 { onboarded = true } })) {
+            OnboardingView(
+                onPick: { root in
+                    pickerStart = root.suggestedURL
+                    onboarded = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        showFolderPicker = true
+                    }
+                },
+                onSkip: { onboarded = true })
+                .presentationDetents([.medium, .large])
         }
         .alert("Nueva carpeta", isPresented: $showNewFolder) {
             TextField("Nombre", text: $newFolderName)
@@ -79,10 +95,23 @@ struct FinderView: View {
                 ForEach(model.localLocations) { loc in
                     Label(loc.name, systemImage: loc.icon).tag(loc)
                 }
+                ForEach(LocalRoot.allCases) { root in
+                    if !model.localLocations.contains(where: { $0.name.localizedCaseInsensitiveContains(root.title) }) {
+                        Button {
+                            pickerStart = root.suggestedURL
+                            showFolderPicker = true
+                        } label: {
+                            Label(root.title, systemImage: root.icon)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
                 Button {
+                    pickerStart = nil
                     showFolderPicker = true
                 } label: {
-                    Label("Añadir carpeta del iPad…", systemImage: "plus.circle")
+                    Label("Añadir carpeta…", systemImage: "plus.circle")
                         .foregroundStyle(.cyan)
                 }
                 .buttonStyle(.plain)

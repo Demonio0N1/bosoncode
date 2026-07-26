@@ -71,12 +71,14 @@ final class LocalStore: ObservableObject {
 /// Selector nativo de carpetas del iPad (iCloud Drive, En mi iPad, unidades
 /// externas, servidores SMB montados…). Lo que elijas queda accesible.
 struct FolderPicker: UIViewControllerRepresentable {
+    var startAt: URL? = nil
     var onPick: (URL) -> Void
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder],
                                                     asCopy: false)
         picker.allowsMultipleSelection = false
+        if let startAt { picker.directoryURL = startAt }
         picker.delegate = context.coordinator
         return picker
     }
