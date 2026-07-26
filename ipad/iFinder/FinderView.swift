@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 struct FinderView: View {
     @StateObject private var store = ServerStore.shared
     @StateObject private var model = FinderModel()
+    @StateObject private var local = LocalStore()
+    @State private var showFolderPicker = false
     @State private var showNewFolder = false
     @State private var newFolderName = ""
 
@@ -17,7 +19,14 @@ struct FinderView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .preferredColorScheme(.dark)
-        .task { model.attach(store: store) }
+        .task { model.attach(store: store, local: local) }
+        .sheet(isPresented: $showFolderPicker) {
+            FolderPicker { url in
+                local.add(url: url)
+                model.refreshLocal()
+            }
+            .ignoresSafeArea()
+        }
         .alert("Nueva carpeta", isPresented: $showNewFolder) {
             TextField("Nombre", text: $newFolderName)
             Button("Crear") {
@@ -55,6 +64,13 @@ struct FinderView: View {
                 ForEach(model.localLocations) { loc in
                     Label(loc.name, systemImage: loc.icon).tag(loc)
                 }
+                Button {
+                    showFolderPicker = true
+                } label: {
+                    Label("Añadir carpeta del iPad…", systemImage: "plus.circle")
+                        .foregroundStyle(.cyan)
+                }
+                .buttonStyle(.plain)
             }
         }
         .listStyle(.sidebar)

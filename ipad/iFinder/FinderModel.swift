@@ -60,14 +60,19 @@ final class FinderModel: ObservableObject {
     @Published var error: String?
 
     private var store: ServerStore?
+    private var localStore: LocalStore?
 
     var title: String { location?.name ?? "iFinder" }
     var currentPath: String { columns.last?.path ?? "" }
 
-    func attach(store: ServerStore) {
+    func attach(store: ServerStore, local: LocalStore) {
         self.store = store
+        self.localStore = local
         rebuildLocations()
     }
+
+    /// Vuelve a componer la lista tras conceder o quitar una carpeta.
+    func refreshLocal() { rebuildLocations() }
 
     private func rebuildLocations() {
         guard let store else { return }
@@ -86,10 +91,19 @@ final class FinderModel: ObservableObject {
                                path: "~/\(folder)")
             }
         }
-        localLocations = [
-            FinderLocation(name: "Descargas de iVsCode", icon: "iphone",
+        var locals = [
+            FinderLocation(name: "Archivos de iFinder", icon: "iphone",
                            kind: .local, path: localDocumentsPath)
         ]
+        // carpetas del iPad concedidas por el usuario (iCloud, En mi iPad,
+        // unidades externas…): iOS solo permite verlas con su permiso
+        for folder in localStore?.folders ?? [] {
+            if let url = localStore?.url(for: folder) {
+                locals.append(FinderLocation(name: folder.name, icon: "folder.badge.person.crop",
+                                             kind: .local, path: url.path))
+            }
+        }
+        localLocations = locals
     }
 
     private var localDocumentsPath: String {
