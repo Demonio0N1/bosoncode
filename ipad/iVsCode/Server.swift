@@ -6,6 +6,12 @@ struct Server: Identifiable, Codable, Equatable {
     var id = UUID()
     var name: String
     var urlString: String
+    /// Sistema operativo anunciado por serve.sh en el TXT del mDNS (`os=`).
+    ///
+    /// Opcional por dos motivos: los servidores guardados antes de este campo
+    /// no lo traen —y un campo obligatorio haría fallar la decodificación de
+    /// la lista entera—, y un equipo añadido a mano tampoco lo anuncia.
+    var os: String?
 
     var url: URL? { URL(string: urlString) }
 }

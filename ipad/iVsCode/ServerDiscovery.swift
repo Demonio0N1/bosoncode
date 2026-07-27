@@ -9,6 +9,9 @@ struct DiscoveredServer: Identifiable, Equatable {
     /// URL HTTPS canónica anunciada en el TXT (`url=`) — los notebooks/webviews
     /// de VS Code exigen contexto seguro, así que se prefiere siempre.
     let canonicalURL: String?
+    /// Sistema operativo anunciado en el TXT (`os=`). Nulo si el equipo corre
+    /// una versión de serve.sh anterior a este campo.
+    let os: String?
 
     var urlString: String { canonicalURL ?? "http://\(host):\(port)" }
 }
@@ -60,9 +63,10 @@ final class ServerDiscovery: ObservableObject {
         for result in results {
             guard case let .service(name, _, _, _) = result.endpoint else { continue }
             var canonical: String?
-            if case let .bonjour(txt) = result.metadata,
-               let url = txt.dictionary["url"], !url.isEmpty {
-                canonical = url
+            var advertisedOS: String?
+            if case let .bonjour(txt) = result.metadata {
+                if let url = txt.dictionary["url"], !url.isEmpty { canonical = url }
+                if let os = txt.dictionary["os"], !os.isEmpty { advertisedOS = os }
             }
             // conexión efímera solo para resolver el endpoint a IP:puerto
             let conn = NWConnection(to: result.endpoint, using: .tcp)
@@ -107,7 +111,8 @@ final class ServerDiscovery: ObservableObject {
                             name: name,
                             host: clean,
                             port: Int(port.rawValue),
-                            canonicalURL: canonical
+                            canonicalURL: canonical,
+                            os: advertisedOS
                         )
                         Task { @MainActor [weak self] in
                             guard let self else { return }

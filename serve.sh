@@ -227,6 +227,16 @@ fi
 MDNS_PID=""
 TXT_ARG=()
 [ -n "$CANON_URL" ] && TXT_ARG=("url=$CANON_URL")
+
+# El sistema operativo del equipo, para que la app pinte el icono correcto sin
+# adivinarlo por el nombre del host. WSL cuenta como Linux: lo es.
+case "$(uname -s)" in
+  Linux)                HOST_OS="linux" ;;
+  Darwin)               HOST_OS="macos" ;;
+  MINGW*|MSYS*|CYGWIN*) HOST_OS="windows" ;;
+  *)                    HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')" ;;
+esac
+TXT_ARG+=("os=$HOST_OS")
 if command -v avahi-publish >/dev/null 2>&1; then
   avahi-publish -s "$NAME" _ivscode._tcp "$PORT" ${TXT_ARG[@]+"${TXT_ARG[@]}"} >/dev/null 2>&1 &
   MDNS_PID=$!

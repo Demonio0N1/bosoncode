@@ -2,16 +2,30 @@ import SwiftUI
 
 /// Sistema operativo del equipo, para elegir su icono.
 ///
-/// El modelo no trae ningún campo de plataforma, así que se deduce del nombre
-/// del host, que es el dato que ya llega tanto de los servidores guardados
-/// como del descubrimiento mDNS. Es una heurística de presentación pura: no
-/// consulta la red ni altera ningún estado. Cuando no reconoce nada asume
-/// Linux, que es donde corre `serve.sh` en la práctica totalidad de los casos.
+/// El dato bueno viene del propio equipo: `serve.sh` publica `os=` en el TXT
+/// del anuncio mDNS y ahí no hay nada que adivinar. La heurística sobre el
+/// nombre del host queda solo para los casos en que no hay anuncio: equipos
+/// añadidos a mano y equipos con una versión antigua del script.
 enum HostPlatform {
     case linux, windows, mac
 
-    private static let windowsMarks = ["windows", "win10", "win11", "win-", "-win", "msi", "wsl"]
+    private static let windowsMarks = ["windows", "win10", "win11", "win-", "-win", "msi"]
     private static let macMarks = ["mac", "imac", "macbook", "darwin", "mbp", "mini"]
+
+    /// Valor exacto anunciado por serve.sh, si lo hay.
+    static func from(advertised os: String?) -> HostPlatform? {
+        switch os?.lowercased() {
+        case "linux": return .linux
+        case "macos", "darwin": return .mac
+        case "windows": return .windows
+        default: return nil
+        }
+    }
+
+    /// Dato anunciado primero; si no lo hay, se cae a mirar el nombre.
+    static func resolve(os: String?, name: String) -> HostPlatform {
+        from(advertised: os) ?? detect(name)
+    }
 
     static func detect(_ name: String) -> HostPlatform {
         let host = name.lowercased()
@@ -192,7 +206,7 @@ struct LauncherView: View {
     private func savedCard(_ server: Server) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
-                let platform = HostPlatform.detect(server.name)
+                let platform = HostPlatform.resolve(os: server.os, name: server.name)
                 Image(systemName: platform.symbol)
                     .font(.system(size: 34))
                     .frame(width: 40, height: 40)          // ancho fijo: los símbolos
@@ -269,11 +283,11 @@ struct LauncherView: View {
 
     private func discoveredCard(_ d: DiscoveredServer) -> some View {
         Button {
-            editorTarget = .prefilled(Server(name: d.name, urlString: d.urlString))
+            editorTarget = .prefilled(Server(name: d.name, urlString: d.urlString, os: d.os))
         } label: {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top) {
-                    let platform = HostPlatform.detect(d.name)
+                    let platform = HostPlatform.resolve(os: d.os, name: d.name)
                     Image(systemName: platform.symbol)
                         .font(.system(size: 34))
                         .frame(width: 40, height: 40)
