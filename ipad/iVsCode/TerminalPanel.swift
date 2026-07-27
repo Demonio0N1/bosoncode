@@ -469,10 +469,13 @@ struct FloatingTerminal: View {
     private var header: some View {
         ZStack {
             Text(titleText)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.75))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(titleColor)
                 .lineLimit(1)
-                .padding(.horizontal, 120)
+                // recorta por el medio: el nombre del equipo y el tamaño son
+                // lo informativo, y quedan a los extremos
+                .truncationMode(.middle)
+                .padding(.horizontal, 96)
 
             HStack(spacing: 8) {
                 // en ventana propia los controles de ventana los dibuja iPadOS
@@ -486,15 +489,15 @@ struct FloatingTerminal: View {
             }
         }
         .padding(.horizontal, 10)
-        .frame(height: 30)
-        .background(
-            LinearGradient(colors: colorScheme == .dark
-                               ? [SwiftUI.Color(white: 0.27), SwiftUI.Color(white: 0.20)]
-                               : [SwiftUI.Color(white: 0.94), SwiftUI.Color(white: 0.86)],
-                           startPoint: .top, endPoint: .bottom)
-        )
+        .frame(height: 28)
+        .background(barBackground)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(.black.opacity(colorScheme == .dark ? 0.4 : 0.18)).frame(height: 0.5)
+            // Línea de un píxel real, no de un punto: en macOS la separación
+            // se intuye, no se ve. La gruesa partía la ventana en dos.
+            Rectangle()
+                .fill(colorScheme == .dark ? SwiftUI.Color.white.opacity(0.07)
+                                           : SwiftUI.Color.black.opacity(0.07))
+                .frame(height: 1 / UIScreen.main.scale)
         }
         .contentShape(Rectangle())
         .gesture(
@@ -507,6 +510,27 @@ struct FloatingTerminal: View {
                 }
                 .onEnded { _ in dragStart = nil }
         )
+    }
+
+    /// El fondo de la barra ES el del terminal, no un gris aparte: así la
+    /// ventana se lee como una sola superficie. Encima, un realce mínimo
+    /// arriba que insinúa volumen sin dibujar un degradado visible.
+    private var barBackground: some View {
+        let palette = MacTerminalTheme.palette(for: colorScheme)
+        return SwiftUI.Color(uiColor: palette.background)
+            .overlay(
+                LinearGradient(
+                    colors: [SwiftUI.Color.white.opacity(colorScheme == .dark ? 0.09 : 0.5),
+                             SwiftUI.Color.white.opacity(0)],
+                    startPoint: .top, endPoint: .bottom
+                )
+            )
+    }
+
+    /// Gris medio en ambos temas: el blanco fijo desaparecía en modo claro.
+    private var titleColor: SwiftUI.Color {
+        colorScheme == .dark ? SwiftUI.Color.white.opacity(0.62)
+                             : SwiftUI.Color.black.opacity(0.62)
     }
 
     private var trafficLights: some View {
