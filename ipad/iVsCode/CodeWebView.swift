@@ -93,6 +93,22 @@ final class WebContainerView: UIView {
     }
 }
 
+extension CodeWebView {
+    /// ¿Está el destino entre los dominios declarados en el Info.plist?
+    ///
+    /// La comparación imita la de WebKit: coincidencia exacta del host o
+    /// subdominio de uno declarado.
+    static func isAppBound(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased(),
+              let declared = Bundle.main.object(forInfoDictionaryKey: "WKAppBoundDomains") as? [String]
+        else { return false }
+        return declared.contains { entry in
+            let domain = entry.lowercased()
+            return host == domain || host.hasSuffix("." + domain)
+        }
+    }
+}
+
 struct CodeWebView: UIViewRepresentable {
     let url: URL
     /// Aísla cookies y Service Workers por servidor: los SW de dos sesiones
@@ -187,9 +203,20 @@ struct CodeWebView: UIViewRepresentable {
         }
         config.allowsInlineMediaPlayback = true
         config.defaultWebpagePreferences.preferredContentMode = .desktop
-        // Habilita Service Workers (los notebooks de VS Code los necesitan):
-        // solo funcionan en dominios declarados en WKAppBoundDomains (Info.plist)
-        config.limitsNavigationsToAppBoundDomains = true
+        // Service Workers —que los notebooks de VS Code necesitan— solo
+        // funcionan con esta bandera, y esta bandera solo permite navegar a los
+        // dominios de WKAppBoundDomains. Activarla siempre significaba que un
+        // equipo cuyo dominio no esté declarado NO CARGABA EN ABSOLUTO.
+        //
+        // Y no hay comodín posible: WebKit compara el dominio registrable, y
+        // como `ts.net` está en la Public Suffix List, cada tailnet
+        // (`loquesea.ts.net`) cuenta como dominio propio. Declarar `ts.net` no
+        // cubre ninguno — comprobado en dispositivo.
+        //
+        // Así que se decide por destino: en un dominio declarado se activa y
+        // los notebooks funcionan; en cualquier otro se deja apagada y al menos
+        // el editor abre.
+        config.limitsNavigationsToAppBoundDomains = Self.isAppBound(url)
 
         // El teclado de OTRA ventana encogía el "visual viewport" de esta
         // página: VS Code maquetaba 79pt más corto y dejaba una franja negra.

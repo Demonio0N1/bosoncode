@@ -141,12 +141,13 @@ open iVsCode.xcodeproj
 
 Set your own team in `project.yml` (`DEVELOPMENT_TEAM`) before building.
 
-### One thing you must change
+### Add your tailnet (needed for Jupyter notebooks)
 
-`ipad/iVsCode/Info.plist` declares `WKAppBoundDomains`, which is what allows
-Service Workers — and therefore Jupyter notebooks — inside the web view. It
-currently holds the original author's tailnet domain. **Replace it with yours**
-or notebooks will not open:
+The editor, the terminal and everything else work out of the box on any
+tailnet. **Notebooks are the exception** and need one edit.
+
+Notebooks rely on Service Workers, which WKWebView only allows on domains
+listed under `WKAppBoundDomains` in `ipad/iVsCode/Info.plist`. Add yours:
 
 ```bash
 tailscale status --json | grep MagicDNSSuffix
@@ -155,9 +156,21 @@ tailscale status --json | grep MagicDNSSuffix
 ```xml
 <key>WKAppBoundDomains</key>
 <array>
-    <string>your-tailnet.ts.net</string>
+    <string>vscode.dev</string>
+    <string>github.dev</string>
+    <string>your-tailnet.ts.net</string>   <!-- add this -->
 </array>
 ```
+
+**There is no wildcard, and `ts.net` on its own does not work.** WebKit matches
+the *registrable* domain, and since `ts.net` is on the
+[Public Suffix List](https://publicsuffix.org/), every tailnet counts as its own
+domain. Verified on a device: with only `ts.net` listed the page refused to
+load; adding the full tailnet fixed it immediately.
+
+The app degrades gracefully rather than failing: it turns the App-Bound flag on
+only for listed domains, so an unlisted tailnet still opens the editor — you
+just lose notebooks until you add it. The list caps at 10 entries.
 
 ---
 

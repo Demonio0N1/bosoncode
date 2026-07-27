@@ -65,9 +65,9 @@
 	<true/>
 	<key>WKAppBoundDomains</key>
 	<array>
-		<string>tail61fec5.ts.net</string>
 		<string>vscode.dev</string>
 		<string>github.dev</string>
+		<string>tail61fec5.ts.net</string>
 	</array>
 </dict>
 </plist>
