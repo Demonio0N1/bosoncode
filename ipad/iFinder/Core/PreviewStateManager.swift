@@ -1,31 +1,24 @@
 import SwiftUI
 
-/// Estado compartido entre la ventana del explorador y la de vista previa.
+/// Registro de ventanas de vista previa abiertas.
 ///
-/// Las escenas de iPadOS no comparten estado por sí solas, pero **sí comparten
-/// proceso**: un objeto único observable es la forma limpia de que la ventana
-/// principal sepa si la previa está abierta (para alternar con la barra
-/// espaciadora) y de pasarle el archivo sin serializarlo en la URL de escena.
+/// IMPORTANTE: ya no decide **qué** muestra cada ventana — eso viaja como
+/// valor de escena, para que cada ventana conserve su archivo aunque la
+/// principal cambie de selección. Aquí solo se anota qué URLs están abiertas,
+/// que es lo que necesita la barra espaciadora para alternar.
 @MainActor
 final class PreviewStateManager: ObservableObject {
     static let shared = PreviewStateManager()
 
-    /// Archivo que debe mostrar la ventana de vista previa.
-    @Published var item: FileItem?
-    /// ¿Hay una ventana de previa en pantalla? La actualiza la propia ventana.
-    @Published var isOpen = false
-    /// Preparando el archivo (descarga de la nube o copia temporal).
-    @Published var preparing = false
+    @Published private(set) var openURLs: Set<URL> = []
 
     private init() {}
 
-    var url: URL? { item?.url }
+    var isAnyOpen: Bool { !openURLs.isEmpty }
 
-    func request(_ item: FileItem) {
-        self.item = item
-    }
+    func isOpen(_ url: URL) -> Bool { openURLs.contains(url) }
 
-    func closed() {
-        isOpen = false
-    }
+    func opened(_ url: URL) { openURLs.insert(url) }
+
+    func closed(_ url: URL) { openURLs.remove(url) }
 }

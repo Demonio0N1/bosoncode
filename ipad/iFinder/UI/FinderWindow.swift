@@ -147,6 +147,8 @@ struct FinderWindow: View {
             }
         }
         .listStyle(.sidebar)
+        // ancho compacto como el Finder de macOS (iPadOS la hace muy ancha)
+        .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
         .navigationTitle("iFinder")
     }
 
@@ -171,10 +173,16 @@ struct FinderWindow: View {
                 Divider()
                 statusBar
             }
-            if showInspector, horizontalSizeClass == .regular {
+            // el panel aparece solo con algo seleccionado: al deseleccionar
+            // desaparece por completo y el contenido recupera el ancho
+            if showInspector,
+               horizontalSizeClass == .regular,
+               let selected = model.inspecting ?? model.selectedItems.first {
                 Divider()
-                InspectorPanel(model: model, onPreview: { openPreview($0) })
+                InspectorPanel(model: model, item: selected,
+                               onPreview: { openPreview($0) })
                     .frame(width: 260)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         .navigationTitle(model.currentURL?.lastPathComponent ?? "iFinder")
@@ -186,9 +194,10 @@ struct FinderWindow: View {
             guard model.renaming == nil else { return .ignored }
             // si la previa está abierta, la barra espaciadora la CIERRA,
             // aunque no haya nada seleccionado (igual que en macOS)
-            if previewState.isOpen {
-                dismissWindow(id: PreviewScene.id)
-                previewState.closed()
+            // si ya hay una previa abierta, el espacio la cierra (como macOS)
+            if let open = previewState.openURLs.first {
+                dismissWindow(id: PreviewScene.id, value: open)
+                previewState.closed(open)
                 return .handled
             }
             guard let item = model.selectedItems.first, !item.isDirectory else { return .ignored }
@@ -199,8 +208,8 @@ struct FinderWindow: View {
 
     /// Abre (o reutiliza) la ventana de vista previa con el archivo elegido.
     private func openPreview(_ item: FileItem) {
-        previewState.request(item)
-        openWindow(id: PreviewScene.id)
+        // el archivo viaja como valor: la ventana nueva es independiente
+        openWindow(id: PreviewScene.id, value: item.url)
     }
 
     private var toolbar: some View {
@@ -342,15 +351,14 @@ struct FinderWindow: View {
 /// Panel derecho de información (⌘I), con vista previa y datos del archivo.
 struct InspectorPanel: View {
     @ObservedObject var model: BrowserViewModel
+    let item: FileItem
     var onPreview: ((FileItem) -> Void)? = nil
     @State private var folderSize: Int64?
-
-    private var item: FileItem? { model.inspecting ?? model.selectedItems.first }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
-                if let item {
+                Group {
                     preview(item)
                     Text(item.name)
                         .font(.headline)
@@ -374,19 +382,13 @@ struct InspectorPanel: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
-                } else {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 34))
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 40)
-                    Text("Sin selección").font(.callout).foregroundStyle(.secondary)
                 }
             }
             .padding(16)
         }
-        .task(id: item?.id) {
+        .task(id: item.id) {
             folderSize = nil
-            guard let item, item.isDirectory else { return }
+            guard item.isDirectory else { return }
             folderSize = await FileService.shared.directorySize(item.url)
         }
     }

@@ -8,10 +8,11 @@ struct iFinderApp: App {
             FinderWindow()
         }
 
-        // Ventana de vista previa. Sin valor asociado: el archivo viaja por
-        // PreviewStateManager, que ambas escenas comparten (mismo proceso).
-        WindowGroup("Vista previa", id: PreviewScene.id) {
-            PreviewWindowView()
+        // Ventana de vista previa: el archivo viaja como VALOR de escena, así
+        // cada ventana conserva el suyo y no se sobreescribe cuando la ventana
+        // principal cambia de selección.
+        WindowGroup("Vista previa", id: PreviewScene.id, for: URL.self) { $url in
+            PreviewWindowView(url: url)
         }
         .defaultSize(width: PreviewScene.defaultSize.width,
                      height: PreviewScene.defaultSize.height)

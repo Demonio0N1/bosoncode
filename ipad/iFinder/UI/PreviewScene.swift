@@ -14,21 +14,23 @@ enum PreviewScene {
 /// barra y botón de cerrar, para que el usuario **siempre** tenga salida por
 /// interfaz además de la barra espaciadora.
 struct PreviewWindowView: View {
-    @ObservedObject private var state = PreviewStateManager.shared
+    /// URL propia de ESTA ventana: llega como valor de escena y no cambia
+    /// aunque la ventana principal seleccione otro archivo.
+    let url: URL?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Group {
-                if let item = state.item {
-                    SafeQuickLookView(item: item)
+                if let url {
+                    SafeQuickLookView(url: url) { dismiss() }
                 } else {
                     ContentUnavailableView("Sin archivo",
                                            systemImage: "doc",
                                            description: Text("Selecciona un archivo y pulsa la barra espaciadora."))
                 }
             }
-            .navigationTitle(state.item?.name ?? "Vista previa")
+            .navigationTitle(url?.lastPathComponent ?? "Vista previa")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -39,7 +41,7 @@ struct PreviewWindowView: View {
                     }
                     .keyboardShortcut("w", modifiers: .command)   // ⌘W como en macOS
                 }
-                if let url = state.item?.url {
+                if let url {
                     ToolbarItem(placement: .topBarTrailing) {
                         ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
                     }
@@ -47,8 +49,10 @@ struct PreviewWindowView: View {
             }
         }
         .frame(minWidth: 320, minHeight: 320)
-        .onAppear { state.isOpen = true }
-        .onDisappear { state.closed() }
+        // el registro solo sirve para saber si hay ventanas abiertas (para
+        // alternar con la barra espaciadora); NO decide qué muestra cada una
+        .onAppear { if let url { PreviewStateManager.shared.opened(url) } }
+        .onDisappear { if let url { PreviewStateManager.shared.closed(url) } }
     }
 }
 
@@ -62,7 +66,8 @@ struct PreviewWindowView: View {
 ///   B. si no, copiar a `temporaryDirectory` — dentro del contenedor de la
 ///      app, siempre legible por cualquier proceso del sistema
 struct SafeQuickLookView: View {
-    let item: FileItem
+    let url: URL
+    var onClose: () -> Void = {}
 
     @State private var ready: URL?
     @State private var failure: String?
@@ -71,12 +76,12 @@ struct SafeQuickLookView: View {
     var body: some View {
         Group {
             if let ready {
-                QuickLookPreview(url: ready)
+                QuickLookPreview(url: ready, onClose: onClose)
                     .ignoresSafeArea(edges: .bottom)
             } else if preparing {
                 VStack(spacing: 14) {
                     ProgressView()
-                    Text("Preparando \(item.name)…")
+                    Text("Preparando \(url.lastPathComponent)…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -87,15 +92,13 @@ struct SafeQuickLookView: View {
                                        description: Text(failure ?? "Archivo no disponible"))
             }
         }
-        .task(id: item.id) { await prepare() }
+        .task(id: url) { await prepare() }
     }
 
     private func prepare() async {
         preparing = true
         defer { preparing = false }
         failure = nil
-
-        let url = item.url
 
         // --- Plan A: acceso directo con el ámbito abierto ---
         var scopes: [URL] = []
@@ -107,7 +110,7 @@ struct SafeQuickLookView: View {
         defer { scopes.forEach { $0.stopAccessingSecurityScopedResource() } }
 
         do {
-            if item.isRemoteOnly || item.isDownloading {
+            if case .remote = CloudFileHandler.state(of: url) {
                 try await CloudFileHandler.shared.materialize(url)
             }
             // --- Plan B: copia temporal para el proceso externo de Quick Look ---
@@ -134,15 +137,18 @@ struct SafeQuickLookView: View {
 struct QuickLookPreview: UIViewControllerRepresentable {
     let url: URL
     var onFinish: () -> Void = {}
+    var onClose: () -> Void = {}
 
     func makeUIViewController(context: Context) -> QLPreviewController {
-        let controller = QLPreviewController()
+        let controller = KeyAwareQLPreviewController()
+        controller.onClose = onClose          // espacio / esc / ⌘W cierran
         controller.dataSource = context.coordinator
         controller.delegate = context.coordinator
         return controller
     }
 
     func updateUIViewController(_ controller: QLPreviewController, context: Context) {
+        (controller as? KeyAwareQLPreviewController)?.onClose = onClose
         if context.coordinator.url != url {
             context.coordinator.url = url
             controller.reloadData()
@@ -194,4 +200,32 @@ struct QuickLookPreview: UIViewControllerRepresentable {
             }
         }
     }
+}
+
+/// `QLPreviewController` que responde al teclado.
+///
+/// UIKit se queda el foco cuando la vista previa aparece, así que el
+/// `.onKeyPress` de SwiftUI ya no llega. La vía fiable es declarar
+/// `UIKeyCommand` en el propio controlador: espacio (como macOS), Esc y ⌘W.
+final class KeyAwareQLPreviewController: QLPreviewController {
+    var onClose: () -> Void = {}
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    override var keyCommands: [UIKeyCommand]? {
+        let close = [
+            UIKeyCommand(input: " ", modifierFlags: [], action: #selector(closePreview)),
+            UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(closePreview)),
+            UIKeyCommand(input: "w", modifierFlags: .command, action: #selector(closePreview)),
+        ]
+        close.forEach { $0.wantsPriorityOverSystemBehavior = true }
+        return close
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        becomeFirstResponder()   // sin esto los UIKeyCommand no se consultan
+    }
+
+    @objc private func closePreview() { onClose() }
 }
