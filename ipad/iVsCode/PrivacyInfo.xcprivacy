@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      BosonCode no recopila datos ni hace seguimiento. Todo lo que guarda
+      (lista de equipos y contraseñas) se queda en el dispositivo: UserDefaults
+      y Llavero. El código y los archivos viven en el equipo del usuario y la
+      app solo se conecta a él.
+    -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+
+    <!--
+      APIs de "motivo obligatorio". Obligatorio declararlas desde mayo de 2024,
+      aunque el uso sea inofensivo: si falta, App Store Connect rechaza la
+      subida antes incluso de la revisión humana.
+    -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <!-- Lista de equipos, ventana activa y preferencias de apariencia -->
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

@@ -63,6 +63,13 @@ enum BosonCodeInfo {
 
     static let copyright = "© 2026 BosonCode. All rights reserved."
 
+    /// VS Code público en la web. Deja probar el editor sin montar nada — y da
+    /// al revisor de la App Store algo a lo que conectarse, que si no tendría
+    /// que instalar Linux y ejecutar serve.sh para poder abrir la app.
+    /// Debe estar también en WKAppBoundDomains o WebKit veta la navegación.
+    static let webEditorName = "vscode.dev"
+    static let webEditorURL = "https://vscode.dev"
+
     /// Atribución. Reconocer la marca y **negar la afiliación** de forma
     /// explícita es lo que evita el rechazo por la guía 5.2.1 de la App Store:
     /// decir solo "powered by Visual Studio Code" puede leerse como respaldo
@@ -138,6 +145,7 @@ struct LauncherView: View {
                             discoveredCard(d)
                         }
                         addCard
+                        webEditorCard
                     }
                     .padding(.horizontal, 40)
 
@@ -377,6 +385,44 @@ struct LauncherView: View {
                 RoundedRectangle(cornerRadius: 22)
                     .stroke(Color.cyan.opacity(0.35),
                             style: StrokeStyle(lineWidth: 1.5, dash: [7]))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Atajo a vscode.dev: editar sin equipo propio. Sin terminal ni máquinas,
+    /// porque detrás no hay ningún serve.sh.
+    private var webEditorCard: some View {
+        Button {
+            let existing = store.servers.first { $0.urlString == BosonCodeInfo.webEditorURL }
+            let target = existing ?? Server(name: BosonCodeInfo.webEditorName,
+                                            urlString: BosonCodeInfo.webEditorURL)
+            if existing == nil { store.upsert(target, password: "") }
+            onConnect(target)
+        } label: {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    Image(systemName: "globe")
+                        .font(.system(size: 34))
+                        .frame(width: 40, height: 40)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Try vscode.dev")
+                        .font(.title3.bold())
+                        .foregroundStyle(.primary)
+                    Text("No machine needed — editor only")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+            .background(cardFill.opacity(0.6), in: RoundedRectangle(cornerRadius: 22))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22)
+                    .stroke(cardStroke, style: StrokeStyle(lineWidth: 1.5, dash: [7]))
             )
         }
         .buttonStyle(.plain)

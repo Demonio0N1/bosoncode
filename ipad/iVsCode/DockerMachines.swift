@@ -357,9 +357,22 @@ extension Server {
 }
 
 extension Server {
+    /// Servicios públicos de VS Code en la web: sirven para editar, pero no
+    /// hay `serve.sh` detrás, así que no tienen gestor, ni terminal PTY, ni
+    /// máquinas Docker. Reconocerlos evita ofrecer botones que solo darían
+    /// error de tiempo de espera.
+    private static let publicHosts = ["vscode.dev", "github.dev", "gitpod.io"]
+
+    /// ¿Hay un `serve.sh` al otro lado?
+    var isManagedHost: Bool {
+        guard let host = URLComponents(string: urlString)?.host?.lowercased() else { return false }
+        return !Self.publicHosts.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
+
     /// Por convención, el gestor de máquinas vive en el puerto 9500 del mismo host.
     var managerURL: URL? {
-        guard var comps = URLComponents(string: urlString), comps.scheme == "https" else { return nil }
+        guard isManagedHost,
+              var comps = URLComponents(string: urlString), comps.scheme == "https" else { return nil }
         comps.port = 9500
         comps.path = ""
         comps.query = nil       // ?folder=… se colaba y rompía las peticiones

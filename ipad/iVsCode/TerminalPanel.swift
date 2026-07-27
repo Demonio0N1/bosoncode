@@ -326,6 +326,8 @@ struct FloatingTerminal: View {
     /// El host rechazó la contraseña (o no hay ninguna que ofrecerle)
     @State private var authFailed = false
     @State private var hostPasswordField = ""
+    /// El servidor activo no ofrece terminal (vscode.dev, Codespaces…)
+    @State private var unsupported = false
     @Environment(\.openWindow) private var openWindow
     /// Tema del iPad. Leerlo aquí NO recrea la terminal: solo hace que
     /// `updateUIView` reciba el valor nuevo sobre la vista que ya existe.
@@ -418,7 +420,9 @@ struct FloatingTerminal: View {
     private var panelContent: some View {
         VStack(spacing: 0) {
             header
-            if authFailed {
+            if unsupported {
+                unsupportedBanner
+            } else if authFailed {
                 authBanner
             } else if let session {
                 SwiftTermView(session: session,
@@ -580,6 +584,11 @@ struct FloatingTerminal: View {
     private func openSession() {
         guard let comps = URLComponents(string: server.urlString),
               let host = comps.host else { return }
+        // vscode.dev y compañía editan, pero no tienen canal PTY detrás
+        guard server.isManagedHost else {
+            unsupported = true
+            return
+        }
         // OJO: la del HOST, no la de la entrada activa. Un contenedor guarda la
         // suya propia y el canal PTY siempre lo atiende el host.
         guard let password = ServerStore.shared.hostPassword(for: server) else {
@@ -603,6 +612,25 @@ struct FloatingTerminal: View {
         session?.close()
         session = nil
         openSession()
+    }
+
+    /// Este servidor edita, pero no da terminal.
+    private var unsupportedBanner: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "terminal.slash")
+                .font(.system(size: 34))
+                .foregroundStyle(.secondary)
+            Text("Este servidor no ofrece terminal")
+                .font(.headline)
+            Text("vscode.dev y GitHub Codespaces solo sirven el editor. El terminal necesita un equipo con serve.sh en marcha.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.regularMaterial)
     }
 
     /// Aviso de contraseña rechazada, con la explicación y la salida.

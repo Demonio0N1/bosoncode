@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      ZeroSpin no recopila datos ni hace seguimiento. Los archivos se leen y se
+      escriben en el propio dispositivo o en el proveedor que el usuario haya
+      concedido; nada sale hacia servidores de la app.
+    -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+
+    <!--
+      APIs de "motivo obligatorio". Obligatorio declararlas desde mayo de 2024,
+      aunque el uso sea inofensivo: si falta, App Store Connect rechaza la
+      subida antes incluso de la revisión humana.
+    -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <!-- Ubicaciones concedidas, vista y preferencias de apariencia -->
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+        <dict>
+            <!--
+              Fecha de modificación de los archivos: se muestra en la columna
+              "Fecha", ordena el listado y decide qué miniatura vale. C617.1 es
+              justamente el motivo "mostrar al usuario archivos que él eligió".
+            -->
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
