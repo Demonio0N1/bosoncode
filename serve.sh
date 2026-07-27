@@ -40,14 +40,46 @@ case "$(uname -m)" in
   *) echo "arquitectura no soportada: $(uname -m)"; exit 1 ;;
 esac
 
-# ---------- --install-service: dejarlo permanente y salir ----------
-if [ "$INSTALL_SERVICE" = 1 ]; then
-  SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+# ---------- contraseña persistente por equipo ----------
+# Se define aquí arriba porque --install-service también la necesita: antes esa
+# rama terminaba antes de llegar a la generación y el usuario se quedaba sin
+# saber la contraseña, con el servicio ya corriendo.
+ensure_password() {
   mkdir -p "$IVSCODE_DIR"
   if [ -n "$PASSWORD" ]; then
     printf '%s' "$PASSWORD" > "$IVSCODE_DIR/password"
-    chmod 600 "$IVSCODE_DIR/password"
+  elif [ -f "$IVSCODE_DIR/password" ]; then
+    PASSWORD=$(cat "$IVSCODE_DIR/password")
+  else
+    PASSWORD=$(openssl rand -hex 8 2>/dev/null \
+      || head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    printf '%s' "$PASSWORD" > "$IVSCODE_DIR/password"
   fi
+  chmod 600 "$IVSCODE_DIR/password"
+}
+
+# Muestra la contraseña en pantalla, nunca en un log.
+#
+# `[ -t 1 ]` distingue una terminal de un servicio: en systemd o launchd la
+# salida va a un archivo que queda ahí para siempre, y una contraseña no debe
+# vivir en un log. Al instalar el servicio sí hay terminal delante, que es
+# justo el momento en que hace falta verla.
+show_password() {
+  echo ""
+  if [ -t 1 ]; then
+    echo "  🔑 Contraseña: $PASSWORD"
+  else
+    echo "  🔑 Contraseña: cat $IVSCODE_DIR/password"
+  fi
+  echo "     (guardada en $IVSCODE_DIR/password — para verla luego:"
+  echo "      cat $IVSCODE_DIR/password)"
+  echo ""
+}
+
+# ---------- --install-service: dejarlo permanente y salir ----------
+if [ "$INSTALL_SERVICE" = 1 ]; then
+  SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  ensure_password
   if [ "$PLATFORM" = linux ]; then
     mkdir -p "$HOME/.config/systemd/user"
     cat > "$HOME/.config/systemd/user/ivscode.service" <<EOF
@@ -73,6 +105,7 @@ EOF
       || echo "⚠ No pude activar linger; ejecútalo tú: sudo loginctl enable-linger $USER"
     systemctl --user restart ivscode.service
     echo "✔ Servicio instalado y corriendo."
+    show_password
     echo "  Estado:    systemctl --user status ivscode"
     echo "  Logs:      journalctl --user -u ivscode -f"
     echo "  Reiniciar: systemctl --user restart ivscode"
@@ -115,6 +148,7 @@ EOF
     launchctl unload "$PLIST" 2>/dev/null || true
     launchctl load -w "$PLIST"
     echo "✔ LaunchAgent instalado y corriendo (logs: ~/.ivscode/serve.log)"
+    show_password
   fi
   exit 0
 fi
@@ -180,19 +214,7 @@ PYEOF
 fi
 
 # ---------- contraseña persistente por equipo ----------
-if [ -z "$PASSWORD" ]; then
-  if [ -f "$IVSCODE_DIR/password" ]; then
-    PASSWORD=$(cat "$IVSCODE_DIR/password")
-  else
-    PASSWORD=$(openssl rand -hex 8 2>/dev/null \
-      || head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    printf '%s' "$PASSWORD" > "$IVSCODE_DIR/password"
-    chmod 600 "$IVSCODE_DIR/password"
-  fi
-else
-  printf '%s' "$PASSWORD" > "$IVSCODE_DIR/password"
-  chmod 600 "$IVSCODE_DIR/password"
-fi
+ensure_password
 
 # ---------- buscar puerto libre ----------
 port_busy() {
@@ -1122,7 +1144,8 @@ fi
 echo ""
 echo "═══════════════════════════════════════════════════"
 echo "  iVsCode backend: $NAME"
-if [ -t 1 ]; then echo "  Contraseña: $PASSWORD"; else echo "  Contraseña: (en $IVSCODE_DIR/password)"; fi
+if [ -t 1 ]; then echo "  🔑 Contraseña: $PASSWORD"
+else echo "  🔑 Contraseña: cat $IVSCODE_DIR/password"; fi
 if [ -n "$CANON_URL" ]; then
   echo "  URL principal (HTTPS, notebooks OK):"
   echo "    $CANON_URL"
