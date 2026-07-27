@@ -18,6 +18,9 @@ struct ThreeFingerTapView: UIViewRepresentable {
         recognizer.numberOfTouchesRequired = 3
         recognizer.numberOfTapsRequired = 2
         recognizer.cancelsTouchesInView = false
+        // segundo cerrojo: con el trackpad, los toques indirectos pueden
+        // contarse de forma rara; aquí se comprueba el número real de dedos
+        recognizer.delegate = context.coordinator
         view.addGestureRecognizer(recognizer)
         return view
     }
@@ -28,10 +31,14 @@ struct ThreeFingerTapView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(action: action) }
 
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var action: () -> Void
         init(action: @escaping () -> Void) { self.action = action }
         @objc func fired() { action() }
+
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            recognizer.numberOfTouches == 3
+        }
     }
 
     /// Solo intercepta cuando hay tres dedos; el resto pasa de largo.
@@ -46,5 +53,34 @@ extension View {
     /// Ejecuta la acción al hacer **doble** toque con tres dedos.
     func onThreeFingerDoubleTap(perform action: @escaping () -> Void) -> some View {
         overlay(ThreeFingerTapView(action: action))
+    }
+
+    /// Toques de un archivo, mutuamente excluyentes.
+    ///
+    /// `ExclusiveGesture` es la pieza clave: evalúa el primer gesto y solo si
+    /// **no** llega a reconocerse pasa al segundo. Así el doble clic nunca
+    /// dispara además la selección, ni deja a medias un gesto que otro
+    /// modificador pueda recoger.
+    ///
+    /// El menú contextual no entra en esta jerarquía a propósito: vive en su
+    /// propio reconocedor (pulsación larga con el dedo, clic secundario con el
+    /// trackpad), que son entradas que el `TapGesture` no reconoce. Por
+    /// construcción no pueden dispararse a la vez.
+    func fileTapGestures(_ model: BrowserViewModel,
+                         item: FileItem,
+                         level: Int) -> some View {
+        contentShape(Rectangle())
+            .gesture(
+                ExclusiveGesture(
+                    // 1º: doble clic → abrir, y nada más
+                    TapGesture(count: 2).onEnded {
+                        Task { await model.openDoubleClick(item, at: level) }
+                    },
+                    // 2º: clic simple → seleccionar
+                    TapGesture(count: 1).onEnded {
+                        Task { await model.select(item, at: level) }
+                    }
+                )
+            )
     }
 }

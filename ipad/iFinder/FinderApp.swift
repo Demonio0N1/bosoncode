@@ -1,12 +1,20 @@
 import SwiftUI
 
+enum FinderScene {
+    static let id = "FinderWindow"
+}
+
 @main
 struct iFinderApp: App {
     var body: some Scene {
-        // Ventana principal del explorador
-        WindowGroup {
+        // Ventana principal del explorador. Lleva id para que "Nueva ventana"
+        // pueda pedir otra igual desde el menú.
+        WindowGroup(id: FinderScene.id) {
             FinderWindow()
         }
+        // La barra de menús superior. Los comandos no ven el estado de
+        // ninguna ventana: lo reciben por foco (ver FinderActions).
+        .commands { FinderCommands() }
 
         // Ventana de vista previa: el archivo viaja como VALOR de escena, así
         // cada ventana conserva el suyo y no se sobreescribe cuando la ventana

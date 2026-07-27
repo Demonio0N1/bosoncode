@@ -41,6 +41,14 @@ struct FinderWindow: View {
         }
         .navigationSplitViewStyle(.balanced)
         .newFileAlert(model)
+        // Los menús de la barra superior operan sobre la ventana con foco:
+        // esta línea es lo que se lo dice. Con dos ventanas abiertas, cada
+        // una publica la suya y "Nueva carpeta" cae en la carpeta correcta.
+        .focusedSceneValue(\.finder, FinderActions(
+            model: model,
+            newWindow: { openWindow(id: FinderScene.id) },
+            closeWindow: { closeThisWindow() }
+        ))
         // la ventana se adapta a cualquier tamaño de Stage Manager / Split View
         .frame(minWidth: 320, minHeight: 400)
         .preferredColorScheme(scheme)
@@ -316,31 +324,34 @@ struct FinderWindow: View {
     }
 
     /// Atajos de Mac: ⌘C, ⌘X, ⌘V, ⌘D, ⌘⌫, ⌘N, ⌘I, espacio, ⌘↑
+    /// Atajos que NO están en la barra de menús.
+    ///
+    /// Todo lo que aparece en un menú se declara allí y solo allí: dos vistas
+    /// reclamando la misma combinación es ambiguo y SwiftUI resuelve el
+    /// empate de forma imprevisible.
     private var shortcuts: some View {
         Group {
-            Button("") { model.copySelection() }.keyboardShortcut("c", modifiers: .command)
-            Button("") { model.cutSelection() }.keyboardShortcut("x", modifiers: .command)
-            Button("") { Task { await model.paste() } }.keyboardShortcut("v", modifiers: .command)
-            Button("") { Task { await model.duplicateSelection() } }.keyboardShortcut("d", modifiers: .command)
-            Button("") { Task { await model.deleteSelection() } }.keyboardShortcut(.delete, modifiers: .command)
-            Button("") { Task { await model.newFolder() } }.keyboardShortcut("n", modifiers: [.command, .shift])
-            Button("") { model.beginNewFile() }.keyboardShortcut("n", modifiers: .command)
-            Button("") { Task { await model.openSelection() } }.keyboardShortcut("o", modifiers: .command)
-            Button("") { model.inspecting = model.selectedItems.first }.keyboardShortcut("i", modifiers: .command)
             Button("") {
                 if let item = model.selectedItems.first, !item.isDirectory { openPreview(item) }
             }
-            .keyboardShortcut(.space, modifiers: [])
-            Button("") {
-                if let item = model.selectedItems.first, !item.isDirectory { openPreview(item) }
-            }
-            .keyboardShortcut(.downArrow, modifiers: .command)
-            Button("") { Task { await model.goUp() } }.keyboardShortcut(.upArrow, modifiers: .command)
+            .keyboardShortcut(.downArrow, modifiers: .command)   // ⌘↓ abrir, como macOS
             Button("") { if let item = model.selectedItems.first { model.beginRename(item) } }
-                .keyboardShortcut(.return, modifiers: [])
+                .keyboardShortcut(.return, modifiers: [])        // Intro renombra
         }
         .opacity(0)
         .frame(width: 0, height: 0)
+    }
+
+    /// Cierra esta ventana (⌘W). En iPadOS una ventana es una escena, así que
+    /// se destruye su sesión; `dismissWindow` solo sirve para escenas con
+    /// valor, como la de vista previa.
+    private func closeThisWindow() {
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) else { return }
+        UIApplication.shared.requestSceneSessionDestruction(scene.session,
+                                                           options: nil,
+                                                           errorHandler: nil)
     }
 
     // MARK: - Apertura

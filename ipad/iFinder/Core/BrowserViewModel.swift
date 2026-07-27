@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import QuickLook
 
 enum ViewMode: String, CaseIterable, Identifiable {
     case icons, list, columns
@@ -188,14 +189,10 @@ final class BrowserViewModel: ObservableObject {
         await select(items[target], at: index)
     }
 
-    /// Enter: abre lo seleccionado (carpeta → entrar, archivo → app externa).
+    /// ⌘O: abre lo seleccionado con la misma regla que el doble clic.
     func openSelection() async {
-        guard let item = selectedItems.first else { return }
-        if item.isDirectory {
-            await open(item.url)
-        } else {
-            await openInDefaultApp(item)
-        }
+        guard let item = selectedItems.first, let level = levels.indices.last else { return }
+        await openDoubleClick(item, at: level)
     }
 
     func goUp() async {
@@ -419,7 +416,31 @@ final class BrowserViewModel: ObservableObject {
         }
     }
 
-    /// Doble clic: entrega el archivo a la app que lo abre.
+    /// Doble clic: abre, y **sin enseñar ningún menú**.
+    ///
+    /// iPadOS no permite lanzar un archivo en "su app por defecto" sin pasar
+    /// por la lista de apps (no existe esa asociación en el sistema). Para que
+    /// el doble clic sea limpio se usa el visor propio, que abre al instante y
+    /// entiende casi todo: texto, código, PDF, imágenes, vídeo, audio, Office,
+    /// iWork y ZIP. Solo cuando ni siquiera él puede con el archivo se recurre
+    /// a entregárselo a otra app, que sí implica elegirla.
+    ///
+    /// Ceder el archivo a Word o Excel sigue estando a un gesto: menú
+    /// contextual → "Abrir en otra app…".
+    func openDoubleClick(_ item: FileItem, at level: Int) async {
+        if item.isDirectory {
+            await select(item, at: level)
+            return
+        }
+        if QLPreviewController.canPreview(item.url as NSURL) {
+            quickLook(item)
+        } else {
+            await openInDefaultApp(item)
+        }
+    }
+
+    /// Entrega el archivo a otra app (Word, Excel…). Muestra la lista de apps
+    /// compatibles porque el sistema no expone ninguna otra vía.
     func openInDefaultApp(_ item: FileItem) async {
         await handOff(item) { _, copy in SystemOpen.shared.openInApp(copy) }
     }

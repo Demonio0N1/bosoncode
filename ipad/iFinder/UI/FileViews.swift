@@ -8,11 +8,15 @@ import UniformTypeIdentifiers
 struct FileContextMenu: ViewModifier {
     @ObservedObject var model: BrowserViewModel
     let item: FileItem
+    let level: Int
 
     func body(content: Content) -> some View {
         content.contextMenu {
-            Button { Task { await model.openInDefaultApp(item) } } label: {
+            Button { Task { await model.openDoubleClick(item, at: level) } } label: {
                 Label("Abrir", systemImage: "arrow.up.forward.app")
+            }
+            Button { Task { await model.openInDefaultApp(item) } } label: {
+                Label("Abrir en otra app…", systemImage: "arrow.up.forward.square")
             }
             Button { Task { await model.chooseAppFor(item) } } label: {
                 Label("Más opciones… (3 dedos ×2)", systemImage: "square.grid.2x2")
@@ -53,8 +57,8 @@ struct FileContextMenu: ViewModifier {
 }
 
 extension View {
-    func fileContextMenu(_ model: BrowserViewModel, item: FileItem) -> some View {
-        modifier(FileContextMenu(model: model, item: item))
+    func fileContextMenu(_ model: BrowserViewModel, item: FileItem, level: Int) -> some View {
+        modifier(FileContextMenu(model: model, item: item, level: level))
             // doble toque con tres dedos = menú de opciones del sistema,
             // sin ocupar el doble clic (que abre el archivo)
             .onThreeFingerDoubleTap {
@@ -138,9 +142,8 @@ struct IconsView: View {
                     .hoverEffect(.highlight)                    // puntero del Magic Keyboard
                     .onHover { hovered = $0 ? item.id : nil }
                     .id(item.id)
-                    .onTapGesture(count: 2) { open(item) }
-                    .onTapGesture { Task { await model.select(item, at: level) } }
-                    .fileContextMenu(model, item: item)
+                    .fileTapGestures(model, item: item, level: level)
+                    .fileContextMenu(model, item: item, level: level)
                     .fileDragAndDrop(model, item: item, level: level)
                 }
                 }
@@ -152,11 +155,6 @@ struct IconsView: View {
     private var items: [FileItem] { model.visibleItems(at: level) }
     private func selected(_ item: FileItem) -> Bool {
         model.levels[safe: level]?.selection.contains(item.id) ?? false
-    }
-    /// Doble clic: carpeta → entrar; archivo → abrir en su app (como macOS)
-    private func open(_ item: FileItem) {
-        if item.isDirectory { Task { await model.select(item, at: level) } }
-        else { Task { await model.openInDefaultApp(item) } }
     }
 }
 
@@ -245,9 +243,8 @@ struct DetailListView: View {
         .contentShape(Rectangle())
         .hoverEffect(.highlight)
         .onHover { hovered = $0 ? item.id : nil }
-        .onTapGesture(count: 2) { open(item) }
-        .onTapGesture { Task { await model.select(item, at: level) } }
-        .fileContextMenu(model, item: item)
+        .fileTapGestures(model, item: item, level: level)
+        .fileContextMenu(model, item: item, level: level)
         .fileDragAndDrop(model, item: item, level: level)
     }
 
@@ -262,10 +259,6 @@ struct DetailListView: View {
     private var items: [FileItem] { model.visibleItems(at: level) }
     private func selected(_ item: FileItem) -> Bool {
         model.levels[safe: level]?.selection.contains(item.id) ?? false
-    }
-    private func open(_ item: FileItem) {
-        if item.isDirectory { Task { await model.select(item, at: level) } }
-        else { Task { await model.openInDefaultApp(item) } }
     }
 }
 
@@ -353,11 +346,8 @@ struct ColumnsBrowserView: View {
         .contentShape(Rectangle())
         .hoverEffect(.highlight)
         .onHover { hovered = $0 ? item.id : nil }
-        .onTapGesture(count: 2) {
-            if !item.isDirectory { Task { await model.openInDefaultApp(item) } }
-        }
-        .onTapGesture { Task { await model.select(item, at: level) } }
-        .fileContextMenu(model, item: item)
+        .fileTapGestures(model, item: item, level: level)
+        .fileContextMenu(model, item: item, level: level)
         .fileDragAndDrop(model, item: item, level: level)
     }
 
