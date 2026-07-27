@@ -172,6 +172,13 @@ The app degrades gracefully rather than failing: it turns the App-Bound flag on
 only for listed domains, so an unlisted tailnet still opens the editor — you
 just lose notebooks until you add it. The list caps at 10 entries.
 
+**Delete the app from the device after editing this list.** WebKit reads
+`WKAppBoundDomains` when the app is installed and does not re-read it.
+Installing over the top leaves a stale state where the app counts as
+non-app-bound and script injection is silently denied — the editor loads but
+stops responding to the keyboard, and ⌃⌥T dies, because key forwarding goes
+through `evaluateJavaScript`. A clean reinstall fixes it.
+
 ---
 
 ## Repository layout

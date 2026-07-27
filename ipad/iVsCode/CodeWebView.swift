@@ -96,6 +96,14 @@ final class WebContainerView: UIView {
 extension CodeWebView {
     /// ¿Está el destino entre los dominios declarados en el Info.plist?
     ///
+    /// ⚠️ Al cambiar `WKAppBoundDomains` hay que BORRAR la app del dispositivo
+    /// y volver a instalarla. WebKit guarda la lista al instalar y no la
+    /// relee: instalar encima deja un estado incoherente en el que la app se
+    /// considera no app-bound y **se deniega la inyección de scripts**. Los
+    /// síntomas engañan mucho —el editor carga pero no responde al teclado y
+    /// ⌃⌥T deja de funcionar— porque el reenvío de teclas usa
+    /// `evaluateJavaScript`.
+    ///
     /// La comparación imita la de WebKit: coincidencia exacta del host o
     /// subdominio de uno declarado.
     static func isAppBound(_ url: URL) -> Bool {
