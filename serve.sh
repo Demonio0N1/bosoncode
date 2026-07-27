@@ -91,6 +91,7 @@ After=network-online.target
 Type=simple
 Environment=NAME=$NAME
 Environment=PORT=$PORT
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
 ExecStart=$SCRIPT_PATH
 Restart=on-failure
 RestartSec=5
@@ -137,6 +138,9 @@ EOF
   <dict>
     <key>NAME</key><string>$NAME</string>
     <key>PORT</key><string>$PORT</string>
+    <!-- launchd arranca con un PATH mínimo (/usr/bin:/bin:/usr/sbin:/sbin) en
+         el que no existen docker ni las herramientas de Homebrew. -->
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
@@ -397,7 +401,12 @@ trap cleanup EXIT INT TERM HUP QUIT
 # ---------- gestor de máquinas Docker (API para la app) ----------
 # Crea/inicia/detiene contenedores con el OS elegido; cada uno corre el
 # code-server del host montado read-only (crear una máquina no descarga nada).
-if [ -n "$CANON_URL" ] && command -v docker >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+# OJO: aquí NO se exige docker. Este bloque abre también el canal PTY del
+# terminal (⌃⌥T), que es un shell y no tiene nada que ver con contenedores.
+# Pedir docker dejaba sin terminal a cualquier equipo que no lo tuviera —o
+# donde el servicio no lo viera— y la app respondía "Connection refused".
+# Los endpoints de máquinas se degradan solos si docker falta.
+if [ -n "$CANON_URL" ] && command -v python3 >/dev/null 2>&1; then
   MGR_LOCAL=39500
   # setup-machine: disponible como comando dentro de cada máquina
   cat > "$IVSCODE_DIR/setup-machine.sh" <<'SETUPEOF'
