@@ -11,6 +11,8 @@ struct iFinderApp: App {
         // pueda pedir otra igual desde el menú.
         WindowGroup(id: FinderScene.id) {
             FinderWindow()
+                // copias de Quick Look de sesiones anteriores: ya no hacen falta
+                .task { TempCleaner.purgeOldCopies() }
         }
         // La barra de menús superior. Los comandos no ven el estado de
         // ninguna ventana: lo reciben por foco (ver FinderActions).

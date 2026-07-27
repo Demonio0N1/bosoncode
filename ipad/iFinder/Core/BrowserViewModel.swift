@@ -269,8 +269,7 @@ final class BrowserViewModel: ObservableObject {
     /// Observa la carpeta abierta: si otro proceso (o el propio iPad) crea,
     /// borra o renombra algo, la vista se refresca sola.
     private func watch(_ url: URL) {
-        watcher?.cancel()
-        if watchedDescriptor >= 0 { close(watchedDescriptor) }
+        watcher?.cancel()          // su manejador cierra su propio descriptor
         let descriptor = Darwin.open(url.path, O_EVTONLY)
         guard descriptor >= 0 else { return }
         watchedDescriptor = descriptor
@@ -281,10 +280,13 @@ final class BrowserViewModel: ObservableObject {
         source.setEventHandler { [weak self] in
             Task { @MainActor in await self?.reload() }
         }
-        source.setCancelHandler { [weak self] in
-            if let fd = self?.watchedDescriptor, fd >= 0 { close(fd) }
-            self?.watchedDescriptor = -1
-        }
+        // OJO: se captura ESTE descriptor por valor. Leerlo de la propiedad
+        // era un fallo real: cancel() es asíncrono, así que para cuando el
+        // manejador corría, watchedDescriptor ya apuntaba al descriptor NUEVO
+        // y lo cerraba. Resultado: el observador quedaba mirando un descriptor
+        // cerrado —la carpeta dejaba de refrescarse sola— y ese número podía
+        // reutilizarse para otro archivo, que quedaba cerrado por sorpresa.
+        source.setCancelHandler { close(descriptor) }
         source.resume()
         watcher = source
     }
@@ -297,7 +299,13 @@ final class BrowserViewModel: ObservableObject {
 
     func newFolder() async {
         guard let url = currentURL else { return }
-        await run { try await FileService.shared.createFolder(in: url, named: "carpeta sin título") }
+        await run {
+            let created = try await FileService.shared.createFolder(in: url,
+                                                                    named: "carpeta sin título")
+            // como al crear un archivo: queda seleccionada y lista para
+            // renombrar con Intro
+            await MainActor.run { self.pendingSelection = created.lastPathComponent }
+        }
     }
 
     // MARK: - Archivo nuevo en blanco

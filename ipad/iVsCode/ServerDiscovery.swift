@@ -62,12 +62,15 @@ final class ServerDiscovery: ObservableObject {
 
         for result in results {
             guard case let .service(name, _, _, _) = result.endpoint else { continue }
-            var canonical: String?
-            var advertisedOS: String?
-            if case let .bonjour(txt) = result.metadata {
-                if let url = txt.dictionary["url"], !url.isEmpty { canonical = url }
-                if let os = txt.dictionary["os"], !os.isEmpty { advertisedOS = os }
-            }
+            // Constantes, no variables: el manejador de estado corre en otro
+            // momento y capturaba estas dos por referencia, lo que es una
+            // carrera de datos en cuanto el TXT llegue mientras se resuelve.
+            let txtRecord: NWTXTRecord? = {
+                if case let .bonjour(txt) = result.metadata { return txt }
+                return nil
+            }()
+            let canonical = txtRecord?.dictionary["url"].flatMap { $0.isEmpty ? nil : $0 }
+            let advertisedOS = txtRecord?.dictionary["os"].flatMap { $0.isEmpty ? nil : $0 }
             // conexión efímera solo para resolver el endpoint a IP:puerto
             let conn = NWConnection(to: result.endpoint, using: .tcp)
             resolvers.append(conn)

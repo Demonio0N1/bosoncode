@@ -18,6 +18,11 @@ struct DockerMachine: Identifiable, Codable, Equatable {
 }
 
 /// Cliente del gestor de máquinas que corre serve.sh en cada PC (puerto 9500).
+enum ManagerError: LocalizedError {
+    case badURL
+    var errorDescription: String? { "La ruta contiene caracteres que no se pueden enviar." }
+}
+
 struct ManagerClient {
     let baseURL: URL
     let password: String
@@ -65,9 +70,12 @@ struct ManagerClient {
     /// Elimina el contenedor; con removeVolume también borra su disco (/root).
     func delete(_ name: String, removeVolume: Bool = false) async throws {
         var comps = URLComponents(url: baseURL.appendingPathComponent("machines/\(name)"),
-                                  resolvingAgainstBaseURL: false)!
-        if removeVolume { comps.queryItems = [URLQueryItem(name: "volume", value: "1")] }
-        var req = URLRequest(url: comps.url!)
+                                  resolvingAgainstBaseURL: false)
+        if removeVolume { comps?.queryItems = [URLQueryItem(name: "volume", value: "1")] }
+        // un nombre con caracteres raros dejaba la URL en nil y la app moría
+        // aquí en vez de mostrar el error
+        guard let target = comps?.url else { throw ManagerError.badURL }
+        var req = URLRequest(url: target)
         req.httpMethod = "DELETE"
         req.timeoutInterval = 60
         req.setValue(password, forHTTPHeaderField: "X-Password")
@@ -132,10 +140,11 @@ struct ManagerClient {
     /// Descarga un archivo (para arrastrarlo a Archivos o guardarlo).
     func download(path: String, machine: String) async throws -> Data {
         var comps = URLComponents(url: baseURL.appendingPathComponent("download"),
-                                  resolvingAgainstBaseURL: false)!
-        comps.queryItems = [URLQueryItem(name: "machine", value: machine),
-                            URLQueryItem(name: "path", value: path)]
-        var req = URLRequest(url: comps.url!)
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "machine", value: machine),
+                             URLQueryItem(name: "path", value: path)]
+        guard let target = comps?.url else { throw ManagerError.badURL }
+        var req = URLRequest(url: target)
         req.timeoutInterval = 300
         req.setValue(password, forHTTPHeaderField: "X-Password")
         let (data, response) = try await URLSession.shared.data(for: req)
@@ -151,10 +160,11 @@ struct ManagerClient {
     func fsList(machine: String, path: String) async throws -> (String, [FSEntry]) {
         struct Result: Codable { let path: String; let entries: [FSEntry] }
         var comps = URLComponents(url: baseURL.appendingPathComponent("fs/list"),
-                                  resolvingAgainstBaseURL: false)!
-        comps.queryItems = [URLQueryItem(name: "machine", value: machine),
-                            URLQueryItem(name: "path", value: path)]
-        var req = URLRequest(url: comps.url!)
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "machine", value: machine),
+                             URLQueryItem(name: "path", value: path)]
+        guard let target = comps?.url else { throw ManagerError.badURL }
+        var req = URLRequest(url: target)
         req.timeoutInterval = 30
         req.setValue(password, forHTTPHeaderField: "X-Password")
         let (data, response) = try await URLSession.shared.data(for: req)

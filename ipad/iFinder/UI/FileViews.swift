@@ -116,7 +116,10 @@ struct IconsView: View {
                     // las flechas arriba/abajo necesitan saber cuántas
                     // columnas hay para saltar una fila entera
                     .onChange(of: geo.size.width, initial: true) { _, width in
-                        model.gridColumnCount = max(1, Int((width - 32 + spacing) / (itemMin + spacing)))
+                        // solo si cambia: publicar en cada pasada de layout
+                        // provoca recomposiciones en cadena
+                        let count = max(1, Int((width - 32 + spacing) / (itemMin + spacing)))
+                        if model.gridColumnCount != count { model.gridColumnCount = count }
                     }
                     .onChange(of: model.levels.last?.selection) { _, _ in
                         if let id = model.selectedItems.first?.id {

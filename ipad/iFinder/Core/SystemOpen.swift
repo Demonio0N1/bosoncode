@@ -75,12 +75,14 @@ final class SystemOpen: NSObject, UIDocumentInteractionControllerDelegate {
         return shown
     }
 
-    func documentInteractionControllerDidDismissOpenInMenu(_ controller: UIDocumentInteractionController) {
-        self.controller = nil
+    // UIKit llama a estos desde fuera del actor principal: se marcan
+    // nonisolated y el estado se toca ya dentro de él.
+    nonisolated func documentInteractionControllerDidDismissOpenInMenu(_ controller: UIDocumentInteractionController) {
+        Task { @MainActor in self.controller = nil }
     }
 
-    func documentInteractionControllerDidDismissOptionsMenu(_ controller: UIDocumentInteractionController) {
-        self.controller = nil
+    nonisolated func documentInteractionControllerDidDismissOptionsMenu(_ controller: UIDocumentInteractionController) {
+        Task { @MainActor in self.controller = nil }
     }
 
     /// Controlador visible de la escena activa (para presentar desde él).
