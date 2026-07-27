@@ -1,146 +1,188 @@
-# iVsCode — VS Code completo en el iPad Pro, cómputo en la RTX 4090
+# BosonCode
 
-El iPad ejecuta una app nativa SwiftUI que envuelve un `WKWebView` apuntando a
-`code-server` en tu PC. Todo el cómputo (Python, Julia, PyTorch, kernels de
-Jupyter, SSH) corre en el PC dentro de un contenedor con passthrough de GPU.
-La conexión va por Tailscale (WireGuard, sin puertos abiertos, HTTPS con
-certificado válido).
+**A native iPadOS client for [code-server](https://github.com/coder/code-server).**
+Edit on the iPad, compute on your workstation — over Tailscale, with no open ports.
 
-```
-iVsCode/
-├── backend/            # Docker: code-server + Python/PyTorch + Julia + GPU
-│   ├── Dockerfile
-│   ├── docker-compose.yml
-│   └── .env.example
-└── ipad/               # App iPadOS (SwiftUI + WKWebView)
-    ├── project.yml     # manifiesto XcodeGen → genera el .xcodeproj
-    └── iVsCode/        # código fuente Swift + Info.plist
-```
+The repository also contains **ZeroSpin**, a macOS-Finder-style file manager for
+iPadOS that shares the same backend client.
+
+> BosonCode is an independent client for code-server. Visual Studio Code is a
+> trademark of Microsoft Corporation. Not affiliated with or endorsed by Microsoft.
 
 ---
 
-## Fase 0 — Red (una sola vez)
+## What you get
 
-1. Instala Tailscale en el PC: `curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up`
-2. Instala la app de Tailscale en el iPad (App Store) e inicia sesión en la misma tailnet.
-3. Verifica: desde el iPad, la web de admin de Tailscale debe mostrar ambos dispositivos online.
+| | |
+|---|---|
+| **Full VS Code** | Extensions, Jupyter notebooks, integrated terminal |
+| **Your hardware** | Python, Julia, PyTorch and CUDA run on the host, not the tablet |
+| **Native terminal** | SwiftTerm over a PTY channel, in its own iPadOS window |
+| **Zero-config discovery** | Hosts announce themselves over mDNS; the app finds them |
+| **Docker machines** | Create, start, stop and delete containers from the app |
+| **No open ports** | Tailscale only — the host is never exposed to the internet |
 
-## Fase 1 — Backend (PC con la RTX 4090)
+---
 
-Prerequisitos: driver NVIDIA reciente + Docker + NVIDIA Container Toolkit:
+## Host setup
 
-```bash
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+### Requirements
 
-# Verificación del passthrough
-docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
-```
+- Linux or macOS. No root and no Docker needed for the basic setup.
+- [Tailscale](https://tailscale.com/download) installed and signed in on both
+  the host **and** the iPad.
 
-Levanta el backend:
+### 1. Tailscale
 
-```bash
-cd backend
-cp .env.example .env        # y edita la contraseña
-docker compose up -d --build   # primera build: ~10-15 min (PyTorch cu124 pesa ~3 GB)
-```
-
-Publícalo con HTTPS válido, solo dentro de tu tailnet:
+Install it and sign in with the same account on both devices:
 
 ```bash
-sudo tailscale serve --bg https / http://127.0.0.1:8443
-tailscale serve status      # → https://tu-pc.tu-tailnet.ts.net
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
 ```
 
-Verifica la GPU desde dentro (o luego desde la terminal en el iPad):
+Then let your user manage `tailscale serve`, which is what publishes HTTPS:
 
 ```bash
-docker exec ivscode-backend /home/coder/.venvs/ml/bin/python \
-  -c "import torch; print(torch.cuda.get_device_name(0), torch.cuda.is_available())"
-# → NVIDIA GeForce RTX 4090 True
+sudo tailscale set --operator=$USER
 ```
 
-## Fase 2 — Validación sin app
+**HTTPS is not optional here.** Jupyter notebooks inside code-server rely on
+Service Workers, and browsers refuse to register those over plain HTTP.
+`serve.sh` uses `tailscale serve` to obtain a real certificate for your
+`*.ts.net` hostname.
 
-Abre `https://tu-pc.tu-tailnet.ts.net` en Safari del iPad. Debes poder editar,
-abrir la terminal (⌃`) y ejecutar un notebook con el kernel "Python (ML)".
-Si algo falla aquí, es problema del backend — arréglalo antes de tocar Swift.
+### 2. Run the backend
 
-## Fase 3 — App iPadOS
+```bash
+git clone https://github.com/Demonio0N1/bosoncode.git
+cd bosoncode
+./serve.sh
+```
 
-En tu Mac:
+That is the whole setup. The script downloads a standalone `code-server` into
+`~/.ivscode`, starts it, publishes it over HTTPS through Tailscale, and announces
+the host over mDNS so the app lists it automatically.
+
+Options:
+
+```bash
+./serve.sh --name "Lab workstation"   # name shown on the card in the app
+./serve.sh --port 8443                # local port (default 8443)
+./serve.sh --password "…"             # default: generated once, kept on disk
+./serve.sh --install-service          # start automatically on boot
+./serve.sh --help
+```
+
+`--install-service` installs a systemd **user** service on Linux (with lingering
+enabled, so it survives logout) or a LaunchAgent on macOS.
+
+The password is generated on first run and stored in `~/.ivscode/password` with
+mode `600`. Print it with:
+
+```bash
+cat ~/.ivscode/password
+```
+
+### 3. Connect from the iPad
+
+Open BosonCode. Your machine appears in the grid on its own — tap it, enter the
+password once, and it is stored in the iPad Keychain.
+
+If it does not show up, add it manually using the URL that `serve.sh` prints on
+startup.
+
+---
+
+## Optional: GPU containers
+
+`setup-machine.sh` provisions a container image with CUDA, PyTorch and Julia.
+Once it is in place, the app can create and manage machines from the *Machines*
+button on a host card. Containers are started with `--gpus all`, so `nvidia-smi`
+works inside them.
+
+`bridge.sh` forwards a supercomputer or shared cluster that you can only reach
+over SSH — for hosts where you cannot install Tailscale or run anything as root.
+
+---
+
+## Building the apps
+
+Requires Xcode 15+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) and an
+Apple developer account (a free one is enough for your own devices).
 
 ```bash
 brew install xcodegen
 cd ipad
-xcodegen                    # genera iVsCode.xcodeproj desde project.yml
+xcodegen generate
 open iVsCode.xcodeproj
 ```
 
-En Xcode: selecciona tu equipo de firma (Signing & Capabilities → Team),
-conecta el iPad y ejecuta. Al primer arranque la app pide la URL del backend
-(la de `tailscale serve`).
+Set your own team in `project.yml` (`DEVELOPMENT_TEAM`) before building.
 
-> Alternativa sin XcodeGen: crea en Xcode un proyecto "App" (SwiftUI, iOS 17,
-> solo iPad), borra los archivos generados y arrastra los de `ipad/iVsCode/`,
-> incluyendo el `Info.plist`.
+### One thing you must change
 
-### Qué hace la app
-
-| Archivo | Responsabilidad |
-|---|---|
-| `iVsCodeApp.swift` | Pantalla completa real: sin barra de estado, indicador de Home oculto, gestos de borde diferidos |
-| `ContentView.swift` | Estado de conexión, overlay de reintento, hoja de ajustes |
-| `SettingsView.swift` | URL del backend (persistida en `AppStorage`) |
-| `CodeWebView.swift` | `WKWebView` configurado para VS Code + `KeyboardWebView` que arrebata ⌘W/⌘T/⌘N al sistema y los reinyecta en el DOM |
-| `ClipboardBridge.swift` | `navigator.clipboard` ⇄ `UIPasteboard` sin prompts ni fallos silenciosos |
-
-Gestos: **doble toque con tres dedos** abre los ajustes nativos.
-
-## Fase 4 — SSH y Jupyter
-
-- **Terminal**: es un shell real en el contenedor con tu `~/.ssh` montado (solo
-  lectura). `ssh`, `scp`, `rsync` y `~/.ssh/config` funcionan 1:1 como en
-  escritorio. Para llaves con passphrase, descomenta las líneas de
-  `SSH_AUTH_SOCK` en el compose.
-- **Editar carpetas remotas**: la extensión `jeanp413.open-remote-ssh`
-  (preinstalada) replica el flujo de Remote-SSH de Microsoft.
-- **Jupyter**: la extensión `ms-toolsai.jupyter` (preinstalada) detecta los
-  kernels "Python (ML)" y "Julia" del contenedor. Los notebooks entrenan
-  directamente sobre la 4090.
-- **IntelliSense de Python**: `basedpyright` (preinstalado) — equivalente libre
-  de Pylance, que no está licenciado para code-server/Open VSX.
-
-## serve.sh — backend sin Docker (recomendado)
-
-`serve.sh` (raíz del proyecto) convierte cualquier computador Linux/macOS en
-backend sin Docker y sin root: descarga code-server standalone en `~/.ivscode`,
-instala las extensiones (Jupyter, Python, basedpyright) en un directorio
-aislado, publica HTTPS vía Tailscale (los notebooks lo exigen) y se anuncia por
-mDNS para que la app lo detecte sola.
+`ipad/iVsCode/Info.plist` declares `WKAppBoundDomains`, which is what allows
+Service Workers — and therefore Jupyter notebooks — inside the web view. It
+currently holds the original author's tailnet domain. **Replace it with yours**
+or notebooks will not open:
 
 ```bash
-./serve.sh                        # arrancar en primer plano
-./serve.sh --name "Mi PC"         # nombre que verá la app
-./serve.sh --install-service      # dejarlo permanente: arranca al encender el
-                                  # equipo (systemd + linger en Linux,
-                                  # LaunchAgent en macOS) y se reinicia si cae
+tailscale status --json | grep MagicDNSSuffix
 ```
 
-Gestión del servicio en Linux: `systemctl --user status|restart ivscode`,
-logs con `journalctl --user -u ivscode -f`.
+```xml
+<key>WKAppBoundDomains</key>
+<array>
+    <string>your-tailnet.ts.net</string>
+</array>
+```
 
-## Mantenimiento
+---
 
-- Actualizar el backend: `docker compose up -d --build` (las extensiones y
-  settings viven en el volumen `code-local` y sobreviven).
-- Resetear extensiones/settings a los del Dockerfile: `docker compose down -v`
-  (⚠️ borra también los kernels registrados y el depot de Julia; `./workspace`
-  nunca se toca).
-- Paridad 100% con el Marketplace de Microsoft (Pylance incluido): corre en el
-  PC `code tunnel` (CLI oficial de VS Code) y apunta la app a la URL de
-  vscode.dev que te da — a costa de más latencia (relay de Microsoft).
+## Repository layout
+
+```
+bosoncode/
+├── serve.sh              # host backend: code-server + HTTPS + mDNS announce
+├── setup-machine.sh      # provisions a GPU container image
+├── bridge.sh             # SSH bridge for hosts without Tailscale
+├── backend/              # optional Docker Compose setup with GPU passthrough
+└── ipad/
+    ├── project.yml       # XcodeGen manifest → generates the .xcodeproj
+    ├── iVsCode/          # BosonCode (editor client + terminal)
+    └── iFinder/          # ZeroSpin (file manager)
+```
+
+The `ipad/iVsCode` and `ipad/iFinder` directory names predate the current app
+names and are kept so build paths stay stable.
+
+---
+
+## Troubleshooting
+
+**The host is not discovered.** mDNS needs a publisher: `avahi-daemon` on Linux
+or the built-in `dns-sd` on macOS. `serve.sh` falls back to D-Bus and to Python
+`zeroconf`, and warns when none is available. Adding the host manually always
+works.
+
+**Notebooks do not open.** Almost always HTTPS or App-Bound Domains. Check that
+`tailscale serve status` shows the mapping and that `WKAppBoundDomains` matches
+your tailnet.
+
+**inotify limit reached.** code-server watches a lot of files:
+
+```bash
+echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf && sudo sysctl -p
+```
+
+---
+
+## Credits
+
+Built on [code-server](https://github.com/coder/code-server) (MIT) by Coder,
+which is itself built on [Visual Studio Code](https://github.com/microsoft/vscode)
+(MIT) by Microsoft. Terminal emulation by
+[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT).
+
+© 2026 BosonCode.
