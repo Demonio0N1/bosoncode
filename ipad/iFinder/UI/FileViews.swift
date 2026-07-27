@@ -179,6 +179,11 @@ struct DetailListView: View {
                     .foregroundStyle(item.iconColor)
                     .frame(width: 20)
                 Text(item.name).lineLimit(1)
+                if let badge = item.cloudBadge {
+                    Image(systemName: badge)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Text(item.dateLabel).frame(width: 170, alignment: .leading)
@@ -273,6 +278,11 @@ struct ColumnsBrowserView: View {
                 .foregroundStyle(selected ? .white : item.iconColor)
                 .frame(width: 20)
             Text(item.name).lineLimit(1)
+            if let badge = item.cloudBadge {
+                Image(systemName: badge)
+                    .font(.caption2)
+                    .foregroundStyle(selected ? Color.white.opacity(0.8) : Color.secondary)
+            }
             Spacer(minLength: 4)
             if item.isDirectory {
                 Image(systemName: "chevron.right")

@@ -14,10 +14,13 @@ actor FileService {
     private let keys: [URLResourceKey] = [
         .nameKey, .isDirectoryKey, .fileSizeKey,
         .contentModificationDateKey, .contentTypeKey,
+        .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey,
+        .ubiquitousItemIsDownloadingKey,
     ]
 
     // MARK: - Lectura
 
+    /// Listado normal (rápido) para carpetas del propio sandbox.
     func list(_ directory: URL, showHidden: Bool) throws -> [FileItem] {
         let urls = try fm.contentsOfDirectory(
             at: directory,

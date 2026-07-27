@@ -52,15 +52,36 @@ final class LocalStore: ObservableObject {
         persist()
     }
 
+    /// Marcadores que caducaron (el proveedor movió la carpeta o cerró sesión)
+    @Published private(set) var staleFolders: Set<UUID> = []
+
     /// Resuelve el marcador y abre el acceso protegido (hay que cerrarlo luego).
+    ///
+    /// Los proveedores de terceros invalidan sus marcadores al reconectar la
+    /// cuenta: hay que detectarlo, renovarlo si se puede y, si no, avisar para
+    /// que el usuario vuelva a conceder la carpeta.
     func url(for folder: Folder) -> URL? {
         if let open = openScopes[folder.id] { return open }
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: folder.bookmark,
                                  options: [],
                                  relativeTo: nil,
-                                 bookmarkDataIsStale: &stale) else { return nil }
-        guard url.startAccessingSecurityScopedResource() else { return nil }
+                                 bookmarkDataIsStale: &stale) else {
+            staleFolders.insert(folder.id)
+            return nil
+        }
+        guard url.startAccessingSecurityScopedResource() else {
+            staleFolders.insert(folder.id)
+            return nil
+        }
+        if stale, let renewed = try? url.bookmarkData(options: .minimalBookmark,
+                                                      includingResourceValuesForKeys: nil,
+                                                      relativeTo: nil),
+           let index = folders.firstIndex(where: { $0.id == folder.id }) {
+            folders[index] = Folder(id: folder.id, name: folder.name, bookmark: renewed)
+            persist()
+        }
+        staleFolders.remove(folder.id)
         openScopes[folder.id] = url
         return url
     }

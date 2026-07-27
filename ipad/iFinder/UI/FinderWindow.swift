@@ -192,7 +192,14 @@ struct FinderWindow: View {
 
             Spacer(minLength: 8)
 
-            if model.busy { ProgressView().controlSize(.small) }
+            if let name = model.downloadingName {
+                HStack(spacing: 5) {
+                    ProgressView().controlSize(.small)
+                    Text("Bajando \(name)…").font(.caption2).foregroundStyle(.secondary)
+                }
+            } else if model.busy {
+                ProgressView().controlSize(.small)
+            }
 
             Button { Task { await model.newFolder() } } label: {
                 Image(systemName: "folder.badge.plus")

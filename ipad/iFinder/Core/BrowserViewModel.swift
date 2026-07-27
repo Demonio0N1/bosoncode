@@ -47,6 +47,8 @@ final class BrowserViewModel: ObservableObject {
     @Published var renameText = ""
     @Published var inspecting: FileItem?
     @Published var quickLookURL: URL?
+    /// Nombre del archivo que se está bajando de la nube (para el aviso)
+    @Published var downloadingName: String?
 
     enum SortKey: String, CaseIterable, Identifiable {
         case name, size, date, kind
@@ -125,11 +127,21 @@ final class BrowserViewModel: ObservableObject {
         await load(url, appending: false)
     }
 
+    /// Las carpetas del sandbox se listan directo; las de proveedores externos
+    /// (OneDrive, Drive, SMB por Tailscale) pasan por el manejador con
+    /// coordinación y plazo máximo.
+    private func isExternal(_ url: URL) -> Bool {
+        !url.path.hasPrefix(FileManager.default.urls(for: .documentDirectory,
+                                                     in: .userDomainMask)[0].path)
+    }
+
     private func load(_ url: URL, appending: Bool) async {
         busy = true
         defer { busy = false }
         do {
-            let items = try await FileService.shared.list(url, showHidden: showHidden)
+            let items = isExternal(url)
+                ? try await CloudFileHandler.shared.list(url, showHidden: showHidden)
+                : try await FileService.shared.list(url, showHidden: showHidden)
             let sorted = sort(items)
             if appending {
                 levels.append(DirectoryLevel(url: url, items: sorted))
@@ -260,9 +272,25 @@ final class BrowserViewModel: ObservableObject {
         }
     }
 
+    /// Abre el archivo. Si vive en la nube, lo descarga antes mostrando
+    /// el progreso, en vez de abrir un fichero vacío.
     func quickLook(_ item: FileItem? = nil) {
         guard let item = item ?? selectedItems.first, !item.isDirectory else { return }
-        quickLookURL = item.url
+        guard item.isRemoteOnly || item.isDownloading else {
+            quickLookURL = item.url
+            return
+        }
+        Task {
+            downloadingName = item.name
+            defer { downloadingName = nil }
+            do {
+                try await CloudFileHandler.shared.materialize(item.url)
+                quickLookURL = item.url
+                await reload()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 
     /// Envoltura común: marca ocupado, captura errores y recarga al terminar.

@@ -13,6 +13,9 @@ struct FileItem: Identifiable, Hashable, Sendable {
     let size: Int64
     let modified: Date?
     let type: UTType?
+    /// Solo en la nube (OneDrive, Drive, iCloud…) mientras no se descargue
+    let isRemoteOnly: Bool
+    let isDownloading: Bool
 
     var id: String { url.path }
 
@@ -23,6 +26,12 @@ struct FileItem: Identifiable, Hashable, Sendable {
         self.size = Int64(values?.fileSize ?? 0)
         self.modified = values?.contentModificationDate
         self.type = values?.contentType
+        self.isDownloading = values?.ubiquitousItemIsDownloading ?? false
+        if values?.isUbiquitousItem == true {
+            self.isRemoteOnly = values?.ubiquitousItemDownloadingStatus == .notDownloaded
+        } else {
+            self.isRemoteOnly = false
+        }
     }
 
     /// Constructor para orígenes remotos, que no tienen URL local real.
@@ -33,6 +42,8 @@ struct FileItem: Identifiable, Hashable, Sendable {
         self.size = size
         self.modified = modified
         self.type = UTType(filenameExtension: (name as NSString).pathExtension)
+        self.isRemoteOnly = false
+        self.isDownloading = false
     }
 
     // MARK: - Presentación
@@ -66,6 +77,13 @@ struct FileItem: Identifiable, Hashable, Sendable {
 
     var sizeLabel: String {
         isDirectory ? "--" : ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+    }
+
+    /// Distintivo de nube, como la nubecita del Finder
+    var cloudBadge: String? {
+        if isDownloading { return "arrow.down.circle.dotted" }
+        if isRemoteOnly { return "icloud.and.arrow.down" }
+        return nil
     }
 
     var dateLabel: String {
