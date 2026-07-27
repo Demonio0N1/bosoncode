@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct iVsCodeApp: App {
+struct BosonCodeApp: App {
     @AppStorage("appearance") private var appearanceRaw = AppearanceMode.auto.rawValue
 
     private var appearance: AppearanceMode {

@@ -166,6 +166,7 @@ final class PTYConnection: NSObject, TerminalViewDelegate {
 /// Paleta ANSI de Terminal.app de macOS (tema oscuro) — los mismos tonos que
 /// ves en el Mac, para que zsh/powerlevel10k se vea idéntico.
 enum MacTerminalTheme {
+    /// Colores oscuros (los de siempre). Se conservan como estaban.
     static let background = UIColor(red: 0.086, green: 0.086, blue: 0.086, alpha: 1)
     static let foreground = UIColor(red: 0.898, green: 0.898, blue: 0.898, alpha: 1)
     static let cursor = UIColor(red: 0.898, green: 0.898, blue: 0.898, alpha: 1)
@@ -178,6 +179,51 @@ enum MacTerminalTheme {
         c(0x81, 0x83, 0x83), c(0xFC, 0x39, 0x1F), c(0x31, 0xE7, 0x22), c(0xEA, 0xEC, 0x23),
         c(0x58, 0x33, 0xFF), c(0xF9, 0x35, 0xF7), c(0x14, 0xF0, 0xF0), c(0xE9, 0xEB, 0xEB),
     ]
+
+    // MARK: - Paleta clara (perfil "Basic" del Terminal de macOS)
+
+    static let lightBackground = UIColor(red: 1, green: 1, blue: 1, alpha: 1)
+    static let lightForeground = UIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1)
+    static let lightCursor = UIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1)
+    static let lightSelection = UIColor(red: 0.70, green: 0.80, blue: 0.98, alpha: 1)
+
+    /// Los mismos 16 ANSI, oscurecidos donde harían falta sobre blanco: el
+    /// amarillo y el cian del perfil oscuro son ilegibles sobre fondo claro.
+    static let lightAnsi: [SwiftTerm.Color] = [
+        c(0x00, 0x00, 0x00), c(0xC2, 0x1A, 0x1A), c(0x00, 0x7A, 0x1F), c(0x8A, 0x6D, 0x00),
+        c(0x1B, 0x3D, 0xD6), c(0xA0, 0x1C, 0xA0), c(0x00, 0x77, 0x8A), c(0x4D, 0x4D, 0x4D),
+        c(0x66, 0x66, 0x66), c(0xE0, 0x2A, 0x2A), c(0x00, 0x96, 0x27), c(0xA8, 0x86, 0x00),
+        c(0x2C, 0x53, 0xF0), c(0xC4, 0x2A, 0xC4), c(0x00, 0x93, 0xAA), c(0x1A, 0x1A, 0x1A),
+    ]
+
+    /// Conjunto de colores para un tema concreto.
+    struct Palette {
+        let background: UIColor
+        let foreground: UIColor
+        let cursor: UIColor
+        let selection: UIColor
+        let ansi: [SwiftTerm.Color]
+    }
+
+    static func palette(for scheme: ColorScheme) -> Palette {
+        scheme == .dark
+            ? Palette(background: background, foreground: foreground,
+                      cursor: cursor, selection: selection, ansi: ansi)
+            : Palette(background: lightBackground, foreground: lightForeground,
+                      cursor: lightCursor, selection: lightSelection, ansi: lightAnsi)
+    }
+
+    /// Aplica la paleta a una terminal **ya viva**, sin recrearla: el búfer,
+    /// el historial y lo que el usuario esté escribiendo se conservan.
+    static func apply(_ palette: Palette, to terminal: TerminalView) {
+        terminal.nativeBackgroundColor = palette.background
+        terminal.nativeForegroundColor = palette.foreground
+        terminal.backgroundColor = palette.background
+        terminal.caretColor = palette.cursor
+        terminal.selectedTextBackgroundColor = palette.selection
+        terminal.installColors(palette.ansi)
+        terminal.setNeedsDisplay()
+    }
 
     private static func c(_ r: Int, _ g: Int, _ b: Int) -> SwiftTerm.Color {
         SwiftTerm.Color(red: UInt16(r * 257), green: UInt16(g * 257), blue: UInt16(b * 257))
@@ -196,6 +242,9 @@ enum MacTerminalTheme {
 struct SwiftTermView: UIViewRepresentable {
     let session: PTYConnection
     var fontSize: CGFloat = 13
+    /// Tema del sistema. Al ser una propiedad del representable, cambiarlo
+    /// dispara `updateUIView` sobre la MISMA vista, no `makeUIView`.
+    var colorScheme: ColorScheme = .dark
     var onFontSizeChange: ((CGFloat) -> Void)? = nil
 
     func makeUIView(context: Context) -> TerminalView {
@@ -212,12 +261,7 @@ struct SwiftTermView: UIViewRepresentable {
             onFontSizeChange?(max(9, min(24, tv.font.pointSize + delta)))
         }
         tv.onFontSizeReset = { onFontSizeChange?(13) }
-        tv.nativeBackgroundColor = MacTerminalTheme.background
-        tv.nativeForegroundColor = MacTerminalTheme.foreground
-        tv.backgroundColor = MacTerminalTheme.background
-        tv.caretColor = MacTerminalTheme.cursor
-        tv.selectedTextBackgroundColor = MacTerminalTheme.selection
-        tv.installColors(MacTerminalTheme.ansi)
+        MacTerminalTheme.apply(MacTerminalTheme.palette(for: colorScheme), to: tv)
         session.attach(tv)
         return tv
     }
@@ -226,6 +270,11 @@ struct SwiftTermView: UIViewRepresentable {
         if uiView.font.pointSize != fontSize {
             uiView.font = MacTerminalTheme.font(size: fontSize)
         }
+        // repintado en caliente al cambiar el tema del iPad
+        if context.coordinator.scheme != colorScheme {
+            context.coordinator.scheme = colorScheme
+            MacTerminalTheme.apply(MacTerminalTheme.palette(for: colorScheme), to: uiView)
+        }
         if let mac = uiView as? MacTerminalView {
             mac.onFontSizeDelta = { [weak mac] delta in
                 guard let mac else { return }
@@ -233,6 +282,16 @@ struct SwiftTermView: UIViewRepresentable {
             }
             mac.onFontSizeReset = { onFontSizeChange?(13) }
         }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(scheme: colorScheme) }
+
+    /// Recuerda el último tema aplicado. Sin esta memoria, `updateUIView`
+    /// reinstalaría la paleta en cada refresco (cambio de fuente, arrastre…),
+    /// lo que provoca un parpadeo innecesario.
+    final class Coordinator {
+        var scheme: ColorScheme
+        init(scheme: ColorScheme) { self.scheme = scheme }
     }
 }
 
@@ -246,6 +305,9 @@ struct FloatingTerminal: View {
 
     @State private var session: PTYConnection?
     @Environment(\.openWindow) private var openWindow
+    /// Tema del iPad. Leerlo aquí NO recrea la terminal: solo hace que
+    /// `updateUIView` reciba el valor nuevo sobre la vista que ya existe.
+    @Environment(\.colorScheme) private var colorScheme
     @State private var center = CGPoint(x: 480, y: 340)
     @State private var size = CGSize(width: 600, height: 380)
     @AppStorage("terminalFontSize") private var fontSize: Double = 13
@@ -335,7 +397,9 @@ struct FloatingTerminal: View {
         VStack(spacing: 0) {
             header
             if let session {
-                SwiftTermView(session: session, fontSize: CGFloat(fontSize)) { newSize in
+                SwiftTermView(session: session,
+                              fontSize: CGFloat(fontSize),
+                              colorScheme: colorScheme) { newSize in
                     fontSize = Double(newSize)
                 }
                 .onDrop(of: ["public.data"], isTargeted: $dropTargeted) { providers in
@@ -397,11 +461,13 @@ struct FloatingTerminal: View {
         .padding(.horizontal, 10)
         .frame(height: 30)
         .background(
-            LinearGradient(colors: [SwiftUI.Color(white: 0.27), SwiftUI.Color(white: 0.20)],
+            LinearGradient(colors: colorScheme == .dark
+                               ? [SwiftUI.Color(white: 0.27), SwiftUI.Color(white: 0.20)]
+                               : [SwiftUI.Color(white: 0.94), SwiftUI.Color(white: 0.86)],
                            startPoint: .top, endPoint: .bottom)
         )
         .overlay(alignment: .bottom) {
-            Rectangle().fill(.black.opacity(0.4)).frame(height: 0.5)
+            Rectangle().fill(.black.opacity(colorScheme == .dark ? 0.4 : 0.18)).frame(height: 0.5)
         }
         .contentShape(Rectangle())
         .gesture(
