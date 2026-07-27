@@ -17,6 +17,8 @@ struct FinderWindow: View {
     @State private var showFolderPicker = false
     @State private var pickerStart: URL?
     @State private var selectedSidebar: String?
+    /// En ventanas estrechas la interfaz se simplifica (Split View pequeño)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private var scheme: ColorScheme? {
         switch appearanceRaw {
@@ -33,19 +35,27 @@ struct FinderWindow: View {
             content
         }
         .navigationSplitViewStyle(.balanced)
+        // la ventana se adapta a cualquier tamaño de Stage Manager / Split View
+        .frame(minWidth: 320, minHeight: 400)
         .preferredColorScheme(scheme)
         .background(WindowFreeResize())
         .background(shortcuts)
-        .sheet(isPresented: $showFolderPicker) {
-            FolderPicker(startAt: pickerStart) { url in
+        // selector nativo de SwiftUI: acepta carpetas y archivos sueltos
+        .fileImporter(isPresented: $showFolderPicker,
+                      allowedContentTypes: [.folder],
+                      allowsMultipleSelection: false) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
                 if local.add(url: url) {
                     Task { await openLocal(url) }
                 } else {
-                    model.error = "No pude guardar el permiso de esa carpeta."
+                    model.error = "No pude guardar el permiso de esa carpeta. Elige la ubicación desde la barra lateral del selector."
                 }
-                pickerStart = nil
+            case .failure(let error):
+                model.error = error.localizedDescription
             }
-            .ignoresSafeArea()
+            pickerStart = nil
         }
         .sheet(isPresented: Binding(get: { !onboarded }, set: { if !$0 { onboarded = true } })) {
             OnboardingView(onPick: { root in
@@ -143,7 +153,7 @@ struct FinderWindow: View {
                 toolbar
                 Divider()
                 Group {
-                    switch model.viewMode {
+                    switch (horizontalSizeClass == .compact ? .list : model.viewMode) {
                     case .icons:
                         if let level = model.levels.indices.last { IconsView(model: model, level: level) }
                     case .list:
@@ -156,7 +166,7 @@ struct FinderWindow: View {
                 Divider()
                 statusBar
             }
-            if showInspector {
+            if showInspector, horizontalSizeClass == .regular {
                 Divider()
                 InspectorPanel(model: model)
                     .frame(width: 260)
@@ -257,7 +267,25 @@ struct FinderWindow: View {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
 
+    /// Con UIFileSharingEnabled + LSSupportsOpeningDocumentsInPlace, la carpeta
+    /// de documentos aparece en Archivos › En mi iPad › iFinder. Debe existir y
+    /// no estar vacía para que el sistema la muestre.
+    private func seedDocumentsFolder() {
+        let fm = FileManager.default
+        let readme = documentsURL.appendingPathComponent("Léeme.txt")
+        guard !fm.fileExists(atPath: readme.path),
+              (try? fm.contentsOfDirectory(atPath: documentsURL.path))?.isEmpty != false else { return }
+        let texto = """
+        Esta carpeta es la de iFinder y aparece en Archivos › En mi iPad › iFinder.
+
+        Lo que dejes aquí se ve desde ambas apps, y desde iFinder puedes
+        arrastrarlo a tus computadoras o a cualquier otra app del iPad.
+        """
+        try? texto.write(to: readme, atomically: true, encoding: .utf8)
+    }
+
     private func openDefault() async {
+        seedDocumentsFolder()
         if let first = local.folders.first, let url = local.url(for: first) {
             await openLocal(url)
         } else {
