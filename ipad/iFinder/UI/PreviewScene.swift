@@ -110,7 +110,9 @@ struct SafeQuickLookView: View {
         defer { scopes.forEach { $0.stopAccessingSecurityScopedResource() } }
 
         do {
-            if case .remote = CloudFileHandler.state(of: url) {
+            // se abre en cuanto los datos están disponibles, sin esperar a que
+            // iCloud dé la sincronización por terminada
+            if !ICloudAvailability.isUsable(url) {
                 try await CloudFileHandler.shared.materialize(url)
             }
             // --- Plan B: copia temporal para el proceso externo de Quick Look ---

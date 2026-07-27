@@ -101,23 +101,24 @@ actor CloudFileHandler {
     /// `startDownloadingUbiquitousItem` funciona con iCloud; con proveedores de
     /// terceros suele fallar, y ahí la vía que sí funciona es una **lectura
     /// coordinada**, que obliga al proveedor a materializar el fichero.
-    func materialize(_ url: URL, timeout: TimeInterval = 90) async throws {
-        if case .local = Self.state(of: url) { return }
+    /// Deja el archivo listo para usarse.
+    ///
+    /// No espera a que iCloud declare la sincronización "completa": basta con
+    /// que los datos se puedan leer, cosa que ocurre bastante antes. Ese
+    /// desfase es el que hacía que la app pareciera colgada descargando.
+    func materialize(_ url: URL, timeout: TimeInterval = 60) async throws {
+        if ICloudAvailability.isUsable(url) { return }
 
         try Self.withAccess(url) {
             try? FileManager.default.startDownloadingUbiquitousItem(at: url)
         }
-
-        // Espera activa con plazo: se consulta el estado sin bloquear el hilo.
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if case .local = Self.state(of: url) { return }
-            try await Task.sleep(nanoseconds: 400_000_000)
-            if Task.isCancelled { throw CancellationError() }
+        do {
+            try await ICloudAvailability.waitUntilUsable(url, timeout: timeout)
+        } catch {
+            // proveedores que ignoran startDownloading: la lectura coordinada
+            // los obliga a materializar
+            _ = try await coordinatedRead(url, timeout: 20)
         }
-        // Último intento: lectura coordinada (materializa en la mayoría de
-        // proveedores que ignoran startDownloadingUbiquitousItem)
-        _ = try await coordinatedRead(url, timeout: 20)
     }
 
     // MARK: - Lecturas coordinadas con plazo

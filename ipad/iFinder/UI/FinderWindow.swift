@@ -93,14 +93,16 @@ struct FinderWindow: View {
 
     private var sidebar: some View {
         List(selection: $selectedSidebar) {
-            Section("Favoritos") {
+            Section {
                 ForEach(local.folders) { folder in
                     Button {
                         if let url = local.url(for: folder) { Task { await openLocal(url) } }
                     } label: {
-                        Label(folder.name, systemImage: "folder.fill")
+                        SidebarRow(title: folder.name, systemImage: "folder.fill",
+                                   tint: Color(red: 0.35, green: 0.62, blue: 0.95))
                     }
                     .buttonStyle(.plain)
+                    .macSidebarRowInsets()
                     .contextMenu {
                         Button(role: .destructive) { local.remove(folder) } label: {
                             Label("Quitar de la barra lateral", systemImage: "minus.circle")
@@ -110,45 +112,52 @@ struct FinderWindow: View {
                 Button {
                     Task { await openLocal(documentsURL) }
                 } label: {
-                    Label("Archivos de iFinder", systemImage: "iphone")
+                    SidebarRow(title: "Archivos de iFinder", systemImage: "iphone")
                 }
                 .buttonStyle(.plain)
+                .macSidebarRowInsets()
+            } header: {
+                Text("Favoritos").macSidebarSectionHeader()
             }
 
-            Section("Ubicaciones del iPad") {
+            Section {
                 ForEach(LocalRoot.allCases) { root in
                     Button {
                         pickerStart = root.suggestedURL
                         showFolderPicker = true
                     } label: {
-                        Label(root.title, systemImage: root.icon)
-                            .foregroundStyle(.secondary)
+                        SidebarRow(title: root.title, systemImage: root.icon, dimmed: true)
                     }
                     .buttonStyle(.plain)
+                    .macSidebarRowInsets()
                 }
                 Button {
                     pickerStart = nil
                     showFolderPicker = true
                 } label: {
-                    Label("Añadir carpeta…", systemImage: "plus.circle").foregroundStyle(.cyan)
+                    SidebarRow(title: "Añadir carpeta…", systemImage: "plus.circle", tint: .cyan)
                 }
                 .buttonStyle(.plain)
+                .macSidebarRowInsets()
+            } header: {
+                Text("Ubicaciones").macSidebarSectionHeader()
             }
 
             if !servers.servers.isEmpty {
-                Section("Computadoras") {
+                Section {
                     ForEach(servers.servers) { server in
-                        Label(server.name,
-                              systemImage: server.dockerMachineName.isEmpty
-                                  ? "desktopcomputer" : "shippingbox.fill")
-                            .foregroundStyle(.secondary)
+                        SidebarRow(title: server.name,
+                                   systemImage: server.dockerMachineName.isEmpty
+                                       ? "desktopcomputer" : "shippingbox.fill",
+                                   dimmed: true)
+                            .macSidebarRowInsets()
                     }
+                } header: {
+                    Text("Computadoras").macSidebarSectionHeader()
                 }
             }
         }
-        .listStyle(.sidebar)
-        // ancho compacto como el Finder de macOS (iPadOS la hace muy ancha)
-        .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
+        .macSidebarStyle()
         .navigationTitle("iFinder")
     }
 
