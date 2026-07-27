@@ -77,14 +77,35 @@ Options:
 `--install-service` installs a systemd **user** service on Linux (with lingering
 enabled, so it survives logout) or a LaunchAgent on macOS.
 
-The password is generated on first run and stored in `~/.ivscode/password` with
-mode `600`. Print it with:
+### 3. Your password
+
+`serve.sh` generates a random password on first run and stores it in
+`~/.ivscode/password` with mode `600`. It is never printed to the logs, so read
+it from the host whenever you need it:
 
 ```bash
 cat ~/.ivscode/password
 ```
 
-### 3. Connect from the iPad
+Two things worth knowing before they surprise you:
+
+- **The password is tied to `~/.ivscode`.** Delete that directory and the next
+  run generates a *new* password — the old one stops working. This is the most
+  common reason a login suddenly fails after a clean reinstall.
+- **Reinstalling the app clears the saved credential**, because it lives in the
+  iPad Keychain and iOS wipes it with the app. You will be asked for the
+  password again.
+
+Set your own instead of the generated one at any time:
+
+```bash
+./serve.sh --password "your-password"
+```
+
+Used together with `--install-service`, it is written to `~/.ivscode/password`
+before the service starts, so the service picks it up too.
+
+### 4. Connect from the iPad
 
 Open BosonCode. Your machine appears in the grid on its own — tap it, enter the
 password once, and it is stored in the iPad Keychain.
@@ -165,6 +186,10 @@ names and are kept so build paths stay stable.
 or the built-in `dns-sd` on macOS. `serve.sh` falls back to D-Bus and to Python
 `zeroconf`, and warns when none is available. Adding the host manually always
 works.
+
+**The password is rejected.** The one the app remembers no longer matches the
+host. Read the current one with `cat ~/.ivscode/password` and enter it again.
+This happens whenever `~/.ivscode` has been deleted or moved.
 
 **Notebooks do not open.** Almost always HTTPS or App-Bound Domains. Check that
 `tailscale serve status` shows the mapping and that `WKAppBoundDomains` matches
