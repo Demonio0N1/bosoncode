@@ -83,6 +83,7 @@ final class LocalStore: ObservableObject {
         }
         staleFolders.remove(folder.id)
         openScopes[folder.id] = url
+        CloudFileHandler.registerRoot(url)   // sus subcarpetas heredan el permiso
         return url
     }
 

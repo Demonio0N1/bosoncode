@@ -38,6 +38,20 @@ enum CloudError: LocalizedError {
 actor CloudFileHandler {
     static let shared = CloudFileHandler()
 
+    /// Raíces concedidas por el usuario, con su ámbito abierto. Un descendiente
+    /// no puede abrir ámbito propio: hereda el de su raíz, así que hay que
+    /// mantenerla registrada mientras se navega dentro.
+    private nonisolated(unsafe) static var scopedRoots: [URL] = []
+
+    nonisolated static func registerRoot(_ url: URL) {
+        if !scopedRoots.contains(url) { scopedRoots.append(url) }
+    }
+
+    /// Raíz que contiene esta ruta (si alguna).
+    nonisolated static func root(containing url: URL) -> URL? {
+        scopedRoots.first { url.path == $0.path || url.path.hasPrefix($0.path + "/") }
+    }
+
     private static let listKeys: [URLResourceKey] = [
         .nameKey, .isDirectoryKey, .fileSizeKey, .contentModificationDateKey,
         .contentTypeKey, .isUbiquitousItemKey,
@@ -49,8 +63,16 @@ actor CloudFileHandler {
     /// Ejecuta trabajo con el ámbito abierto y garantiza el cierre.
     /// Devuelve el valor del bloque; nunca deja el ámbito abierto por error.
     private nonisolated static func withAccess<T>(_ url: URL, _ work: () throws -> T) throws -> T {
+        // Se abre el ámbito de la propia URL y, si es un descendiente, también
+        // el de su raíz concedida (de la que hereda el permiso).
         let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let rootURL = root(containing: url)
+        let rootScoped = (rootURL != nil && rootURL != url)
+            ? rootURL!.startAccessingSecurityScopedResource() : false
+        defer {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            if rootScoped, let rootURL { rootURL.stopAccessingSecurityScopedResource() }
+        }
         return try work()
     }
 
@@ -109,15 +131,20 @@ actor CloudFileHandler {
                 var inner: Error?
                 NSFileCoordinator().coordinate(readingItemAt: directory,
                                        options: [.withoutChanges],
-                                       error: &coordError) { url in
+                                       error: &coordError) { coordinated in
                     do {
                         let urls = try FileManager.default.contentsOfDirectory(
-                            at: url,
+                            at: coordinated,
                             includingPropertiesForKeys: Self.listKeys,
                             options: showHidden ? [] : [.skipsHiddenFiles])
+                        // CLAVE: el coordinador entrega una URL sustituta y sus
+                        // hijos NO heredan el permiso. Cada elemento se ancla a
+                        // la carpeta original (la que sí tiene ámbito abierto),
+                        // o al entrar en una subcarpeta el sistema deniega.
                         result = urls.map { child in
-                            FileItem(url: child,
-                                     values: try? child.resourceValues(forKeys: Set(Self.listKeys)))
+                            let stable = directory.appendingPathComponent(child.lastPathComponent)
+                            return FileItem(url: stable,
+                                            values: try? child.resourceValues(forKeys: Set(Self.listKeys)))
                         }
                     } catch { inner = error }
                 }
