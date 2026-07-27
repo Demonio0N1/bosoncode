@@ -11,8 +11,11 @@ struct FileContextMenu: ViewModifier {
 
     func body(content: Content) -> some View {
         content.contextMenu {
+            Button { Task { await model.openInDefaultApp(item) } } label: {
+                Label("Abrir con…", systemImage: "arrow.up.forward.app")
+            }
             Button { model.quickLook(item) } label: {
-                Label("Abrir", systemImage: "eye")
+                Label("Vista rápida (espacio)", systemImage: "eye")
             }
             Divider()
             Button { model.copySelection() } label: {
@@ -115,9 +118,10 @@ struct IconsView: View {
     private func selected(_ item: FileItem) -> Bool {
         model.levels[safe: level]?.selection.contains(item.id) ?? false
     }
+    /// Doble clic: carpeta → entrar; archivo → abrir en su app (como macOS)
     private func open(_ item: FileItem) {
         if item.isDirectory { Task { await model.select(item, at: level) } }
-        else { model.quickLook(item) }
+        else { Task { await model.openInDefaultApp(item) } }
     }
 }
 
@@ -213,7 +217,7 @@ struct DetailListView: View {
     }
     private func open(_ item: FileItem) {
         if item.isDirectory { Task { await model.select(item, at: level) } }
-        else { model.quickLook(item) }
+        else { Task { await model.openInDefaultApp(item) } }
     }
 }
 
@@ -295,7 +299,7 @@ struct ColumnsBrowserView: View {
         .hoverEffect(.highlight)
         .onHover { hovered = $0 ? item.id : nil }
         .onTapGesture(count: 2) {
-            if !item.isDirectory { model.quickLook(item) }
+            if !item.isDirectory { Task { await model.openInDefaultApp(item) } }
         }
         .onTapGesture { Task { await model.select(item, at: level) } }
         .fileContextMenu(model, item: item)

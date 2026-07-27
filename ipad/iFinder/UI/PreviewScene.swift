@@ -49,6 +49,14 @@ struct PreviewWindowView: View {
             }
         }
         .frame(minWidth: 320, minHeight: 320)
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        // ⌘W por dos vías: este botón oculto (SwiftUI) y el UIKeyCommand del
+        // visor, porque el foco puede estar en cualquiera de los dos
+        .background(
+            Button("") { dismiss() }
+                .keyboardShortcut("w", modifiers: .command)
+                .opacity(0)
+        )
         // el registro solo sirve para saber si hay ventanas abiertas (para
         // alternar con la barra espaciadora); NO decide qué muestra cada una
         .onAppear { if let url { PreviewStateManager.shared.opened(url) } }
@@ -77,7 +85,9 @@ struct SafeQuickLookView: View {
         Group {
             if let ready {
                 QuickLookPreview(url: ready, onClose: onClose)
-                    .ignoresSafeArea(edges: .bottom)
+                    // el visor gestiona sus propios márgenes: debe ocupar todo
+                    .ignoresSafeArea()
+                    .background(Color(uiColor: .systemBackground))
             } else if preparing {
                 VStack(spacing: 14) {
                     ProgressView()
@@ -146,6 +156,10 @@ struct QuickLookPreview: UIViewControllerRepresentable {
         controller.onClose = onClose          // espacio / esc / ⌘W cierran
         controller.dataSource = context.coordinator
         controller.delegate = context.coordinator
+        // Sin esto, la vista del controlador es transparente y se ve el negro
+        // de la ventana en los márgenes que el documento no cubre.
+        controller.view.backgroundColor = .systemBackground
+        controller.view.clipsToBounds = true
         return controller
     }
 

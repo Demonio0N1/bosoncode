@@ -237,7 +237,12 @@ struct FinderWindow: View {
 
             Spacer(minLength: 8)
 
-            if let name = model.downloadingName {
+            if let name = model.openingExternally {
+                HStack(spacing: 5) {
+                    ProgressView().controlSize(.small)
+                    Text("Abriendo \(name)…").font(.caption2).foregroundStyle(.secondary)
+                }
+            } else if let name = model.downloadingName {
                 HStack(spacing: 5) {
                     ProgressView().controlSize(.small)
                     Text("Bajando \(name)…").font(.caption2).foregroundStyle(.secondary)

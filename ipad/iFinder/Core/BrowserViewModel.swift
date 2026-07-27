@@ -274,6 +274,8 @@ final class BrowserViewModel: ObservableObject {
 
     /// Señal para que la vista abra la ventana de previsualización.
     @Published var previewRequest: FileItem?
+    /// Archivo que se abrirá en otra app (doble clic, como en macOS)
+    @Published var openingExternally: String?
 
     /// Abre el archivo. Si vive en la nube, lo descarga antes mostrando
     /// el progreso, en vez de abrir un fichero vacío.
@@ -293,6 +295,28 @@ final class BrowserViewModel: ObservableObject {
             } catch {
                 self.error = error.localizedDescription
             }
+        }
+    }
+
+    /// Doble clic: abre el archivo en su app por defecto del iPad.
+    ///
+    /// El destino es otro proceso, así que no puede leer nuestras carpetas con
+    /// permiso: se le entrega una copia en el contenedor propio.
+    func openInDefaultApp(_ item: FileItem) async {
+        guard !item.isDirectory else { return }
+        openingExternally = item.name
+        defer { openingExternally = nil }
+        do {
+            if !ICloudAvailability.isUsable(item.url) {
+                try await CloudFileHandler.shared.materialize(item.url)
+            }
+            let data = try await CloudFileHandler.shared.read(item.url)
+            let copy = FileManager.default.temporaryDirectory
+                .appendingPathComponent(item.name)
+            try data.write(to: copy, options: .atomic)
+            SystemOpen.shared.openInDefaultApp(copy)
+        } catch {
+            self.error = "No se pudo abrir \(item.name): \(error.localizedDescription)"
         }
     }
 
