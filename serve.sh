@@ -77,6 +77,19 @@ EOF
     echo "  Logs:      journalctl --user -u ivscode -f"
     echo "  Reiniciar: systemctl --user restart ivscode"
   else
+    # macOS protege ~/Desktop, ~/Documents y ~/Downloads: un LaunchAgent que
+    # apunte ahí arranca con "Operation not permitted" y muere en bucle, sin
+    # más pista que el log. Si el script vive en una de esas carpetas, se
+    # instala una copia en ~/.ivscode, que sí es accesible.
+    case "$SCRIPT_PATH" in
+      "$HOME/Desktop/"*|"$HOME/Documents/"*|"$HOME/Downloads/"*)
+        cp "$SCRIPT_PATH" "$IVSCODE_DIR/serve.sh"
+        chmod +x "$IVSCODE_DIR/serve.sh"
+        SCRIPT_PATH="$IVSCODE_DIR/serve.sh"
+        echo "→ Copiado a $SCRIPT_PATH (macOS no deja que un servicio lea esa carpeta)."
+        echo "  Si actualizas el repositorio, vuelve a ejecutar --install-service."
+        ;;
+    esac
     PLIST="$HOME/Library/LaunchAgents/com.ivscode.serve.plist"
     mkdir -p "$HOME/Library/LaunchAgents"
     cat > "$PLIST" <<EOF
