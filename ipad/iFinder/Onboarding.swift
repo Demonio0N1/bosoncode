@@ -34,7 +34,7 @@ struct OnboardingView: View {
                                    startPoint: .top, endPoint: .bottom))
             Text("Da acceso a tus archivos")
                 .font(.title2.bold())
-            Text("iPadOS protege tus datos: elige una vez cada carpeta y iFinder la recordará para siempre.")
+            Text("iPadOS protege tus datos: elige una vez cada carpeta y ZeroSpin la recordará para siempre.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

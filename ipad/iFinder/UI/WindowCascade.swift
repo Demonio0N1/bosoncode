@@ -26,8 +26,8 @@ enum WindowCascade {
     static func nextSize(base: CGSize) -> CGSize {
         let level = opened % steps
         opened += 1
-        return CGSize(width: max(360, base.width - CGFloat(level) * 48),
-                      height: max(300, base.height - CGFloat(level) * 40))
+        return CGSize(width: max(360, base.width - CGFloat(level) * 72),
+                      height: max(300, base.height - CGFloat(level) * 60))
     }
 }
 

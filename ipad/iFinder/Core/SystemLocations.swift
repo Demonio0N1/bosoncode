@@ -5,7 +5,7 @@ import Foundation
 /// Conviene ser honesto con lo que iPadOS deja alcanzar sin permiso:
 ///
 /// * **En mi iPad** — la carpeta Documents de la app. Es la que Archivos
-///   muestra bajo "En mi iPad › iFinder" gracias a `UIFileSharingEnabled` y
+///   muestra bajo "En mi iPad › ZeroSpin" gracias a `UIFileSharingEnabled` y
 ///   `LSSupportsOpeningDocumentsInPlace`. Siempre disponible, sin selector.
 /// * **Descargas** — una carpeta propia dentro de Documents. La "Descargas"
 ///   del sistema vive en iCloud Drive y **no** tiene ruta accesible desde el

@@ -46,6 +46,9 @@ struct PreviewWindowView: View {
         // cada previa nueva nace un escalón más pequeña: iPadOS no deja fijar
         // posición, así que la cascada se consigue por tamaño
         .background(CascadingWindowSize(base: PreviewScene.defaultSize))
+        // ⌘W del menú cierra ESTA ventana cuando tiene el foco
+        .focusedSceneValue(\.windowClose,
+                           WindowCloseAction(id: url?.path ?? "preview") { dismiss() })
         // Tercera red para el teclado: atajos de SwiftUI a nivel de ventana.
         // Se consultan cuando la cadena de respondedores de UIKit no consumió
         // la tecla, así que cubren el caso de que el foco esté fuera del visor.
@@ -59,7 +62,14 @@ struct PreviewWindowView: View {
         )
         // el registro solo sirve para saber si hay ventanas abiertas (para
         // alternar con la barra espaciadora); NO decide qué muestra cada una
-        .onAppear { if let url { PreviewStateManager.shared.opened(url) } }
+        .onAppear {
+            // ventana resucitada por iPadOS al relanzar: la app arranca limpia
+            if AppLaunch.isRestoredWindow {
+                dismiss()
+                return
+            }
+            if let url { PreviewStateManager.shared.opened(url) }
+        }
         .onDisappear { if let url { PreviewStateManager.shared.closed(url) } }
     }
 }

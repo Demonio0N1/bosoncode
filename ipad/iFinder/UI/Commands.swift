@@ -27,10 +27,31 @@ private struct FinderActionsKey: FocusedValueKey {
     typealias Value = FinderActions
 }
 
+/// Cómo se cierra la ventana que tiene el foco, sea del tipo que sea.
+///
+/// Hace falta porque ⌘W lo reclama el menú, que vive en la app y no en una
+/// escena. Con solo `FinderActions`, en una ventana de vista previa ese valor
+/// era nulo, la entrada quedaba desactivada… y **se tragaba la pulsación**:
+/// el atajo de la propia ventana no llegaba a ejecutarse. Publicando la acción
+/// desde ambas, ⌘W cierra siempre la ventana correcta.
+struct WindowCloseAction {
+    let id: String
+    let close: () -> Void
+}
+
+private struct WindowCloseKey: FocusedValueKey {
+    typealias Value = WindowCloseAction
+}
+
 extension FocusedValues {
     var finder: FinderActions? {
         get { self[FinderActionsKey.self] }
         set { self[FinderActionsKey.self] = newValue }
+    }
+
+    var windowClose: WindowCloseAction? {
+        get { self[WindowCloseKey.self] }
+        set { self[WindowCloseKey.self] = newValue }
     }
 }
 
@@ -45,6 +66,7 @@ struct FinderCommands: Commands {
     /// Nulo si ninguna ventana del explorador tiene el foco: entonces las
     /// entradas se ven en gris, como debe ser.
     @FocusedValue(\.finder) private var finder
+    @FocusedValue(\.windowClose) private var windowClose
 
     private var model: BrowserViewModel? { finder?.model }
     private var hasSelection: Bool { !(model?.selectedItems.isEmpty ?? true) }
@@ -77,9 +99,12 @@ struct FinderCommands: Commands {
         }
 
         CommandGroup(replacing: .saveItem) {
-            Button("Cerrar ventana") { finder?.closeWindow() }
-                .keyboardShortcut("w", modifiers: .command)
-                .disabled(finder == nil)
+            // cierra la ventana enfocada: explorador, vista previa, la que sea
+            Button("Cerrar ventana") {
+                if let windowClose { windowClose.close() } else { finder?.closeWindow() }
+            }
+            .keyboardShortcut("w", modifiers: .command)
+            .disabled(windowClose == nil && finder == nil)
         }
 
         CommandGroup(after: .saveItem) {
@@ -155,7 +180,7 @@ struct FinderCommands: Commands {
 
         // MARK: Ayuda
         CommandGroup(replacing: .help) {
-            Button("Atajos de iFinder") { model?.error = Self.shortcutSheet }
+            Button("Atajos de ZeroSpin") { model?.error = Self.shortcutSheet }
         }
     }
 

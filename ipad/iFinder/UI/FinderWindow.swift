@@ -88,6 +88,8 @@ struct FinderWindow: View {
             newWindow: { openWindow(id: FinderScene.id) },
             closeWindow: { closeThisWindow() }
         ))
+        .focusedSceneValue(\.windowClose,
+                           WindowCloseAction(id: "finder") { closeThisWindow() })
         // la ventana se adapta a cualquier tamaño de Stage Manager / Split View
         .frame(minWidth: 320, minHeight: 400)
         .preferredColorScheme(scheme)
@@ -179,7 +181,7 @@ struct FinderWindow: View {
                 Button {
                     Task { await openLocal(documentsURL) }
                 } label: {
-                    SidebarRow(title: "Archivos de iFinder", systemImage: "iphone")
+                    SidebarRow(title: "Archivos de ZeroSpin", systemImage: "iphone")
                 }
                 .buttonStyle(.plain)
                 .macSidebarRowInsets()
@@ -234,7 +236,7 @@ struct FinderWindow: View {
             }
         }
         .macSidebarStyle()
-        .navigationTitle("iFinder")
+        .navigationTitle("ZeroSpin")
     }
 
     /// Guarda el permiso con el nombre elegido y entra en la carpeta.
@@ -335,7 +337,7 @@ struct FinderWindow: View {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .navigationTitle(model.currentURL?.lastPathComponent ?? "iFinder")
+        .navigationTitle(model.currentURL?.lastPathComponent ?? "ZeroSpin")
         .navigationBarTitleDisplayMode(.inline)
         // El área de archivos debe poder recibir foco para que le lleguen las
         // teclas; sin `.focusable()` las flechas no salen de la barra lateral.
@@ -366,6 +368,7 @@ struct FinderWindow: View {
 
     /// Abre (o reutiliza) la ventana de vista previa con el archivo elegido.
     private func openPreview(_ item: FileItem) {
+        AppLaunch.markPreviewRequested()
         // el archivo viaja como valor: la ventana nueva es independiente
         openWindow(id: PreviewScene.id, value: item.url)
     }
