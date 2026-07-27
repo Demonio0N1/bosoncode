@@ -56,6 +56,25 @@ enum HostPlatform {
     }
 }
 
+/// Datos de marca y enlaces externos, en un solo sitio.
+enum BosonCodeInfo {
+    /// ⚠️ CAMBIA ESTO por la URL real del repositorio antes de publicar.
+    /// El proyecto aún no tiene remoto de git configurado.
+    static let setupGuideURL = URL(string: "https://github.com/garyguaman/bosoncode")!
+
+    static let copyright = "© 2026 BosonCode. All rights reserved."
+
+    /// Atribución. Reconocer la marca y **negar la afiliación** de forma
+    /// explícita es lo que evita el rechazo por la guía 5.2.1 de la App Store:
+    /// decir solo "powered by Visual Studio Code" puede leerse como respaldo
+    /// de Microsoft, que es justo lo que la revisión penaliza.
+    static let attribution = """
+    BosonCode is an independent client for code-server. \
+    Visual Studio Code is a trademark of Microsoft Corporation. \
+    Not affiliated with or endorsed by Microsoft.
+    """
+}
+
 /// Pantalla de inicio: tarjetas con las computadoras guardadas y detectadas.
 struct LauncherView: View {
     @ObservedObject var store: ServerStore
@@ -96,13 +115,16 @@ struct LauncherView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
+            // Grafito neutro, sin tinte de color. `systemGray6` es el gris de
+            // fondo del propio sistema, así que se adapta solo a claro/oscuro
+            // y encaja con los materiales nativos.
+            Color(uiColor: .systemGray6)
+                .ignoresSafeArea()
+            // velo muy tenue arriba: da profundidad de ventana sin ensuciar
+            // el gris con un color
             LinearGradient(
-                colors: isDark
-                    ? [Color(red: 0.04, green: 0.05, blue: 0.10),
-                       Color(red: 0.08, green: 0.10, blue: 0.20)]
-                    : [Color(red: 0.93, green: 0.94, blue: 0.97),
-                       Color(red: 0.85, green: 0.88, blue: 0.95)],
-                startPoint: .top, endPoint: .bottom
+                colors: [Color.white.opacity(isDark ? 0.045 : 0.55), .clear],
+                startPoint: .top, endPoint: .center
             )
             .ignoresSafeArea()
 
@@ -125,6 +147,8 @@ struct LauncherView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+
+                    footer
                 }
                 .padding(.vertical, 60)
                 .frame(maxWidth: 1100)
@@ -201,6 +225,41 @@ struct LauncherView: View {
                 .font(.system(size: 40, weight: .bold, design: .rounded))
                 .foregroundStyle(.primary)
         }
+    }
+
+    /// Pie de página: guía de instalación, atribución y copyright.
+    private var footer: some View {
+        VStack(spacing: 18) {
+            // `Link` abre Safari sin pasar por UIApplication.open, así que no
+            // toca ninguna lógica de la vista
+            Link(destination: BosonCodeInfo.setupGuideURL) {
+                Label("Host Setup Guide", systemImage: "arrow.up.forward.square")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.cyan)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(.cyan.opacity(0.12), in: Capsule())
+                    .overlay(Capsule().stroke(.cyan.opacity(0.25), lineWidth: 1))
+            }
+            .accessibilityHint("Opens the setup instructions for Tailscale and serve.sh")
+
+            Divider()
+                .frame(maxWidth: 420)
+                .opacity(0.5)
+
+            VStack(spacing: 6) {
+                Text(BosonCodeInfo.attribution)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 480)
+                Text(BosonCodeInfo.copyright)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.top, 8)
+        .padding(.horizontal, 40)
     }
 
     private func savedCard(_ server: Server) -> some View {
