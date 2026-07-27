@@ -11,6 +11,10 @@ final class PTYConnection: NSObject, TerminalViewDelegate {
     private let host: String
     private let password: String
     private let machine: String
+    /// Identifica la sesión de tmux del host. Ventanas distintas usan valores
+    /// distintos: es lo que hace que sean shells independientes en vez de la
+    /// misma sesión espejada.
+    private let session: String
     private var manualClose = false
     private var reconnectScheduled = false
     /// Datos (teclas/resize) producidos antes de que el handshake viaje: se
@@ -28,10 +32,11 @@ final class PTYConnection: NSObject, TerminalViewDelegate {
     var onAuthFailure: (() -> Void)?
     private var sawAuthFailure = false
 
-    init(host: String, password: String, machine: String) {
+    init(host: String, password: String, machine: String, session: String = "") {
         self.host = host
         self.password = password
         self.machine = machine
+        self.session = session
     }
 
     deinit {
@@ -59,6 +64,7 @@ final class PTYConnection: NSObject, TerminalViewDelegate {
                 let hello: [String: Any] = [
                     "password": self.password,
                     "machine": self.machine,
+                    "session": self.session,
                     "cols": cols, "rows": rows,
                 ]
                 if var data = try? JSONSerialization.data(withJSONObject: hello) {
@@ -318,6 +324,9 @@ struct SwiftTermView: UIViewRepresentable {
 /// redimensionable por la esquina inferior derecha.
 struct FloatingTerminal: View {
     let server: Server
+    /// Sesión de tmux de ESTA ventana. Estable mientras la ventana viva, para
+    /// que al reconectar se vuelva a enganchar al mismo shell.
+    var sessionID: String = ""
     /// En Slide Over / ancho compacto la terminal llena toda la ventana
     var fullscreen: Bool = false
     var onClose: () -> Void
@@ -603,7 +612,8 @@ struct FloatingTerminal: View {
         }
         let connection = PTYConnection(host: host,
                                        password: password,
-                                       machine: server.dockerMachineName)
+                                       machine: server.dockerMachineName,
+                                       session: sessionID)
         connection.onAuthFailure = { authFailed = true }
         session = connection
     }

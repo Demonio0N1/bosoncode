@@ -931,6 +931,15 @@ def _term_client(client):
             return
         machine = req.get("machine", "")
         cols, rows = int(req.get("cols", 80)), int(req.get("rows", 24))
+        # Cada ventana pide su propia sesion de tmux. Antes el nombre era fijo
+        # ("ivscode") y -A hacia que TODAS las conexiones se adjuntaran a la
+        # misma: dos terminales del mismo equipo mostraban el mismo shell y lo
+        # que escribias en uno salia en el otro.
+        # Sin este campo (app antigua) se conserva el nombre de siempre.
+        session = str(req.get("session", "") or "")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{0,32}", session):
+            session = ""
+        tmux_name = "ivscode-" + session if session else "ivscode"
         if machine:
             if not re.fullmatch(r"[a-zA-Z0-9_-]+", machine):
                 return
@@ -938,7 +947,7 @@ def _term_client(client):
                     "if command -v tmux >/dev/null; then "
                     "printf '%s\\n' 'set -g mouse on' 'set -g history-limit 50000' "
                     "> /tmp/ivscode.tmux.conf; "
-                    "exec tmux -f /tmp/ivscode.tmux.conf new-session -A -s ivscode; "
+                    "exec tmux -f /tmp/ivscode.tmux.conf new-session -A -s " + shlex.quote(tmux_name) + "; "
                     "else exec bash -l; fi"]
             # el exec del PTY no pasa por sh(), asi que aplica aqui el mismo
             # rodeo por grupo docker (systemd --user no lo hereda)
@@ -948,7 +957,7 @@ def _term_client(client):
             # con tmux, la sesion sobrevive a desconexiones (reattach automatico)
             if shutil.which("tmux"):
                 _tmux_conf()
-                argv = ["tmux", "-f", TMUX_CONF, "new-session", "-A", "-s", "ivscode"]
+                argv = ["tmux", "-f", TMUX_CONF, "new-session", "-A", "-s", tmux_name]
             else:
                 argv = [os.environ.get("SHELL", "/bin/bash"), "-l"]
         pid, master = pty.fork()
