@@ -686,6 +686,31 @@ def _create_locked(name, osname):
         sh("docker", "rm", "-f", "ivsc_" + name)   # nunca dejar restos a medias
         raise
 
+def repair(name):
+    """Recrea el contenedor con la contrasena ACTUAL del host, sin perder datos.
+
+    La contrasena de code-server se inyecta como variable de entorno al crear
+    el contenedor, y las variables de entorno no se pueden cambiar en caliente:
+    hay que rehacerlo. El disco vive en el volumen ivsc_<nombre>_home, que NO
+    se toca, asi que archivos y configuracion sobreviven intactos.
+
+    Hace falta cuando la contrasena del host se regenera (por ejemplo al borrar
+    ~/.ivscode) y los contenedores creados antes se quedan con la anterior.
+    """
+    container = "ivsc_" + name
+    rc, osname, _ = sh("docker", "inspect", "-f",
+                       '{{index .Config.Labels "ivscode.os"}}', container)
+    if rc != 0:
+        raise RuntimeError("esa maquina no existe")
+    osname = (osname or "").strip() or "ubuntu"
+    if osname not in IMAGES:
+        osname = "ubuntu"
+    unmount(name)
+    sh("docker", "rm", "-f", container)
+    with _create_lock:
+        _create_locked(name, osname)      # reutiliza el volumen existente
+
+
 def provision(name):
     """Deja la maquina lista: extensiones del host + settings sin Restricted Mode."""
     c = "ivsc_" + name
@@ -836,6 +861,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/machines":
                 data = json.loads(self._body() or b"{}")
                 create(data.get("name", ""), data.get("os", ""))
+                self._send(200, {"ok": True})
+                return
+            m = re.fullmatch(r"/machines/([a-zA-Z0-9_-]+)/repair", self.path)
+            if m:
+                repair(m.group(1))
                 self._send(200, {"ok": True})
                 return
             m = re.fullmatch(r"/machines/([a-zA-Z0-9_-]+)/(start|stop)", self.path)

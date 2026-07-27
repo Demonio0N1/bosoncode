@@ -54,6 +54,12 @@ struct ManagerClient {
     }
 
     func start(_ name: String) async throws { _ = try await request("POST", "machines/\(name)/start") }
+
+    /// Rehace el contenedor con la contraseña actual del host, conservando su
+    /// disco. Necesario cuando el host regeneró la suya después de crearlo.
+    func repair(_ name: String) async throws {
+        _ = try await request("POST", "machines/\(name)/repair", timeout: 300)
+    }
     func stop(_ name: String) async throws { _ = try await request("POST", "machines/\(name)/stop") }
 
     /// Elimina el contenedor; con removeVolume también borra su disco (/root).
@@ -183,7 +189,7 @@ struct FilePickerView: View {
 
     private var client: ManagerClient? {
         guard let url = server.managerURL,
-              let pw = Keychain.password(for: server.id) else { return nil }
+              let pw = ServerStore.shared.hostPassword(for: server) else { return nil }
         return ManagerClient(baseURL: url, password: pw)
     }
 
@@ -330,6 +336,27 @@ extension Server {
 }
 
 extension Server {
+    /// ¿Es esta entrada un contenedor montado en una ruta del host?
+    var isDockerMachine: Bool { !dockerMachineName.isEmpty }
+
+    /// URL del host que sirve esta máquina (la misma sin el `/m-<nombre>/`).
+    var hostRootURLString: String? {
+        guard var comps = URLComponents(string: urlString) else { return nil }
+        comps.path = "/"
+        comps.query = nil
+        comps.fragment = nil
+        return comps.url?.absoluteString
+    }
+
+    /// ¿Apuntan las dos entradas al mismo equipo?
+    func sharesHost(with other: Server) -> Bool {
+        guard let a = URLComponents(string: urlString),
+              let b = URLComponents(string: other.urlString) else { return false }
+        return a.host == b.host && a.port == b.port
+    }
+}
+
+extension Server {
     /// Por convención, el gestor de máquinas vive en el puerto 9500 del mismo host.
     var managerURL: URL? {
         guard var comps = URLComponents(string: urlString), comps.scheme == "https" else { return nil }
@@ -352,6 +379,7 @@ struct DockerMachinesView: View {
     @State private var errorMsg: String?
     @State private var busy: Set<String> = []
     @State private var deleteTarget: DockerMachine?
+    @State private var repairTarget: DockerMachine?
     @State private var showCreate = false
     @State private var newName = ""
     @State private var newOS = "ubuntu"
@@ -359,7 +387,7 @@ struct DockerMachinesView: View {
 
     private var client: ManagerClient? {
         guard let url = server.managerURL,
-              let pw = Keychain.password(for: server.id) else { return nil }
+              let pw = ServerStore.shared.hostPassword(for: server) else { return nil }
         return ManagerClient(baseURL: url, password: pw)
     }
 
@@ -405,6 +433,20 @@ struct DockerMachinesView: View {
                 Button("Entendido", role: .cancel) { errorMsg = nil }
             } message: {
                 Text(errorMsg ?? "")
+            }
+            .confirmationDialog(
+                "¿Reparar la contraseña?",
+                isPresented: Binding(get: { repairTarget != nil },
+                                     set: { if !$0 { repairTarget = nil } }),
+                titleVisibility: .visible,
+                presenting: repairTarget
+            ) { m in
+                Button("Rehacer con la contraseña actual") {
+                    Task { await action(m.name) { try await client?.repair(m.name) } }
+                }
+                Button("Cancelar", role: .cancel) { repairTarget = nil }
+            } message: { m in
+                Text("La contraseña se graba dentro del contenedor al crearlo y no puede cambiarse en caliente, así que \(m.name) se rehará con la del equipo. Los archivos no se tocan: viven en un volumen aparte.\n\nÚsalo si el editor pide una contraseña distinta a la del equipo o si el terminal no conecta.")
             }
             .confirmationDialog(
                 "¿Eliminar la máquina?",
@@ -491,6 +533,14 @@ struct DockerMachinesView: View {
             }
         }
         .contextMenu {
+            // Para máquinas creadas antes de que el equipo cambiara su
+            // contraseña: rehace el contenedor con la actual sin perder el
+            // disco, y así el terminal (⌃⌥T) vuelve a autenticarse.
+            Button {
+                repairTarget = m
+            } label: {
+                Label("Reparar contraseña…", systemImage: "key.horizontal")
+            }
             Button(role: .destructive) {
                 deleteTarget = m
             } label: {

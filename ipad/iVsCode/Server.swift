@@ -29,6 +29,49 @@ final class ServerStore: ObservableObject {
         didSet { UserDefaults.standard.set(activeID?.uuidString, forKey: "activeServerID") }
     }
 
+    /// Contraseña que valida el **host**: la que esperan el gestor (puerto
+    /// 9500) y el canal PTY del terminal.
+    ///
+    /// No siempre es la de la entrada activa. Un contenedor guarda la suya
+    /// propia —la que se le grabó al crearlo— y esa puede ser distinta de la
+    /// del host si el host la regeneró después. El terminal habla **siempre**
+    /// con el host, así que aquí se busca primero la entrada del host que
+    /// sirve esa máquina y solo se cae a la propia si no existe.
+    func hostPassword(for server: Server) -> String? {
+        if !server.isDockerMachine { return Keychain.password(for: server.id) }
+        if let host = servers.first(where: { !$0.isDockerMachine && $0.sharesHost(with: server) }),
+           let password = Keychain.password(for: host.id), !password.isEmpty {
+            return password
+        }
+        return Keychain.password(for: server.id)
+    }
+
+    /// ¿Puede el terminal autenticarse sin preguntar nada? Falso cuando la
+    /// entrada es un contenedor y no hay ninguna entrada del host guardada.
+    func knowsHostPassword(for server: Server) -> Bool {
+        guard server.isDockerMachine else { return Keychain.password(for: server.id) != nil }
+        return servers.contains { !$0.isDockerMachine && $0.sharesHost(with: server)
+                                  && Keychain.password(for: $0.id) != nil }
+    }
+
+    /// Guarda la contraseña del host que sirve esta máquina, creando la
+    /// entrada del host si aún no estaba en la lista.
+    func saveHostPassword(_ password: String, for server: Server) {
+        if !server.isDockerMachine {
+            Keychain.setPassword(password, for: server.id)
+            return
+        }
+        if let host = servers.first(where: { !$0.isDockerMachine && $0.sharesHost(with: server) }) {
+            Keychain.setPassword(password, for: host.id)
+            return
+        }
+        guard let root = server.hostRootURLString else { return }
+        let host = Server(name: URLComponents(string: root)?.host ?? "Host",
+                          urlString: root, os: server.os)
+        servers.append(host)
+        Keychain.setPassword(password, for: host.id)
+    }
+
     var active: Server? {
         if let match = servers.first(where: { $0.id == activeID }) { return match }
         // activeID apuntaba a un servidor borrado: se corrige para que la UI

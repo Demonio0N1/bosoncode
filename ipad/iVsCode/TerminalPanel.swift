@@ -21,6 +21,13 @@ final class PTYConnection: NSObject, TerminalViewDelegate {
 
     var terminalView: TerminalView? { view }
 
+    /// Se llama cuando el host rechaza la contraseña del saludo.
+    ///
+    /// Sin esto el error llegaba como texto suelto dentro del terminal y no se
+    /// distinguía de la salida de un comando: parecía que "no conectaba".
+    var onAuthFailure: (() -> Void)?
+    private var sawAuthFailure = false
+
     init(host: String, password: String, machine: String) {
         self.host = host
         self.password = password
@@ -81,6 +88,18 @@ final class PTYConnection: NSObject, TerminalViewDelegate {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isDone, error in
             guard let self, self.conn === connection else { return }
             if let data, !data.isEmpty {
+                // el host responde "auth incorrecta" y cierra: se detecta aquí
+                // para poder avisar de verdad en lugar de dejarlo pasar como
+                // si fuera salida del shell
+                if !self.sawAuthFailure,
+                   let text = String(data: data.prefix(64), encoding: .utf8),
+                   text.contains("auth incorrecta") {
+                    self.sawAuthFailure = true
+                    self.manualClose = true          // no reintentar con la misma clave
+                    DispatchQueue.main.async { self.onAuthFailure?() }
+                    connection.cancel()
+                    return
+                }
                 self.view?.feed(byteArray: ArraySlice([UInt8](data)))
             }
             if isDone || error != nil {
@@ -304,6 +323,9 @@ struct FloatingTerminal: View {
     var onClose: () -> Void
 
     @State private var session: PTYConnection?
+    /// El host rechazó la contraseña (o no hay ninguna que ofrecerle)
+    @State private var authFailed = false
+    @State private var hostPasswordField = ""
     @Environment(\.openWindow) private var openWindow
     /// Tema del iPad. Leerlo aquí NO recrea la terminal: solo hace que
     /// `updateUIView` reciba el valor nuevo sobre la vista que ya existe.
@@ -396,7 +418,9 @@ struct FloatingTerminal: View {
     private var panelContent: some View {
         VStack(spacing: 0) {
             header
-            if let session {
+            if authFailed {
+                authBanner
+            } else if let session {
                 SwiftTermView(session: session,
                               fontSize: CGFloat(fontSize),
                               colorScheme: colorScheme) { newSize in
@@ -555,10 +579,58 @@ struct FloatingTerminal: View {
 
     private func openSession() {
         guard let comps = URLComponents(string: server.urlString),
-              let host = comps.host,
-              let password = Keychain.password(for: server.id) else { return }
-        session = PTYConnection(host: host,
-                                password: password,
-                                machine: server.dockerMachineName)
+              let host = comps.host else { return }
+        // OJO: la del HOST, no la de la entrada activa. Un contenedor guarda la
+        // suya propia y el canal PTY siempre lo atiende el host.
+        guard let password = ServerStore.shared.hostPassword(for: server) else {
+            authFailed = true
+            return
+        }
+        let connection = PTYConnection(host: host,
+                                       password: password,
+                                       machine: server.dockerMachineName)
+        connection.onAuthFailure = { authFailed = true }
+        session = connection
+    }
+
+    /// Vuelve a intentarlo con la contraseña que acaba de escribir el usuario.
+    private func retryWithHostPassword() {
+        let clean = hostPasswordField.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        ServerStore.shared.saveHostPassword(clean, for: server)
+        hostPasswordField = ""
+        authFailed = false
+        session?.close()
+        session = nil
+        openSession()
+    }
+
+    /// Aviso de contraseña rechazada, con la explicación y la salida.
+    private var authBanner: some View {
+        VStack(spacing: 12) {
+            Label("El host rechazó la contraseña", systemImage: "lock.trianglebadge.exclamationmark")
+                .font(.headline)
+            Text(server.isDockerMachine
+                 ? "El terminal no habla con el contenedor, sino con el equipo que lo aloja, y ese usa su propia contraseña. Si el contenedor se creó antes de que la contraseña del equipo cambiara, las dos ya no coinciden."
+                 : "La contraseña guardada ya no coincide con la del equipo. Se regenera al borrar ~/.ivscode.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Text("En el equipo:  cat ~/.ivscode/password")
+                .font(.system(.caption, design: .monospaced))
+                .padding(8)
+                .background(.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+
+            SecureField("Contraseña del equipo", text: $hostPasswordField)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 280)
+                .onSubmit { retryWithHostPassword() }
+            Button("Conectar") { retryWithHostPassword() }
+                .buttonStyle(.borderedProminent)
+                .disabled(hostPasswordField.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.regularMaterial)
     }
 }

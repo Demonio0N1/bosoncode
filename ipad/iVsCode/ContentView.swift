@@ -322,7 +322,7 @@ struct ContentView: View {
 
     private func manager(for server: Server) -> ManagerClient? {
         guard let mgrURL = server.managerURL,
-              let pw = Keychain.password(for: server.id) else { return nil }
+              let pw = ServerStore.shared.hostPassword(for: server) else { return nil }
         return ManagerClient(baseURL: mgrURL, password: pw)
     }
 
