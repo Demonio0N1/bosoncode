@@ -8,10 +8,10 @@ struct iFinderApp: App {
             FinderWindow()
         }
 
-        // Ventana de vista previa: escena independiente que recibe una URL.
-        // La barra espaciadora abre una de estas, como el Quick Look de macOS.
-        WindowGroup(id: PreviewScene.id, for: URL.self) { $url in
-            PreviewWindowView(url: url)
+        // Ventana de vista previa. Sin valor asociado: el archivo viaja por
+        // PreviewStateManager, que ambas escenas comparten (mismo proceso).
+        WindowGroup("Vista previa", id: PreviewScene.id) {
+            PreviewWindowView()
         }
         .defaultSize(width: PreviewScene.defaultSize.width,
                      height: PreviewScene.defaultSize.height)

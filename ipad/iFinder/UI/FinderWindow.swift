@@ -7,7 +7,7 @@ struct FinderWindow: View {
     @StateObject private var model = BrowserViewModel()
     @StateObject private var local = LocalStore()
     @StateObject private var servers = ServerStore.shared
-    @StateObject private var preview = PreviewSession()
+    @ObservedObject private var previewState = PreviewStateManager.shared
 
     @AppStorage("finderAppearance") private var appearanceRaw = "auto"
     @AppStorage("finderColumnWidth") private var columnWidth: Double = 260
@@ -19,6 +19,7 @@ struct FinderWindow: View {
     @State private var pickerStart: URL?
     @State private var selectedSidebar: String?
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
     /// En ventanas estrechas la interfaz se simplifica (Split View pequeño)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -79,27 +80,12 @@ struct FinderWindow: View {
         } message: {
             Text(model.error ?? "")
         }
-        // Vista previa en hoja modal con el ciclo completo de permisos:
-        // begin() abre el ámbito, la hoja lo usa, onDismiss lo cierra.
-        .sheet(item: Binding(get: { preview.previewURL.map(QLItem.init) },
-                             set: { if $0 == nil { preview.end() } }),
-               onDismiss: { preview.end() }) { ql in
-            QuickLookPreview(url: ql.url) { preview.end() }
-                .ignoresSafeArea()
-        }
-        .alert("No se puede previsualizar",
-               isPresented: Binding(get: { preview.error != nil },
-                                    set: { if !$0 { preview.error = nil } })) {
-            Button("Entendido", role: .cancel) { preview.error = nil }
-        } message: {
-            Text(preview.error ?? "")
-        }
         .task { await openDefault() }
         // las vistas (doble toque, menú contextual) piden la previa por aquí
         .onChange(of: model.previewRequest) { _, item in
             guard let item else { return }
             model.previewRequest = nil
-            Task { await preview.begin(item) }   // hoja modal, ámbito controlado
+            openPreview(item)
         }
     }
 
@@ -196,27 +182,25 @@ struct FinderWindow: View {
         // Barra espaciadora = Quick Look, como en macOS. Se ignora cuando hay
         // un campo de texto activo (renombrar) para no tragarse los espacios.
         .onKeyPress(.space) {
-            guard model.renaming == nil,
-                  let item = model.selectedItems.first,
-                  !item.isDirectory else { return .ignored }
+            // no robar el espacio a un campo de texto (renombrar)
+            guard model.renaming == nil else { return .ignored }
+            // si la previa está abierta, la barra espaciadora la CIERRA,
+            // aunque no haya nada seleccionado (igual que en macOS)
+            if previewState.isOpen {
+                dismissWindow(id: PreviewScene.id)
+                previewState.closed()
+                return .handled
+            }
+            guard let item = model.selectedItems.first, !item.isDirectory else { return .ignored }
             openPreview(item)
             return .handled
         }
     }
 
-    /// Abre la vista previa en una ventana propia de iPadOS.
+    /// Abre (o reutiliza) la ventana de vista previa con el archivo elegido.
     private func openPreview(_ item: FileItem) {
-        // si vive en la nube se descarga antes: la otra escena solo recibe la URL
-        if item.isRemoteOnly || item.isDownloading {
-            Task {
-                model.downloadingName = item.name
-                defer { model.downloadingName = nil }
-                try? await CloudFileHandler.shared.materialize(item.url)
-                openWindow(id: PreviewScene.id, value: item.url)
-            }
-        } else {
-            openWindow(id: PreviewScene.id, value: item.url)
-        }
+        previewState.request(item)
+        openWindow(id: PreviewScene.id)
     }
 
     private var toolbar: some View {
