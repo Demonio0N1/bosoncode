@@ -83,6 +83,7 @@ struct SafeQuickLookView: View {
             if let ready {
                 QuickLookPreview(url: ready, onClose: onClose)
                     // el visor gestiona sus propios márgenes: debe ocupar todo
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea()
                     .background(Color(uiColor: .systemBackground))
             } else if preparing {
@@ -172,6 +173,17 @@ struct QuickLookPreview: UIViewControllerRepresentable {
         }
     }
 
+    /// La causa de raíz del desplazamiento: sin esto, SwiftUI pregunta al
+    /// representable qué tamaño quiere y UIKit responde con el suyo *ideal*,
+    /// no con el de la ventana. Aceptar la propuesta entera hace que la vista
+    /// ocupe el 100 % del contenedor.
+    func sizeThatFits(_ proposal: ProposedViewSize,
+                      uiViewController: PreviewHostController,
+                      context: Context) -> CGSize? {
+        guard let width = proposal.width, let height = proposal.height else { return nil }
+        return CGSize(width: width, height: height)
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(url: url, onFinish: onFinish) }
 
     final class Coordinator: NSObject, QLPreviewControllerDataSource, QLPreviewControllerDelegate {
@@ -256,15 +268,23 @@ final class PreviewHostController: UIViewController {
         view.backgroundColor = .systemBackground
 
         addChild(preview)
-        preview.view.translatesAutoresizingMaskIntoConstraints = false
+        // Máscara de redimensionado en lugar de constraints: el visor de Quick
+        // Look reconstruye su jerarquía interna al cambiar de documento y, con
+        // constraints, esa jerarquía nueva se quedaba con el ancho anterior —
+        // de ahí el contenido pegado a la izquierda y el bloque negro.
+        preview.view.translatesAutoresizingMaskIntoConstraints = true
+        preview.view.frame = view.bounds
+        preview.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(preview.view)
-        NSLayoutConstraint.activate([
-            preview.view.topAnchor.constraint(equalTo: view.topAnchor),
-            preview.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            preview.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            preview.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-        ])
         preview.didMove(toParent: self)
+    }
+
+    /// Segunda garantía: en cada pasada de layout el visor vuelve a ocupar
+    /// exactamente el contenedor, venga el cambio de donde venga (rotación,
+    /// Stage Manager, Split View).
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        if preview.view.frame != view.bounds { preview.view.frame = view.bounds }
     }
 
     override var canBecomeFirstResponder: Bool { true }

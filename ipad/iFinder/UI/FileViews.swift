@@ -15,7 +15,7 @@ struct FileContextMenu: ViewModifier {
                 Label("Abrir", systemImage: "arrow.up.forward.app")
             }
             Button { Task { await model.chooseAppFor(item) } } label: {
-                Label("Abrir con… (3 dedos)", systemImage: "square.grid.2x2")
+                Label("Más opciones… (3 dedos ×2)", systemImage: "square.grid.2x2")
             }
             Button { model.quickLook(item) } label: {
                 Label("Vista rápida (espacio)", systemImage: "eye")
@@ -55,8 +55,9 @@ struct FileContextMenu: ViewModifier {
 extension View {
     func fileContextMenu(_ model: BrowserViewModel, item: FileItem) -> some View {
         modifier(FileContextMenu(model: model, item: item))
-            // tres dedos = "Abrir con…", sin ocupar el doble clic
-            .onThreeFingerTap {
+            // doble toque con tres dedos = menú de opciones del sistema,
+            // sin ocupar el doble clic (que abre el archivo)
+            .onThreeFingerDoubleTap {
                 guard !item.isDirectory else { return }
                 Task { await model.chooseAppFor(item) }
             }
@@ -88,8 +89,28 @@ struct IconsView: View {
     @State private var hovered: String?
 
     private let columns = [GridItem(.adaptive(minimum: 96, maximum: 140), spacing: 18)]
+    private let itemMin: CGFloat = 96
+    private let spacing: CGFloat = 18
 
     var body: some View {
+        GeometryReader { geo in
+            ScrollViewReader { proxy in
+                grid
+                    // las flechas arriba/abajo necesitan saber cuántas
+                    // columnas hay para saltar una fila entera
+                    .onChange(of: geo.size.width, initial: true) { _, width in
+                        model.gridColumnCount = max(1, Int((width - 32 + spacing) / (itemMin + spacing)))
+                    }
+                    .onChange(of: model.levels.last?.selection) { _, _ in
+                        if let id = model.selectedItems.first?.id {
+                            withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
+                        }
+                    }
+            }
+        }
+    }
+
+    private var grid: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 18) {
                 ForEach(items) { item in
@@ -112,6 +133,7 @@ struct IconsView: View {
                     .contentShape(Rectangle())
                     .hoverEffect(.highlight)                    // puntero del Magic Keyboard
                     .onHover { hovered = $0 ? item.id : nil }
+                    .id(item.id)
                     .onTapGesture(count: 2) { open(item) }
                     .onTapGesture { Task { await model.select(item, at: level) } }
                     .fileContextMenu(model, item: item)
@@ -122,7 +144,7 @@ struct IconsView: View {
         }
     }
 
-    private var items: [FileItem] { model.levels[safe: level]?.items ?? [] }
+    private var items: [FileItem] { model.visibleItems(at: level) }
     private func selected(_ item: FileItem) -> Bool {
         model.levels[safe: level]?.selection.contains(item.id) ?? false
     }
@@ -144,10 +166,18 @@ struct DetailListView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(items) { item in
-                        row(item)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(items) { item in
+                            row(item).id(item.id)
+                        }
+                    }
+                }
+                // que la fila elegida con las flechas siempre quede a la vista
+                .onChange(of: model.levels.last?.selection) { _, _ in
+                    if let id = model.selectedItems.first?.id {
+                        withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
                     }
                 }
             }
@@ -219,7 +249,7 @@ struct DetailListView: View {
         }
     }
 
-    private var items: [FileItem] { model.levels[safe: level]?.items ?? [] }
+    private var items: [FileItem] { model.visibleItems(at: level) }
     private func selected(_ item: FileItem) -> Bool {
         model.levels[safe: level]?.selection.contains(item.id) ?? false
     }
@@ -259,7 +289,7 @@ struct ColumnsBrowserView: View {
     private func column(_ level: DirectoryLevel, index: Int) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(grouped(level.items), id: \.0) { group, items in
+                ForEach(grouped(model.visibleItems(at: index)), id: \.0) { group, items in
                     Text(group)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)

@@ -49,6 +49,11 @@ final class BrowserViewModel: ObservableObject {
     @Published var quickLookURL: URL?
     /// Nombre del archivo que se está bajando de la nube (para el aviso)
     @Published var downloadingName: String?
+    /// Texto del buscador de la barra de navegación
+    @Published var searchText = ""
+    /// Columnas que la rejilla de iconos tiene ahora mismo en pantalla; lo
+    /// publica la propia vista y lo usan las flechas arriba/abajo.
+    @Published var gridColumnCount = 1
 
     enum SortKey: String, CaseIterable, Identifiable {
         case name, size, date, kind
@@ -108,6 +113,84 @@ final class BrowserViewModel: ObservableObject {
         if levels.count > level + 1 { levels.removeSubrange((level + 1)...) }
         if item.isDirectory { await push(item.url) }
         inspecting = item
+    }
+
+    // MARK: - Búsqueda
+
+    /// Caché del último filtrado. Evita recorrer la carpeta entera en cada
+    /// recomposición de SwiftUI, que ocurre muchas veces por pulsación.
+    private var searchCache: (query: String, level: UUID, count: Int, result: [FileItem])?
+
+    /// Archivos que la vista debe pintar en ese nivel: todos, o los que
+    /// coincidan con el buscador.
+    func visibleItems(at index: Int) -> [FileItem] {
+        guard let level = levels[safe: index] else { return [] }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return level.items }
+
+        // la clave incluye el número de archivos: si la carpeta cambia en
+        // disco, el filtro se recalcula solo
+        if let cache = searchCache, cache.query == query,
+           cache.level == level.id, cache.count == level.items.count {
+            return cache.result
+        }
+        // sin distinguir mayúsculas ni tildes, como la búsqueda del Finder
+        let result = level.items.filter {
+            $0.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+        searchCache = (query, level.id, level.items.count, result)
+        return result
+    }
+
+    // MARK: - Navegación con las flechas del teclado
+
+    enum MoveDirection { case up, down, left, right }
+
+    /// Mueve la selección con las flechas, respetando el filtro del buscador.
+    ///
+    /// - Parameter columns: columnas visibles (1 en lista y en la vista de
+    ///   columnas; las de la rejilla en la vista de iconos), para que arriba y
+    ///   abajo salten una fila completa en lugar de un archivo.
+    func moveSelection(_ direction: MoveDirection, columns: Int = 1) async {
+        guard let index = levels.indices.last else { return }
+        let items = visibleItems(at: index)
+        guard !items.isEmpty else { return }
+
+        let current = items.firstIndex { levels[index].selection.contains($0.id) }
+
+        // en vistas de una sola columna, izquierda y derecha navegan carpetas
+        if columns <= 1 {
+            switch direction {
+            case .left:
+                await goUp()
+                return
+            case .right:
+                if let i = current, items[i].isDirectory { await select(items[i], at: index) }
+                return
+            default: break
+            }
+        }
+
+        let step: Int
+        switch direction {
+        case .up: step = -columns
+        case .down: step = columns
+        case .left: step = -1
+        case .right: step = 1
+        }
+        // sin nada seleccionado, la primera flecha entra por el principio
+        let target = min(max((current ?? -1) + step, 0), items.count - 1)
+        await select(items[target], at: index)
+    }
+
+    /// Enter: abre lo seleccionado (carpeta → entrar, archivo → app externa).
+    func openSelection() async {
+        guard let item = selectedItems.first else { return }
+        if item.isDirectory {
+            await open(item.url)
+        } else {
+            await openInDefaultApp(item)
+        }
     }
 
     func goUp() async {
@@ -298,18 +381,14 @@ final class BrowserViewModel: ObservableObject {
         }
     }
 
-    /// Doble clic: abre el archivo directamente, sin menús intermedios.
+    /// Doble clic: entrega el archivo a la app que lo abre.
     func openInDefaultApp(_ item: FileItem) async {
-        await handOff(item) { original, copy in
-            await SystemOpen.shared.launchDirectly(original: original, copy: copy)
-        }
+        await handOff(item) { _, copy in SystemOpen.shared.openInApp(copy) }
     }
 
-    /// Tres dedos: muestra "Abrir con…" para elegir la app a mano.
+    /// Doble toque con tres dedos: menú completo de opciones del sistema.
     func chooseAppFor(_ item: FileItem) async {
-        await handOff(item) { _, copy in
-            SystemOpen.shared.presentOpenMenu(copy)
-        }
+        await handOff(item) { _, copy in SystemOpen.shared.presentOptions(copy) }
     }
 
     /// Prepara el archivo y se lo cede a otra app.
@@ -318,7 +397,7 @@ final class BrowserViewModel: ObservableObject {
     /// siempre se le entrega una copia en el contenedor propio, además de la
     /// ruta original (que sí sirve para la cesión vía app Archivos).
     private func handOff(_ item: FileItem,
-                         _ deliver: (URL, URL) async -> Void) async {
+                         _ deliver: (URL, URL) -> Void) async {
         guard !item.isDirectory else { return }
         openingExternally = item.name
         defer { openingExternally = nil }
@@ -330,7 +409,7 @@ final class BrowserViewModel: ObservableObject {
             let copy = FileManager.default.temporaryDirectory
                 .appendingPathComponent(item.name)
             try data.write(to: copy, options: .atomic)
-            await deliver(item.url, copy)
+            deliver(item.url, copy)
         } catch {
             self.error = "No se pudo abrir \(item.name): \(error.localizedDescription)"
         }

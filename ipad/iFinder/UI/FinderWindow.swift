@@ -18,6 +18,8 @@ struct FinderWindow: View {
     @State private var showFolderPicker = false
     @State private var pickerStart: URL?
     @State private var selectedSidebar: String?
+    /// Foco del teclado en el área de archivos (lo necesitan las flechas)
+    @FocusState private var contentFocused: Bool
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     /// En ventanas estrechas la interfaz se simplifica (Split View pequeño)
@@ -196,6 +198,19 @@ struct FinderWindow: View {
         }
         .navigationTitle(model.currentURL?.lastPathComponent ?? "iFinder")
         .navigationBarTitleDisplayMode(.inline)
+        // Buscador nativo en la barra de navegación, como el del Finder.
+        // El filtrado vive en el ViewModel (con caché), no en la vista.
+        .searchable(text: $model.searchText,
+                    placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: "Buscar en \(model.currentURL?.lastPathComponent ?? "esta carpeta")")
+        // El área de archivos debe poder recibir foco para que le lleguen las
+        // teclas; sin `.focusable()` las flechas no salen de la barra lateral.
+        .focusable()
+        .focused($contentFocused)
+        .onAppear { contentFocused = true }
+        // al tocar cualquier sitio del contenido, el teclado vuelve aquí
+        .onTapGesture { contentFocused = true }
+        .modifier(ArrowKeyNavigation(model: model, enabled: model.renaming == nil))
         // Barra espaciadora = Quick Look, como en macOS. Se ignora cuando hay
         // un campo de texto activo (renombrar) para no tragarse los espacios.
         .onKeyPress(.space) {

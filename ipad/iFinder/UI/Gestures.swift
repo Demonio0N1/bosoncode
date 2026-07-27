@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Toque con tres dedos.
+/// Doble toque con tres dedos.
 ///
 /// SwiftUI no permite filtrar por número de dedos, así que se superpone una
 /// vista de UIKit con un `UITapGestureRecognizer` de tres toques. El truco
@@ -16,7 +16,7 @@ struct ThreeFingerTapView: UIViewRepresentable {
         let recognizer = UITapGestureRecognizer(target: context.coordinator,
                                                 action: #selector(Coordinator.fired))
         recognizer.numberOfTouchesRequired = 3
-        recognizer.numberOfTapsRequired = 1
+        recognizer.numberOfTapsRequired = 2
         recognizer.cancelsTouchesInView = false
         view.addGestureRecognizer(recognizer)
         return view
@@ -43,8 +43,8 @@ struct ThreeFingerTapView: UIViewRepresentable {
 }
 
 extension View {
-    /// Ejecuta la acción al tocar con tres dedos (menú "Abrir con…").
-    func onThreeFingerTap(perform action: @escaping () -> Void) -> some View {
+    /// Ejecuta la acción al hacer **doble** toque con tres dedos.
+    func onThreeFingerDoubleTap(perform action: @escaping () -> Void) -> some View {
         overlay(ThreeFingerTapView(action: action))
     }
 }
