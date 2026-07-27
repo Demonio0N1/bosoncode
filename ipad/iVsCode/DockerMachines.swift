@@ -67,6 +67,11 @@ struct ManagerClient {
     }
     func stop(_ name: String) async throws { _ = try await request("POST", "machines/\(name)/stop") }
 
+    /// Reinicia el contenedor conservando su disco y su puerto.
+    func restart(_ name: String) async throws {
+        _ = try await request("POST", "machines/\(name)/restart", timeout: 120)
+    }
+
     /// Elimina el contenedor; con removeVolume también borra su disco (/root).
     func delete(_ name: String, removeVolume: Bool = false) async throws {
         var comps = URLComponents(url: baseURL.appendingPathComponent("machines/\(name)"),
@@ -516,6 +521,56 @@ struct DockerMachinesView: View {
         .refreshable { await refresh() }
     }
 
+    /// Botón "…" con todas las acciones del contenedor.
+    private func actionsMenu(_ m: DockerMachine) -> some View {
+        Menu {
+            actionItems(m)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 34)
+    }
+
+    /// Un solo sitio para las acciones: lo comparten el menú "…", la pulsación
+    /// larga y el deslizamiento, así no se desincronizan entre sí.
+    @ViewBuilder
+    private func actionItems(_ m: DockerMachine) -> some View {
+        if m.running {
+            Button { run(m) { try await client?.stop(m.name) } } label: {
+                Label("Detener", systemImage: "stop.fill")
+            }
+            Button { run(m) { try await client?.restart(m.name) } } label: {
+                Label("Reiniciar", systemImage: "arrow.clockwise")
+            }
+        } else {
+            Button { run(m) { try await client?.start(m.name) } } label: {
+                Label("Iniciar", systemImage: "play.fill")
+            }
+        }
+        Divider()
+        Button { showCreate = true } label: {
+            Label("Nueva máquina…", systemImage: "plus.square.on.square")
+        }
+        // Para máquinas creadas antes de que el equipo cambiara su contraseña:
+        // rehace el contenedor con la actual sin perder el disco.
+        Button { repairTarget = m } label: {
+            Label("Reparar contraseña…", systemImage: "key.horizontal")
+        }
+        Divider()
+        Button(role: .destructive) { deleteTarget = m } label: {
+            Label("Eliminar…", systemImage: "trash")
+        }
+    }
+
+    /// Atajo para lanzar una acción sin repetir el Task en cada botón.
+    private func run(_ m: DockerMachine, _ op: @escaping () async throws -> Void) {
+        Task { await action(m.name, op) }
+    }
+
     private func machineRow(_ m: DockerMachine) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "shippingbox.fill")
@@ -535,22 +590,19 @@ struct DockerMachinesView: View {
             Spacer()
             if busy.contains(m.name) {
                 ProgressView()
-            } else if m.running {
-                Button("Abrir") { connect(m) }
-                    .buttonStyle(.borderedProminent)
-                Button {
-                    Task { await action(m.name) { try await client?.stop(m.name) } }
-                } label: {
-                    Image(systemName: "stop.fill")
-                }
-                .buttonStyle(.bordered)
-                .tint(.orange)
             } else {
-                Button("Iniciar") {
-                    Task { await action(m.name) { try await client?.start(m.name) } }
+                // La acción principal a la vista —abrir si corre, iniciar si
+                // no— y el resto recogidas en el menú, para que la fila no se
+                // llene de botones.
+                if m.running {
+                    Button("Abrir") { connect(m) }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Iniciar") { run(m) { try await client?.start(m.name) } }
+                        .buttonStyle(.bordered)
+                        .tint(.green)
                 }
-                .buttonStyle(.bordered)
-                .tint(.green)
+                actionsMenu(m)
             }
         }
         .swipeActions(edge: .trailing) {
@@ -560,21 +612,8 @@ struct DockerMachinesView: View {
                 Label("Eliminar", systemImage: "trash")
             }
         }
-        .contextMenu {
-            // Para máquinas creadas antes de que el equipo cambiara su
-            // contraseña: rehace el contenedor con la actual sin perder el
-            // disco, y así el terminal (⌃⌥T) vuelve a autenticarse.
-            Button {
-                repairTarget = m
-            } label: {
-                Label("Reparar contraseña…", systemImage: "key.horizontal")
-            }
-            Button(role: .destructive) {
-                deleteTarget = m
-            } label: {
-                Label("Eliminar…", systemImage: "trash")
-            }
-        }
+        // Las mismas acciones por pulsación larga o clic derecho.
+        .contextMenu { actionItems(m) }
     }
 
     private var createSheet: some View {
@@ -609,7 +648,7 @@ struct DockerMachinesView: View {
                 } header: {
                     Text("Sistema operativo")
                 } footer: {
-                    Text("La primera máquina de cada OS descarga su imagen base (unos segundos con buena conexión). El VS Code lo pone el host: la creación es casi instantánea después.")
+                    Text("La primera máquina de cada OS descarga su imagen base (unos segundos con buena conexión). El VS Code lo pone el host: la creación es casi instantánea después.\n\nSi Docker está cerrado en el equipo, se abrirá solo — puede tardar hasta un minuto.")
                 }
             }
             .navigationTitle("Nueva máquina")
@@ -651,13 +690,17 @@ struct DockerMachinesView: View {
 
     private func action(_ name: String, _ op: () async throws -> Void) async {
         busy.insert(name)
+        var failure: String?
         do {
             try await op()
         } catch {
-            errorMsg = error.localizedDescription
+            failure = error.localizedDescription
         }
         busy.remove(name)
+        // primero se refresca (que pone errorMsg a nil si la consulta va bien)
+        // y DESPUÉS se deja el fallo: al revés se borraba solo
         await refresh()
+        if let failure { errorMsg = failure }
     }
 
     private func createMachine() async {

@@ -517,8 +517,34 @@ def _docker_running():
     nada del problema real. Se comprueba la version del SERVIDOR, no la del
     cliente: el cliente responde aunque el demonio este parado.
     """
-    rc, out, err = sh("docker", "info", "--format", "{{.ServerVersion}}", timeout=20)
+    rc, out, err = sh("docker", "info", "--format", "{{.ServerVersion}}", timeout=8)
     return rc == 0 and out.strip() != "" and "cannot connect" not in (err or "").lower()
+
+
+def _ensure_docker(timeout=150):
+    """Se asegura de que haya demonio de Docker, arrancandolo si hace falta.
+
+    El gestor corre EN el equipo, asi que puede abrir Docker Desktop por su
+    cuenta: desde el iPad no hay forma de hacerlo, y obligar al usuario a
+    levantarse a abrirlo rompia el flujo entero de crear una maquina.
+    Docker Desktop tarda entre 20 y 60 segundos en levantar el demonio.
+    """
+    if _docker_running():
+        return True
+    if sys.platform == "darwin":
+        # -g: en segundo plano, sin robar el foco de lo que estes haciendo
+        subprocess.run(["open", "-ga", "Docker"], capture_output=True)
+    else:
+        # Docker Desktop para Linux es un servicio de usuario; el demonio
+        # clasico necesita root y ahi no se puede hacer nada sin contrasena
+        subprocess.run(["systemctl", "--user", "start", "docker-desktop"],
+                       capture_output=True)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(3)
+        if _docker_running():
+            return True
+    return False
 
 
 def _docker_direct_ok():
@@ -762,10 +788,10 @@ def free_port():
 _create_lock = threading.Lock()
 
 def create(name, osname):
-    if not _docker_running():
-        raise RuntimeError("Docker no esta en marcha en este equipo. "
-                           "Abrelo (Docker Desktop en macOS, 'systemctl start docker' "
-                           "en Linux) y vuelve a intentarlo.")
+    if not _ensure_docker():
+        raise RuntimeError("Docker esta cerrado y no he podido arrancarlo. "
+                           "Abrelo a mano en el equipo (Docker Desktop en macOS, "
+                           "'sudo systemctl start docker' en Linux) y reintenta.")
     if not re.fullmatch(r"[a-zA-Z0-9_-]{1,30}", name):
         raise ValueError("nombre invalido: usa letras, numeros, - o _")
     if osname not in IMAGES:
@@ -1003,15 +1029,19 @@ class Handler(BaseHTTPRequestHandler):
                 repair(m.group(1))
                 self._send(200, {"ok": True})
                 return
-            m = re.fullmatch(r"/machines/([a-zA-Z0-9_-]+)/(start|stop)", self.path)
+            m = re.fullmatch(r"/machines/([a-zA-Z0-9_-]+)/(start|stop|restart)", self.path)
             if not m:
                 self._send(404, {"error": "no existe"})
                 return
             name, action = m.groups()
+            if action in ("start", "restart") and not _ensure_docker():
+                raise RuntimeError("Docker esta cerrado y no he podido arrancarlo.")
             rc, out, err = sh("docker", action, "ivsc_" + name)
             if rc != 0:
                 raise RuntimeError((err or out)[-200:])
-            if action == "start":
+            # reiniciar conserva el puerto, pero el mapeo hay que rehacerlo
+            # igual que al arrancar
+            if action in ("start", "restart"):
                 for mach in machines():
                     if mach["name"] == name:
                         mount(name, mach["port"])
