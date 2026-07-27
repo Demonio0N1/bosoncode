@@ -135,7 +135,7 @@ mkdir -p "$EXT_DIR"
 INSTALLED=$("$IVSCODE_DIR/current/bin/code-server" --extensions-dir "$EXT_DIR" --list-extensions 2>/dev/null || true)
 for ext in ms-toolsai.jupyter ms-python.python detachhead.basedpyright; do
   echo "$INSTALLED" | grep -qi "^$ext$" && continue
-  echo "→ Instalando extensión $ext…"
+  echo "→ Instalando extensión ${ext}…"
   "$IVSCODE_DIR/current/bin/code-server" --extensions-dir "$EXT_DIR" --install-extension "$ext" >/dev/null 2>&1 \
     || echo "⚠ No pude instalar $ext (sin internet?); instálala luego desde la UI."
 done
@@ -196,26 +196,54 @@ while port_busy "$PORT"; do
   PORT=$((PORT + 1))
 done
 
+# ---------- localizar el CLI de Tailscale ----------
+# En macOS, la app de Tailscale trae el CLI DENTRO del paquete y no lo pone en
+# el PATH: `command -v tailscale` fallaba y el script se saltaba en silencio
+# todo el HTTPS. Sin HTTPS no hay Service Workers, y sin ellos no hay notebooks.
+find_tailscale() {
+  if command -v tailscale >/dev/null 2>&1; then command -v tailscale; return; fi
+  for candidate in \
+      /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+      /opt/homebrew/bin/tailscale \
+      /usr/local/bin/tailscale \
+      "$HOME/Applications/Tailscale.app/Contents/MacOS/Tailscale"; do
+    [ -x "$candidate" ] && { echo "$candidate"; return; }
+  done
+}
+TS="$(find_tailscale)"
+if [ -z "$TS" ]; then
+  echo "⚠ No encuentro el CLI de Tailscale: la app funcionará por HTTP, sin notebooks."
+  echo "  macOS: instala la app desde tailscale.com o 'brew install tailscale'."
+fi
+
 # ---------- HTTPS vía Tailscale (contexto seguro: notebooks/webviews) ----------
 # Los webviews de VS Code (editor de notebooks incluido) exigen HTTPS. Si hay
 # tailscale, publicamos este puerto con cert válido y anunciamos ESA URL.
 CANON_URL=""
-if command -v tailscale >/dev/null 2>&1; then
-  TS_DNS=$(tailscale status --json 2>/dev/null \
+# Puerto HTTPS del gestor de máquinas: fijo por convención, la app lo asume.
+MGR_HTTPS_PORT=9500
+if [ -n "$TS" ]; then
+  TS_DNS=$("$TS" status --json 2>/dev/null \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' \
     2>/dev/null || true)
   # el listener HTTPS lo abre tailscaled: debe ir en un puerto DISTINTO al de
   # code-server o chocan (EADDRINUSE). Si ya existe un mapeo hacia nuestro
   # puerto, se reutiliza (la URL no cambia entre reinicios).
-  HTTPS_PORT=$(tailscale serve status 2>/dev/null | awk -v tgt="http://127.0.0.1:$PORT" '
+  HTTPS_PORT=$("$TS" serve status 2>/dev/null | awk -v tgt="http://127.0.0.1:$PORT" '
     /^https:\/\// { port = (match($1, /:[0-9]+$/) ? substr($1, RSTART+1, RLENGTH-1) : 443) }
     index($0, tgt) && port { print port; exit }' || true)
   case "$HTTPS_PORT" in ''|*[!0-9]*) HTTPS_PORT="" ;; esac
   if [ -z "$HTTPS_PORT" ]; then
     HTTPS_PORT=$((PORT + 1000))
-    while port_busy "$HTTPS_PORT"; do HTTPS_PORT=$((HTTPS_PORT + 1)); done
+    # 9500 es del gestor y la app lo da por sentado. Hay que saltarlo: con
+    # --port 8500 el editor caía justo ahí y el mapeo del gestor lo pisaba,
+    # dejando la URL del editor apuntando al gestor. port_busy no lo detecta
+    # porque quien escucha en ese puerto es tailscaled, no un proceso local.
+    while port_busy "$HTTPS_PORT" || [ "$HTTPS_PORT" = "$MGR_HTTPS_PORT" ]; do
+      HTTPS_PORT=$((HTTPS_PORT + 1))
+    done
   fi
-  if [ -n "$TS_DNS" ] && tailscale serve --bg --https="$HTTPS_PORT" "http://127.0.0.1:$PORT" >/dev/null 2>&1; then
+  if [ -n "$TS_DNS" ] && "$TS" serve --bg --https="$HTTPS_PORT" "http://127.0.0.1:$PORT" >/dev/null 2>&1; then
     CANON_URL="https://${TS_DNS}:${HTTPS_PORT}"
   else
     echo "⚠ No pude configurar tailscale serve (¿falta 'tailscale set --operator=$USER'?)."
@@ -315,12 +343,21 @@ fi
 MGR_PID=""
 cleanup() {
   [ -n "$MDNS_PID" ] && kill "$MDNS_PID" 2>/dev/null || true
+  # Red de seguridad: bash aplaza los traps mientras hay un hijo en primer
+  # plano (code-server), así que un SIGTERM al script —lo que hace systemd o
+  # launchd al parar el servicio— puede llegar tarde y dejar el anunciador
+  # vivo. Un anuncio huérfano es peor que ninguno: la app muestra el equipo
+  # con una URL que ya no sirve.
+  pkill -f "[d]ns-sd -R $NAME _ivscode._tcp" 2>/dev/null || true
+  pkill -f "[a]vahi-publish -s $NAME" 2>/dev/null || true
+  pkill -f "[a]nnounce_dbus.py $NAME" 2>/dev/null || true
+  pkill -f "[a]nnounce.py $NAME" 2>/dev/null || true
   if [ -n "$MGR_PID" ]; then
     kill "$MGR_PID" 2>/dev/null || true          # supervisor
     pkill -f "[m]anager\.py" 2>/dev/null || true # y el python que supervisa
   fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT INT TERM HUP QUIT
 
 # ---------- gestor de máquinas Docker (API para la app) ----------
 # Crea/inicia/detiene contenedores con el OS elegido; cada uno corre el
@@ -1050,7 +1087,7 @@ threading.Thread(target=term_server, daemon=True).start()
 
 ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 PYEOF
-  if tailscale serve --bg --https=9500 "http://127.0.0.1:$MGR_LOCAL" >/dev/null 2>&1; then
+  if "$TS" serve --bg --https=$MGR_HTTPS_PORT "http://127.0.0.1:$MGR_LOCAL" >/dev/null 2>&1; then
     pkill -f "[m]anager\.py $TS_DNS" 2>/dev/null || true
     sleep 0.3
     ( while true; do
@@ -1062,7 +1099,7 @@ PYEOF
     MGR_PID=$!
     echo "→ Gestor de máquinas Docker: https://${TS_DNS}:9500"
     # canal PTY de la terminal flotante (TCP crudo dentro de la tailnet)
-    tailscale serve --bg --tcp=39600 "tcp://127.0.0.1:39600" >/dev/null 2>&1 \
+    "$TS" serve --bg --tcp=39600 "tcp://127.0.0.1:39600" >/dev/null 2>&1 \
       && echo "→ Terminal PTY: puerto 39600 (tailnet)" \
       || echo "⚠ No pude exponer el puerto 39600 (terminal flotante no disponible)"
   fi
@@ -1085,8 +1122,8 @@ else
     echo "    http://$ip:$PORT"
   done
 fi
-if command -v tailscale >/dev/null 2>&1; then
-  TS_IP=$(tailscale ip -4 2>/dev/null | head -1 || true)
+if [ -n "$TS" ]; then
+  TS_IP=$("$TS" ip -4 2>/dev/null | head -1 || true)
   [ -n "$TS_IP" ] && echo "    http://$TS_IP:$PORT  (tailscale, desde fuera de casa)"
 fi
 echo "  La app iVsCode lo detectará sola en esta red."

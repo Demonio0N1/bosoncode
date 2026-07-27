@@ -121,7 +121,7 @@ echo "  code-server listo en el remoto."
 REMOTE
 
 # ---------- arrancar code-server remoto (solo localhost del remoto) ----------
-echo "→ [2/4] Arrancando code-server remoto en 127.0.0.1:$RPORT…"
+echo "→ [2/4] Arrancando code-server remoto en 127.0.0.1:${RPORT}…"
 PASSWORD=$(cat "$IVSCODE_DIR/password")
 # matar y arrancar van en SSH SEPARADOS: si la misma shell contiene el pkill y
 # el texto real del comando, el patrón coincide con su propia línea y se mata
