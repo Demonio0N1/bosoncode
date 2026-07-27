@@ -43,6 +43,9 @@ struct PreviewWindowView: View {
         }
         .frame(minWidth: 320, minHeight: 320)
         .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        // cada previa nueva nace un escalón más pequeña: iPadOS no deja fijar
+        // posición, así que la cascada se consigue por tamaño
+        .background(CascadingWindowSize(base: PreviewScene.defaultSize))
         // Tercera red para el teclado: atajos de SwiftUI a nivel de ventana.
         // Se consultan cuando la cadena de respondedores de UIKit no consumió
         // la tecla, así que cubren el caso de que el foco esté fuera del visor.
