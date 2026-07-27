@@ -383,6 +383,25 @@ struct ContentView: View {
                 Button("Mis PCs") { withAnimation { showLauncher = true } }
                     .buttonStyle(.bordered)
             }
+            // Una máquina borrada en el equipo deja su tarjeta huérfana: la
+            // ruta /m-<n>/ desaparece del proxy, la petición cae en el editor
+            // raíz y responde 401. El mensaje no dice nada, así que se ofrece
+            // la salida aquí mismo.
+            if let active = store.active, active.isDockerMachine {
+                Divider().frame(maxWidth: 260)
+                Text("Si borraste esta máquina en el equipo, su tarjeta ya no lleva a ninguna parte.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button(role: .destructive) {
+                    store.delete(active)
+                    loadError = nil
+                    withAnimation { showLauncher = true }
+                } label: {
+                    Label("Quitar esta máquina", systemImage: "trash")
+                }
+                .buttonStyle(.bordered)
+            }
         }
         .padding(32)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
