@@ -328,6 +328,10 @@ struct LauncherView: View {
             Button { editorTarget = .edit(server) } label: {
                 Label("Edit", systemImage: "pencil")
             }
+            // misma pantalla, pero visible para quien busca "cambiar la clave"
+            Button { editorTarget = .edit(server) } label: {
+                Label("Change password…", systemImage: "key.horizontal")
+            }
             if server.managerURL != nil {
                 Button { machinesTarget = server } label: {
                     Label("Docker machines", systemImage: "shippingbox")

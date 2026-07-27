@@ -10,6 +10,12 @@ struct ServerEditorView: View {
     @State private var urlString = ""
     @State private var password = ""
     @State private var showPassword = false
+    /// Solo para máquinas Docker: la contraseña del equipo que las aloja
+    @State private var hostPassword = ""
+    @State private var showHostPassword = false
+
+    /// ¿Es esta entrada un contenedor montado en una ruta del equipo?
+    private var isMachine: Bool { (server?.isDockerMachine ?? false) }
 
     /// `URL(string:)` acepta casi cualquier cosa ("hola" incluido): hay que
     /// exigir esquema y host o se guardan servidores que nunca cargarán.
@@ -60,9 +66,38 @@ struct ServerEditorView: View {
                         .buttonStyle(.plain)
                     }
                 } header: {
-                    Text("Contraseña")
+                    Text(isMachine ? "Contraseña de esta máquina" : "Contraseña")
                 } footer: {
-                    Text("Se guarda en el Llavero: la app inicia sesión sola y nunca verás la pantalla de login.")
+                    Text(isMachine
+                         ? "La del editor de este contenedor. Se le grabó al crearlo, así que puede diferir de la del equipo."
+                         : "Se guarda en el Llavero: la app inicia sesión sola y nunca verás la pantalla de login.")
+                }
+
+                // Un contenedor tiene su propia contraseña, pero el terminal y
+                // el explorador de archivos hablan con el EQUIPO que lo aloja.
+                // Si no coinciden, ⌃⌥T no conecta: por eso se edita aparte.
+                if isMachine {
+                    Section {
+                        HStack {
+                            if showHostPassword {
+                                TextField("Contraseña del equipo", text: $hostPassword)
+                                    .autocorrectionDisabled()
+                                    .textInputAutocapitalization(.never)
+                            } else {
+                                SecureField("Contraseña del equipo", text: $hostPassword)
+                            }
+                            Button {
+                                showHostPassword.toggle()
+                            } label: {
+                                Image(systemName: showHostPassword ? "eye.slash" : "eye")
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } header: {
+                        Text("Contraseña del equipo (terminal y archivos)")
+                    } footer: {
+                        Text("El terminal (⌃⌥T) y la copia de archivos los atiende el equipo, no el contenedor. Léela con `cat ~/.ivscode/password` en el equipo.")
+                    }
                 }
             }
             .navigationTitle(isNew ? "Nuevo servidor" : "Editar servidor")
@@ -73,6 +108,11 @@ struct ServerEditorView: View {
                         updated.name = name.trimmingCharacters(in: .whitespaces)
                         updated.urlString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
                         store.upsert(updated, password: password)
+                        // la del equipo va a SU entrada, no a la de la máquina
+                        let host = hostPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if isMachine, !host.isEmpty {
+                            store.saveHostPassword(host, for: updated)
+                        }
                         dismiss()
                         onSaved?(updated)
                     }
@@ -87,6 +127,9 @@ struct ServerEditorView: View {
                     name = server.name
                     urlString = server.urlString
                     password = Keychain.password(for: server.id) ?? ""
+                    if server.isDockerMachine {
+                        hostPassword = store.hostPassword(for: server) ?? ""
+                    }
                 }
                 // Herencia de contraseña SOLO dentro del mismo host (las
                 // máquinas Docker de un PC comparten su clave). Nunca se
