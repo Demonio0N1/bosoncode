@@ -83,10 +83,7 @@ struct IconsView: View {
             LazyVGrid(columns: columns, spacing: 18) {
                 ForEach(items) { item in
                     VStack(spacing: 6) {
-                        Image(systemName: item.icon)
-                            .font(.system(size: 42))
-                            .foregroundStyle(item.iconColor)
-                            .frame(height: 52)
+                        ThumbnailView(item: item, size: CGSize(width: 52, height: 52))
                         Text(item.name)
                             .font(.caption)
                             .lineLimit(2)
@@ -175,9 +172,7 @@ struct DetailListView: View {
     private func row(_ item: FileItem) -> some View {
         HStack(spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: item.icon)
-                    .foregroundStyle(item.iconColor)
-                    .frame(width: 20)
+                ThumbnailView(item: item, size: CGSize(width: 22, height: 22))
                 Text(item.name).lineLimit(1)
                 if let badge = item.cloudBadge {
                     Image(systemName: badge)
@@ -274,9 +269,7 @@ struct ColumnsBrowserView: View {
 
     private func row(_ item: FileItem, level: Int, selected: Bool) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: item.icon)
-                .foregroundStyle(selected ? .white : item.iconColor)
-                .frame(width: 20)
+            ThumbnailView(item: item, size: CGSize(width: 22, height: 22))
             Text(item.name).lineLimit(1)
             if let badge = item.cloudBadge {
                 Image(systemName: badge)

@@ -7,6 +7,7 @@ struct FinderWindow: View {
     @StateObject private var model = BrowserViewModel()
     @StateObject private var local = LocalStore()
     @StateObject private var servers = ServerStore.shared
+    @StateObject private var preview = PreviewSession()
 
     @AppStorage("finderAppearance") private var appearanceRaw = "auto"
     @AppStorage("finderColumnWidth") private var columnWidth: Double = 260
@@ -78,12 +79,27 @@ struct FinderWindow: View {
         } message: {
             Text(model.error ?? "")
         }
+        // Vista previa en hoja modal con el ciclo completo de permisos:
+        // begin() abre el ámbito, la hoja lo usa, onDismiss lo cierra.
+        .sheet(item: Binding(get: { preview.previewURL.map(QLItem.init) },
+                             set: { if $0 == nil { preview.end() } }),
+               onDismiss: { preview.end() }) { ql in
+            QuickLookPreview(url: ql.url) { preview.end() }
+                .ignoresSafeArea()
+        }
+        .alert("No se puede previsualizar",
+               isPresented: Binding(get: { preview.error != nil },
+                                    set: { if !$0 { preview.error = nil } })) {
+            Button("Entendido", role: .cancel) { preview.error = nil }
+        } message: {
+            Text(preview.error ?? "")
+        }
         .task { await openDefault() }
         // las vistas (doble toque, menú contextual) piden la previa por aquí
         .onChange(of: model.previewRequest) { _, item in
             guard let item else { return }
-            openWindow(id: PreviewScene.id, value: item.url)
             model.previewRequest = nil
+            Task { await preview.begin(item) }   // hoja modal, ámbito controlado
         }
     }
 
@@ -393,18 +409,10 @@ struct InspectorPanel: View {
 
     @ViewBuilder
     private func preview(_ item: FileItem) -> some View {
-        if !item.isDirectory, let image = UIImage(contentsOfFile: item.url.path) {
-            Image(uiImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxHeight: 200)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-        } else {
-            Image(systemName: item.icon)
-                .font(.system(size: 56))
-                .foregroundStyle(item.iconColor)
-                .padding(.top, 12)
-        }
+        // miniatura real generada por el sistema (primera página del PDF,
+        // fotograma del vídeo…), igual que en la app Archivos
+        ThumbnailView(item: item, size: CGSize(width: 190, height: 190))
+            .padding(.top, 8)
     }
 
     private func info(_ label: String, _ value: String) -> some View {
