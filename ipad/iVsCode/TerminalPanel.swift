@@ -483,7 +483,6 @@ struct FloatingTerminal: View {
                     trafficLights
                 }
                 Spacer()
-                rightControls
             }
         }
         .padding(.horizontal, 10)
@@ -542,23 +541,6 @@ struct FloatingTerminal: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-    }
-
-    private var rightControls: some View {
-        HStack(spacing: 8) {
-            Button { fontSize = max(9, fontSize - 1) } label: {
-                Image(systemName: "textformat.size.smaller")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-            .buttonStyle(.plain)
-            Button { fontSize = min(22, fontSize + 1) } label: {
-                Image(systemName: "textformat.size.larger")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-            .buttonStyle(.plain)
-        }
     }
 
     private var resizeGrip: some View {
