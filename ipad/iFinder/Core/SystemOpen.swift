@@ -1,12 +1,19 @@
 import SwiftUI
 import UIKit
 
-/// Abre un archivo en **otra app** del iPad, como el doble clic de macOS.
+/// Apertura de archivos en **otras apps** del iPad.
 ///
-/// `UIDocumentInteractionController` es el equivalente de "Abrir con…": muestra
-/// las apps capaces de manejar ese tipo y le entrega el archivo a la elegida.
-/// Como el destino es otro proceso, el archivo debe estar en un sitio que
-/// pueda leer: por eso se le pasa siempre una copia en el contenedor propio.
+/// Hay dos rutas distintas, y conviene no confundirlas:
+///
+/// * `launchDirectly` — doble clic. Intenta abrir sin preguntar nada.
+/// * `presentOpenMenu` — toque con tres dedos. Muestra "Abrir con…" para
+///   elegir app a mano.
+///
+/// Nota importante sobre iPadOS: **no existe API pública para lanzar un archivo
+/// local en "su app por defecto"**, porque el sistema no guarda una asociación
+/// tipo → app como macOS. Lo más parecido a una apertura sin menús es cederle
+/// el archivo a la app Archivos con `shareddocuments://`, que aplica el manejo
+/// del sistema. Si eso falla, se recurre al menú.
 @MainActor
 final class SystemOpen: NSObject, UIDocumentInteractionControllerDelegate {
     static let shared = SystemOpen()
@@ -16,17 +23,55 @@ final class SystemOpen: NSObject, UIDocumentInteractionControllerDelegate {
 
     private override init() {}
 
-    /// Presenta "Abrir con…" para el archivo indicado.
-    /// - Returns: `false` si no hay ninguna app capaz de abrirlo.
+    // MARK: - Doble clic: abrir sin menús
+
+    /// Abre el archivo directamente, sin interfaz intermedia.
+    ///
+    /// - Parameters:
+    ///   - original: ruta real del archivo (la que ve la app Archivos).
+    ///   - copy: copia en el contenedor propio, para el plan B.
+    /// - Returns: `false` si ninguna ruta directa funcionó y hubo que
+    ///   recurrir al menú.
     @discardableResult
-    func openInDefaultApp(_ url: URL) -> Bool {
+    func launchDirectly(original: URL, copy: URL) async -> Bool {
+        // 1. Esquemas que el sistema sabe abrir por sí solo.
+        if !original.isFileURL, await UIApplication.shared.open(original) { return true }
+
+        // 2. Cesión a la app Archivos: abre el documento con el manejo por
+        //    defecto del sistema, sin pasar por ninguna lista de apps.
+        if let handoff = Self.sharedDocumentsURL(for: original),
+           await UIApplication.shared.open(handoff) {
+            return true
+        }
+
+        // 3. Sin ruta directa: se ofrece elegir app.
+        presentOpenMenu(copy)
+        return false
+    }
+
+    /// `shareddocuments://<ruta>` — la vía que usa el propio sistema para
+    /// saltar a un documento concreto dentro de Archivos.
+    private static func sharedDocumentsURL(for url: URL) -> URL? {
+        guard url.isFileURL else { return nil }
+        let encoded = url.path.addingPercentEncoding(
+            withAllowedCharacters: .urlPathAllowed) ?? url.path
+        return URL(string: "shareddocuments://" + encoded)
+    }
+
+    // MARK: - Tres dedos: elegir app
+
+    /// Presenta "Abrir con…" para el archivo indicado.
+    /// - Returns: `false` si no hay ninguna app capaz de abrirlo (entonces se
+    ///   muestra la hoja de compartir).
+    @discardableResult
+    func presentOpenMenu(_ url: URL) -> Bool {
         guard let anchor = Self.topViewController() else { return false }
 
         let interaction = UIDocumentInteractionController(url: url)
         interaction.delegate = self
         controller = interaction
 
-        // menú de apps compatibles, anclado al centro (iPad exige un origen)
+        // el iPad exige un origen para el popover
         let rect = CGRect(x: anchor.view.bounds.midX - 1,
                           y: anchor.view.bounds.midY - 1,
                           width: 2, height: 2)

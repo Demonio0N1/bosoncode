@@ -12,7 +12,10 @@ struct FileContextMenu: ViewModifier {
     func body(content: Content) -> some View {
         content.contextMenu {
             Button { Task { await model.openInDefaultApp(item) } } label: {
-                Label("Abrir con…", systemImage: "arrow.up.forward.app")
+                Label("Abrir", systemImage: "arrow.up.forward.app")
+            }
+            Button { Task { await model.chooseAppFor(item) } } label: {
+                Label("Abrir con… (3 dedos)", systemImage: "square.grid.2x2")
             }
             Button { model.quickLook(item) } label: {
                 Label("Vista rápida (espacio)", systemImage: "eye")
@@ -52,6 +55,11 @@ struct FileContextMenu: ViewModifier {
 extension View {
     func fileContextMenu(_ model: BrowserViewModel, item: FileItem) -> some View {
         modifier(FileContextMenu(model: model, item: item))
+            // tres dedos = "Abrir con…", sin ocupar el doble clic
+            .onThreeFingerTap {
+                guard !item.isDirectory else { return }
+                Task { await model.chooseAppFor(item) }
+            }
     }
 
     /// Arrastrar hacia fuera + soltar dentro (si es carpeta).

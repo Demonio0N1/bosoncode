@@ -298,11 +298,27 @@ final class BrowserViewModel: ObservableObject {
         }
     }
 
-    /// Doble clic: abre el archivo en su app por defecto del iPad.
-    ///
-    /// El destino es otro proceso, así que no puede leer nuestras carpetas con
-    /// permiso: se le entrega una copia en el contenedor propio.
+    /// Doble clic: abre el archivo directamente, sin menús intermedios.
     func openInDefaultApp(_ item: FileItem) async {
+        await handOff(item) { original, copy in
+            await SystemOpen.shared.launchDirectly(original: original, copy: copy)
+        }
+    }
+
+    /// Tres dedos: muestra "Abrir con…" para elegir la app a mano.
+    func chooseAppFor(_ item: FileItem) async {
+        await handOff(item) { _, copy in
+            SystemOpen.shared.presentOpenMenu(copy)
+        }
+    }
+
+    /// Prepara el archivo y se lo cede a otra app.
+    ///
+    /// El destino es otro proceso, que no hereda nuestros permisos: por eso
+    /// siempre se le entrega una copia en el contenedor propio, además de la
+    /// ruta original (que sí sirve para la cesión vía app Archivos).
+    private func handOff(_ item: FileItem,
+                         _ deliver: (URL, URL) async -> Void) async {
         guard !item.isDirectory else { return }
         openingExternally = item.name
         defer { openingExternally = nil }
@@ -314,7 +330,7 @@ final class BrowserViewModel: ObservableObject {
             let copy = FileManager.default.temporaryDirectory
                 .appendingPathComponent(item.name)
             try data.write(to: copy, options: .atomic)
-            SystemOpen.shared.openInDefaultApp(copy)
+            await deliver(item.url, copy)
         } catch {
             self.error = "No se pudo abrir \(item.name): \(error.localizedDescription)"
         }

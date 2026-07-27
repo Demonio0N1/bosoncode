@@ -10,9 +10,10 @@ enum PreviewScene {
 
 // MARK: - Ventana de vista previa
 
-/// Contenido de la ventana: Quick Look dentro de un `NavigationStack` con
-/// barra y botón de cerrar, para que el usuario **siempre** tenga salida por
-/// interfaz además de la barra espaciadora.
+/// Contenido de la ventana: Quick Look limpio, sin botón de cerrar.
+///
+/// La salida es por teclado (espacio, Esc, ⌘W) o por los gestos del sistema
+/// para descartar ventanas, igual que la vista rápida de macOS.
 struct PreviewWindowView: View {
     /// URL propia de ESTA ventana: llega como valor de escena y no cambia
     /// aunque la ventana principal seleccione otro archivo.
@@ -33,14 +34,6 @@ struct PreviewWindowView: View {
             .navigationTitle(url?.lastPathComponent ?? "Vista previa")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Label("Cerrar", systemImage: "xmark")
-                    }
-                    .keyboardShortcut("w", modifiers: .command)   // ⌘W como en macOS
-                }
                 if let url {
                     ToolbarItem(placement: .topBarTrailing) {
                         ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
@@ -50,12 +43,16 @@ struct PreviewWindowView: View {
         }
         .frame(minWidth: 320, minHeight: 320)
         .background(Color(uiColor: .systemBackground).ignoresSafeArea())
-        // ⌘W por dos vías: este botón oculto (SwiftUI) y el UIKeyCommand del
-        // visor, porque el foco puede estar en cualquiera de los dos
+        // Tercera red para el teclado: atajos de SwiftUI a nivel de ventana.
+        // Se consultan cuando la cadena de respondedores de UIKit no consumió
+        // la tecla, así que cubren el caso de que el foco esté fuera del visor.
         .background(
-            Button("") { dismiss() }
-                .keyboardShortcut("w", modifiers: .command)
-                .opacity(0)
+            ZStack {
+                Button("") { dismiss() }.keyboardShortcut(.space, modifiers: [])
+                Button("") { dismiss() }.keyboardShortcut("w", modifiers: .command)
+                Button("") { dismiss() }.keyboardShortcut(.escape, modifiers: [])
+            }
+            .opacity(0)
         )
         // el registro solo sirve para saber si hay ventanas abiertas (para
         // alternar con la barra espaciadora); NO decide qué muestra cada una
@@ -151,23 +148,27 @@ struct QuickLookPreview: UIViewControllerRepresentable {
     var onFinish: () -> Void = {}
     var onClose: () -> Void = {}
 
-    func makeUIViewController(context: Context) -> QLPreviewController {
-        let controller = KeyAwareQLPreviewController()
-        controller.onClose = onClose          // espacio / esc / ⌘W cierran
-        controller.dataSource = context.coordinator
-        controller.delegate = context.coordinator
+    func makeUIViewController(context: Context) -> PreviewHostController {
+        let preview = KeyAwareQLPreviewController()
+        preview.onClose = onClose             // espacio / esc / ⌘W cierran
+        preview.dataSource = context.coordinator
+        preview.delegate = context.coordinator
         // Sin esto, la vista del controlador es transparente y se ve el negro
         // de la ventana en los márgenes que el documento no cubre.
-        controller.view.backgroundColor = .systemBackground
-        controller.view.clipsToBounds = true
-        return controller
+        preview.view.backgroundColor = .systemBackground
+        preview.view.clipsToBounds = true
+
+        let host = PreviewHostController(preview: preview)
+        host.onClose = onClose
+        return host
     }
 
-    func updateUIViewController(_ controller: QLPreviewController, context: Context) {
-        (controller as? KeyAwareQLPreviewController)?.onClose = onClose
+    func updateUIViewController(_ host: PreviewHostController, context: Context) {
+        host.onClose = onClose
+        host.preview.onClose = onClose
         if context.coordinator.url != url {
             context.coordinator.url = url
-            controller.reloadData()
+            host.preview.reloadData()
         }
     }
 
@@ -218,25 +219,84 @@ struct QuickLookPreview: UIViewControllerRepresentable {
     }
 }
 
-/// `QLPreviewController` que responde al teclado.
+// MARK: - Captura de teclado sobre Quick Look
+
+/// Contenedor de `QLPreviewController` que atrapa la barra espaciadora.
 ///
-/// UIKit se queda el foco cuando la vista previa aparece, así que el
-/// `.onKeyPress` de SwiftUI ya no llega. La vía fiable es declarar
-/// `UIKeyCommand` en el propio controlador: espacio (como macOS), Esc y ⌘W.
+/// **Por qué hace falta.** Un `UIKeyCommand` solo se consulta en los objetos
+/// que están en la cadena de respondedores, y esa cadena se recorre desde el
+/// primer respondedor hacia arriba. Quick Look monta su contenido en
+/// controladores internos propios (uno distinto por tipo de archivo: web para
+/// texto, PDFKit para PDF…), que se quedan el foco y, en algunos tipos,
+/// consumen el espacio para desplazar la página. Por eso el `.onKeyPress` de
+/// SwiftUI de la ventana principal deja de recibir nada.
+///
+/// La solución es rodear al visor por los dos lados:
+///   1. `KeyAwareQLPreviewController` — justo encima del contenido interno.
+///   2. Este anfitrión — por encima del visor entero, atrapa lo que el visor
+///      no consumió, tanto por `keyCommands` como por `pressesBegan`.
+///   3. Los atajos de SwiftUI en `PreviewWindowView` — última red.
+///
+/// `wantsPriorityOverSystemBehavior` es lo que hace que el espacio llegue aquí
+/// antes de que el sistema lo interprete como "desplazar".
+final class PreviewHostController: UIViewController {
+    let preview: KeyAwareQLPreviewController
+    var onClose: () -> Void = {}
+
+    init(preview: KeyAwareQLPreviewController) {
+        self.preview = preview
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) no disponible") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+
+        addChild(preview)
+        preview.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(preview.view)
+        NSLayoutConstraint.activate([
+            preview.view.topAnchor.constraint(equalTo: view.topAnchor),
+            preview.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            preview.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            preview.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+        preview.didMove(toParent: self)
+    }
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    override var keyCommands: [UIKeyCommand]? { UIKeyCommand.closePreviewCommands(#selector(closePreview)) }
+
+    /// Segunda red por si el evento llega como pulsación en bruto en lugar de
+    /// como comando (ocurre con algunos visores internos de Quick Look).
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let closes = presses.contains { press in
+            guard let key = press.key else { return false }
+            return key.charactersIgnoringModifiers == " " && key.modifierFlags.isEmpty
+        }
+        if closes { closePreview() } else { super.pressesBegan(presses, with: event) }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        becomeFirstResponder()
+    }
+
+    @objc private func closePreview() { onClose() }
+}
+
+/// `QLPreviewController` que responde al teclado, colocado inmediatamente por
+/// encima del contenido interno del visor.
 final class KeyAwareQLPreviewController: QLPreviewController {
     var onClose: () -> Void = {}
 
     override var canBecomeFirstResponder: Bool { true }
 
-    override var keyCommands: [UIKeyCommand]? {
-        let close = [
-            UIKeyCommand(input: " ", modifierFlags: [], action: #selector(closePreview)),
-            UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(closePreview)),
-            UIKeyCommand(input: "w", modifierFlags: .command, action: #selector(closePreview)),
-        ]
-        close.forEach { $0.wantsPriorityOverSystemBehavior = true }
-        return close
-    }
+    override var keyCommands: [UIKeyCommand]? { UIKeyCommand.closePreviewCommands(#selector(closePreview)) }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -244,4 +304,18 @@ final class KeyAwareQLPreviewController: QLPreviewController {
     }
 
     @objc private func closePreview() { onClose() }
+}
+
+private extension UIKeyCommand {
+    /// Espacio (como macOS), Esc y ⌘W, con prioridad sobre el comportamiento
+    /// que el sistema daría a esas teclas dentro del visor.
+    static func closePreviewCommands(_ action: Selector) -> [UIKeyCommand] {
+        let commands = [
+            UIKeyCommand(input: " ", modifierFlags: [], action: action),
+            UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: action),
+            UIKeyCommand(input: "w", modifierFlags: .command, action: action),
+        ]
+        commands.forEach { $0.wantsPriorityOverSystemBehavior = true }
+        return commands
+    }
 }
