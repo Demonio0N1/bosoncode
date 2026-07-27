@@ -24,6 +24,11 @@ struct FinderWindow: View {
     @State private var renamingMount: LocalStore.Folder?
     @State private var mountName = ""
     @State private var showMountHelp = false
+    /// Ubicación del sistema que espera permiso (si el selector viene de ahí)
+    @State private var pendingLocation: SystemLocation?
+    /// Carpeta recién elegida, a la espera de que el usuario la nombre
+    @State private var pendingURL: URL?
+    @State private var pendingName = ""
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     /// En ventanas estrechas la interfaz se simplifica (Split View pequeño)
@@ -89,21 +94,39 @@ struct FinderWindow: View {
         .background(WindowFreeResize())
         .background(shortcuts)
         // selector nativo de SwiftUI: acepta carpetas y archivos sueltos
+        // Único punto de la app que abre el selector.
         .fileImporter(isPresented: $showFolderPicker,
                       allowedContentTypes: [.folder],
                       allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
-                if local.add(url: url) {
-                    Task { await openLocal(url) }
+                if let location = pendingLocation {
+                    // venía de una ubicación del sistema: el nombre ya se sabe
+                    save(url, as: location.title)
                 } else {
-                    model.error = "No pude guardar el permiso de esa carpeta. Elige la ubicación desde la barra lateral del selector."
+                    // carpeta arbitraria: se pregunta cómo llamarla, porque el
+                    // sistema devuelve cosas como "File Provider Storage"
+                    pendingURL = url
+                    pendingName = CloudProvider.detect(url).suggestedName(for: url)
                 }
             case .failure(let error):
                 model.error = error.localizedDescription
             }
+            pendingLocation = nil
             pickerStart = nil
+        }
+        .alert("Nombre de la ubicación",
+               isPresented: Binding(get: { pendingURL != nil },
+                                    set: { if !$0 { pendingURL = nil } })) {
+            TextField("Ej.: Google Drive", text: $pendingName)
+            Button("Guardar") {
+                if let url = pendingURL { save(url, as: pendingName) }
+                pendingURL = nil
+            }
+            Button("Cancelar", role: .cancel) { pendingURL = nil }
+        } message: {
+            Text("Así aparecerá en la barra lateral.")
         }
         .sheet(isPresented: Binding(get: { !onboarded }, set: { if !$0 { onboarded = true } })) {
             OnboardingView(onPick: { root in
@@ -165,12 +188,13 @@ struct FinderWindow: View {
             }
 
             Section {
-                ForEach(LocalRoot.allCases) { root in
+                ForEach(SystemLocation.allCases) { location in
                     Button {
-                        pickerStart = root.suggestedURL
-                        showFolderPicker = true
+                        open(location)
                     } label: {
-                        SidebarRow(title: root.title, systemImage: root.icon, dimmed: true)
+                        SidebarRow(title: location.title,
+                                   systemImage: location.icon,
+                                   dimmed: !isReachable(location))
                     }
                     .buttonStyle(.plain)
                     .macSidebarRowInsets()
@@ -211,6 +235,42 @@ struct FinderWindow: View {
         }
         .macSidebarStyle()
         .navigationTitle("iFinder")
+    }
+
+    /// Guarda el permiso con el nombre elegido y entra en la carpeta.
+    private func save(_ url: URL, as name: String) {
+        guard local.add(url: url, name: name) else {
+            model.error = "No pude guardar el permiso de esa carpeta. Elige la ubicación desde la barra lateral del selector."
+            return
+        }
+        Task { await openLocal(url) }
+    }
+
+    // MARK: - Enrutado de la barra lateral
+
+    /// ¿Se puede entrar sin pedir permiso? (ruta nativa o ya concedida)
+    private func isReachable(_ location: SystemLocation) -> Bool {
+        location.url != nil || local.folder(named: location.title) != nil
+    }
+
+    /// Las ubicaciones del sistema **navegan**; solo piden el selector la
+    /// primera vez, y únicamente si el sandbox no expone su ruta.
+    private func open(_ location: SystemLocation) {
+        // 1. ruta nativa: entrada directa, sin preguntar nada
+        if let url = location.url {
+            Task { await openLocal(url) }
+            return
+        }
+        // 2. concedida en una sesión anterior: también directa
+        if let folder = local.folder(named: location.title),
+           let url = local.url(for: folder) {
+            Task { await openLocal(url) }
+            return
+        }
+        // 3. primera vez: se pide permiso y se recuerda para no repetirlo
+        pendingLocation = location
+        pickerStart = nil
+        showFolderPicker = true
     }
 
     /// Fila de una nube montada o de una carpeta concedida.

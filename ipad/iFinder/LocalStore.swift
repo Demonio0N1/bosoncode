@@ -57,6 +57,20 @@ final class LocalStore: ObservableObject {
     /// Guarda el permiso de una carpeta concedida en el selector.
     /// OJO: hay que abrir el ámbito de seguridad ANTES de crear el marcador;
     /// si no, se guarda un permiso inválido y la carpeta no vuelve a abrirse.
+    /// Busca un montaje por su nombre (para saber si una ubicación del
+    /// sistema ya fue concedida antes).
+    func folder(named name: String) -> Folder? {
+        folders.first { $0.name == name }
+    }
+
+    /// Guarda una carpeta con un nombre elegido por el usuario.
+    @discardableResult
+    func add(url: URL, name: String) -> Bool {
+        guard add(url: url) else { return false }
+        if let last = folders.last { rename(last, to: name) }
+        return true
+    }
+
     @discardableResult
     func add(url: URL) -> Bool {
         let scoped = url.startAccessingSecurityScopedResource()
