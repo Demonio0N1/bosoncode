@@ -91,6 +91,8 @@ struct LauncherView: View {
     @State private var editorTarget: EditorTarget?
     @State private var machinesTarget: Server?
     @State private var reachable: [UUID: Bool] = [:]
+    /// Ventana inicial en la que el aviso de búsqueda tiene sentido
+    @State private var scanning = true
     @AppStorage("appearance") private var appearanceRaw = AppearanceMode.auto.rawValue
     @Environment(\.colorScheme) private var scheme
 
@@ -149,10 +151,18 @@ struct LauncherView: View {
                     }
                     .padding(.horizontal, 40)
 
-                    if newDiscoveries.isEmpty {
-                        Label("Scanning for devices…", systemImage: "wifi")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                    // Solo mientras la búsqueda tiene sentido. Antes se
+                    // mostraba siempre que no hubiera equipos NUEVOS, es decir,
+                    // de forma permanente en cuanto guardabas el tuyo: parecía
+                    // atascado en "buscando" con todo ya encontrado.
+                    if newDiscoveries.isEmpty, scanning {
+                        HStack(spacing: 7) {
+                            ProgressView().controlSize(.small)
+                            Text("Scanning for devices…")
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity)
                     }
 
                     footer
@@ -201,6 +211,14 @@ struct LauncherView: View {
         .onAppear {
             discovery.start()
             checkReachability()
+        }
+        // La búsqueda sigue viva mientras esta pantalla esté abierta —los
+        // equipos que se enciendan después aparecen solos—, pero el aviso solo
+        // acompaña a los primeros segundos, que es cuando informa de algo.
+        .task(id: store.servers.count) {
+            scanning = true
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            withAnimation { scanning = false }
         }
         .onDisappear { discovery.stop() }
         .sheet(item: $editorTarget) { target in
