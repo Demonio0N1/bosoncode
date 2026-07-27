@@ -17,6 +17,7 @@ struct FinderWindow: View {
     @State private var showFolderPicker = false
     @State private var pickerStart: URL?
     @State private var selectedSidebar: String?
+    @Environment(\.openWindow) private var openWindow
     /// En ventanas estrechas la interfaz se simplifica (Split View pequeño)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -65,10 +66,6 @@ struct FinderWindow: View {
             }, onSkip: { onboarded = true })
             .presentationDetents([.medium, .large])
         }
-        .fullScreenCover(item: Binding(get: { model.quickLookURL.map(QLItem.init) },
-                                       set: { if $0 == nil { model.quickLookURL = nil } })) { ql in
-            QuickLookView(url: ql.url) { model.quickLookURL = nil }.ignoresSafeArea()
-        }
         .alert("Renombrar", isPresented: Binding(get: { model.renaming != nil },
                                                  set: { if !$0 { model.renaming = nil } })) {
             TextField("Nombre", text: $model.renameText)
@@ -82,6 +79,12 @@ struct FinderWindow: View {
             Text(model.error ?? "")
         }
         .task { await openDefault() }
+        // las vistas (doble toque, menú contextual) piden la previa por aquí
+        .onChange(of: model.previewRequest) { _, item in
+            guard let item else { return }
+            openWindow(id: PreviewScene.id, value: item.url)
+            model.previewRequest = nil
+        }
     }
 
     // MARK: - Barra lateral
@@ -168,12 +171,36 @@ struct FinderWindow: View {
             }
             if showInspector, horizontalSizeClass == .regular {
                 Divider()
-                InspectorPanel(model: model)
+                InspectorPanel(model: model, onPreview: { openPreview($0) })
                     .frame(width: 260)
             }
         }
         .navigationTitle(model.currentURL?.lastPathComponent ?? "iFinder")
         .navigationBarTitleDisplayMode(.inline)
+        // Barra espaciadora = Quick Look, como en macOS. Se ignora cuando hay
+        // un campo de texto activo (renombrar) para no tragarse los espacios.
+        .onKeyPress(.space) {
+            guard model.renaming == nil,
+                  let item = model.selectedItems.first,
+                  !item.isDirectory else { return .ignored }
+            openPreview(item)
+            return .handled
+        }
+    }
+
+    /// Abre la vista previa en una ventana propia de iPadOS.
+    private func openPreview(_ item: FileItem) {
+        // si vive en la nube se descarga antes: la otra escena solo recibe la URL
+        if item.isRemoteOnly || item.isDownloading {
+            Task {
+                model.downloadingName = item.name
+                defer { model.downloadingName = nil }
+                try? await CloudFileHandler.shared.materialize(item.url)
+                openWindow(id: PreviewScene.id, value: item.url)
+            }
+        } else {
+            openWindow(id: PreviewScene.id, value: item.url)
+        }
     }
 
     private var toolbar: some View {
@@ -259,7 +286,14 @@ struct FinderWindow: View {
             Button("") { Task { await model.deleteSelection() } }.keyboardShortcut(.delete, modifiers: .command)
             Button("") { Task { await model.newFolder() } }.keyboardShortcut("n", modifiers: [.command, .shift])
             Button("") { model.inspecting = model.selectedItems.first }.keyboardShortcut("i", modifiers: .command)
-            Button("") { model.quickLook() }.keyboardShortcut(.space, modifiers: [])
+            Button("") {
+                if let item = model.selectedItems.first, !item.isDirectory { openPreview(item) }
+            }
+            .keyboardShortcut(.space, modifiers: [])
+            Button("") {
+                if let item = model.selectedItems.first, !item.isDirectory { openPreview(item) }
+            }
+            .keyboardShortcut(.downArrow, modifiers: .command)
             Button("") { Task { await model.goUp() } }.keyboardShortcut(.upArrow, modifiers: .command)
             Button("") { if let item = model.selectedItems.first { model.beginRename(item) } }
                 .keyboardShortcut(.return, modifiers: [])
@@ -308,6 +342,7 @@ struct FinderWindow: View {
 /// Panel derecho de información (⌘I), con vista previa y datos del archivo.
 struct InspectorPanel: View {
     @ObservedObject var model: BrowserViewModel
+    var onPreview: ((FileItem) -> Void)? = nil
     @State private var folderSize: Int64?
 
     private var item: FileItem? { model.inspecting ?? model.selectedItems.first }
@@ -329,7 +364,7 @@ struct InspectorPanel: View {
                         info("Ubicación", item.url.deletingLastPathComponent().lastPathComponent)
                     }
                     if !item.isDirectory {
-                        Button { model.quickLook(item) } label: {
+                        Button { onPreview?(item) } label: {
                             Label("Abrir (espacio)", systemImage: "eye").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)

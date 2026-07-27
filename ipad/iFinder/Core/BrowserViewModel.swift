@@ -272,12 +272,15 @@ final class BrowserViewModel: ObservableObject {
         }
     }
 
+    /// Señal para que la vista abra la ventana de previsualización.
+    @Published var previewRequest: FileItem?
+
     /// Abre el archivo. Si vive en la nube, lo descarga antes mostrando
     /// el progreso, en vez de abrir un fichero vacío.
     func quickLook(_ item: FileItem? = nil) {
         guard let item = item ?? selectedItems.first, !item.isDirectory else { return }
         guard item.isRemoteOnly || item.isDownloading else {
-            quickLookURL = item.url
+            previewRequest = item
             return
         }
         Task {
@@ -285,7 +288,7 @@ final class BrowserViewModel: ObservableObject {
             defer { downloadingName = nil }
             do {
                 try await CloudFileHandler.shared.materialize(item.url)
-                quickLookURL = item.url
+                previewRequest = item
                 await reload()
             } catch {
                 self.error = error.localizedDescription
