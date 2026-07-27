@@ -58,9 +58,8 @@ enum HostPlatform {
 
 /// Datos de marca y enlaces externos, en un solo sitio.
 enum BosonCodeInfo {
-    /// ⚠️ CAMBIA ESTO por la URL real del repositorio antes de publicar.
-    /// El proyecto aún no tiene remoto de git configurado.
-    static let setupGuideURL = URL(string: "https://github.com/garyguaman/bosoncode")!
+    /// Repositorio con la guía de Tailscale y `serve.sh`.
+    static let setupGuideURL = URL(string: "https://github.com/Demonio0N1/bosoncode")!
 
     static let copyright = "© 2026 BosonCode. All rights reserved."
 
