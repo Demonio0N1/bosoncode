@@ -94,6 +94,9 @@ struct LauncherView: View {
     /// Ventana inicial en la que el aviso de búsqueda tiene sentido
     @State private var scanning = true
     @AppStorage("appearance") private var appearanceRaw = AppearanceMode.auto.rawValue
+    /// La guía se enseña una sola vez; luego queda en el pie por si acaso
+    @AppStorage("bosonWelcomeSeen") private var welcomeSeen = false
+    @State private var showWelcome = false
     @Environment(\.colorScheme) private var scheme
 
     private var isDark: Bool { scheme == .dark }
@@ -211,6 +214,14 @@ struct LauncherView: View {
         .onAppear {
             discovery.start()
             checkReachability()
+            if !welcomeSeen { showWelcome = true }
+        }
+        .sheet(isPresented: $showWelcome) {
+            WelcomeGuide {
+                welcomeSeen = true
+                showWelcome = false
+            }
+            .presentationDetents([.large])
         }
         // La búsqueda sigue viva mientras esta pantalla esté abierta —los
         // equipos que se enciendan después aparecen solos—, pero el aviso solo
@@ -257,6 +268,19 @@ struct LauncherView: View {
         VStack(spacing: 18) {
             // `Link` abre Safari sin pasar por UIApplication.open, así que no
             // toca ninguna lógica de la vista
+            HStack(spacing: 10) {
+                Button {
+                    showWelcome = true
+                } label: {
+                    Label("How it works", systemImage: "sparkles")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.primary.opacity(0.06), in: Capsule())
+                }
+                .buttonStyle(.plain)
+
             Link(destination: BosonCodeInfo.setupGuideURL) {
                 Label("Host Setup Guide", systemImage: "arrow.up.forward.square")
                     .font(.callout.weight(.medium))
@@ -267,6 +291,7 @@ struct LauncherView: View {
                     .overlay(Capsule().stroke(.cyan.opacity(0.25), lineWidth: 1))
             }
             .accessibilityHint("Opens the setup instructions for Tailscale and serve.sh")
+            }
 
             Divider()
                 .frame(maxWidth: 420)
