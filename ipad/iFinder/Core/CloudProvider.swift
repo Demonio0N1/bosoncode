@@ -86,7 +86,7 @@ enum CloudProvider: String, Codable, CaseIterable {
     /// Nombre inicial sugerido: servicio + carpeta, para que dos cuentas del
     /// mismo proveedor no queden con la misma etiqueta.
     func suggestedName(for url: URL) -> String {
-        let folder = url.lastPathComponent
+        let folder = url.displayName
         guard isCloud, self != .folder else { return folder }
         return folder.localizedCaseInsensitiveContains(title) ? folder : "\(title) – \(folder)"
     }

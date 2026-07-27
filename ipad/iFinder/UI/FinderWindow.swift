@@ -277,11 +277,6 @@ struct FinderWindow: View {
         }
         .navigationTitle(model.currentURL?.lastPathComponent ?? "iFinder")
         .navigationBarTitleDisplayMode(.inline)
-        // Buscador nativo en la barra de navegación, como el del Finder.
-        // El filtrado vive en el ViewModel (con caché), no en la vista.
-        .searchable(text: $model.searchText,
-                    placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "Buscar en \(model.currentURL?.lastPathComponent ?? "esta carpeta")")
         // El área de archivos debe poder recibir foco para que le lleguen las
         // teclas; sin `.focusable()` las flechas no salen de la barra lateral.
         .focusable()
@@ -344,6 +339,8 @@ struct FinderWindow: View {
             } else if model.busy {
                 ProgressView().controlSize(.small)
             }
+
+            SearchField(text: $model.searchText)
 
             Button { Task { await model.newFolder() } } label: {
                 Image(systemName: "folder.badge.plus")

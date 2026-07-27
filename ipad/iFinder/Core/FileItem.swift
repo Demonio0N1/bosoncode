@@ -23,7 +23,8 @@ struct FileItem: Identifiable, Hashable, Sendable {
 
     init(url: URL, values: URLResourceValues?) {
         self.url = url
-        self.name = values?.name ?? url.lastPathComponent
+        // el localizado primero: traduce carpetas del sistema y nubes
+        self.name = values?.localizedName ?? values?.name ?? url.lastPathComponent
         self.isDirectory = values?.isDirectory ?? false
         self.size = Int64(values?.fileSize ?? 0)
         self.modified = values?.contentModificationDate
