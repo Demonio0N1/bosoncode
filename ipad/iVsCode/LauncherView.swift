@@ -1,5 +1,47 @@
 import SwiftUI
 
+/// Sistema operativo del equipo, para elegir su icono.
+///
+/// El modelo no trae ningún campo de plataforma, así que se deduce del nombre
+/// del host, que es el dato que ya llega tanto de los servidores guardados
+/// como del descubrimiento mDNS. Es una heurística de presentación pura: no
+/// consulta la red ni altera ningún estado. Cuando no reconoce nada asume
+/// Linux, que es donde corre `serve.sh` en la práctica totalidad de los casos.
+enum HostPlatform {
+    case linux, windows, mac
+
+    private static let windowsMarks = ["windows", "win10", "win11", "win-", "-win", "msi", "wsl"]
+    private static let macMarks = ["mac", "imac", "macbook", "darwin", "mbp", "mini"]
+
+    static func detect(_ name: String) -> HostPlatform {
+        let host = name.lowercased()
+        if macMarks.contains(where: { host.contains($0) }) { return .mac }
+        if windowsMarks.contains(where: { host.contains($0) }) { return .windows }
+        return .linux
+    }
+
+    /// SF Symbols no tiene pingüino: para Linux se usa el símbolo de terminal,
+    /// que es el que Apple emplea para entornos de línea de comandos.
+    var symbol: String {
+        let name: String
+        switch self {
+        case .linux: name = "terminal.fill"
+        case .windows: name = "pc"
+        case .mac: name = "apple.logo"
+        }
+        // si el símbolo no existe en esta versión de iOS, monitor genérico
+        return UIImage(systemName: name) != nil ? name : "desktopcomputer"
+    }
+
+    var label: String {
+        switch self {
+        case .linux: return "Linux"
+        case .windows: return "Windows"
+        case .mac: return "macOS"
+        }
+    }
+}
+
 /// Pantalla de inicio: tarjetas con las computadoras guardadas y detectadas.
 struct LauncherView: View {
     @ObservedObject var store: ServerStore
@@ -65,8 +107,7 @@ struct LauncherView: View {
                     .padding(.horizontal, 40)
 
                     if newDiscoveries.isEmpty {
-                        Label("Buscando equipos con serve.sh en tu red…",
-                              systemImage: "wifi")
+                        Label("Scanning for devices…", systemImage: "wifi")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -142,24 +183,24 @@ struct LauncherView: View {
                     LinearGradient(colors: [.cyan, .blue],
                                    startPoint: .topLeading, endPoint: .bottomTrailing)
                 )
-            Text("iVsCode")
+            Text("BosonCode")
                 .font(.system(size: 40, weight: .bold, design: .rounded))
                 .foregroundStyle(.primary)
-            Text("Elige una computadora")
-                .font(.title3)
-                .foregroundStyle(.secondary)
         }
     }
 
     private func savedCard(_ server: Server) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Image(systemName: "desktopcomputer")
+            HStack(alignment: .top) {
+                let platform = HostPlatform.detect(server.name)
+                Image(systemName: platform.symbol)
                     .font(.system(size: 34))
-                    .foregroundStyle(
+                    .frame(width: 40, height: 40)          // ancho fijo: los símbolos
+                    .foregroundStyle(                       // no miden lo mismo
                         LinearGradient(colors: [.cyan, .blue],
                                        startPoint: .top, endPoint: .bottom)
                     )
+                    .accessibilityLabel(platform.label)
                 Spacer()
                 statusDot(for: server)
             }
@@ -177,7 +218,7 @@ struct LauncherView: View {
             }
             HStack {
                 if server.id == store.activeID {
-                    Text("CONECTADO")
+                    Text("CONNECTED")
                         .font(.caption2.bold())
                         .foregroundStyle(.green)
                         .padding(.horizontal, 8)
@@ -189,7 +230,7 @@ struct LauncherView: View {
                     Button {
                         machinesTarget = server
                     } label: {
-                        Label("Máquinas", systemImage: "shippingbox")
+                        Label("Machines", systemImage: "shippingbox")
                             .font(.caption.bold())
                             .foregroundStyle(.cyan)
                             .padding(.horizontal, 10)
@@ -213,15 +254,15 @@ struct LauncherView: View {
         .onTapGesture { onConnect(server) }
         .contextMenu {
             Button { editorTarget = .edit(server) } label: {
-                Label("Editar", systemImage: "pencil")
+                Label("Edit", systemImage: "pencil")
             }
             if server.managerURL != nil {
                 Button { machinesTarget = server } label: {
-                    Label("Máquinas Docker", systemImage: "shippingbox")
+                    Label("Docker machines", systemImage: "shippingbox")
                 }
             }
             Button(role: .destructive) { store.delete(server) } label: {
-                Label("Borrar", systemImage: "trash")
+                Label("Delete", systemImage: "trash")
             }
         }
     }
@@ -231,10 +272,13 @@ struct LauncherView: View {
             editorTarget = .prefilled(Server(name: d.name, urlString: d.urlString))
         } label: {
             VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Image(systemName: "desktopcomputer")
+                HStack(alignment: .top) {
+                    let platform = HostPlatform.detect(d.name)
+                    Image(systemName: platform.symbol)
                         .font(.system(size: 34))
+                        .frame(width: 40, height: 40)
                         .foregroundStyle(.secondary)
+                        .accessibilityLabel(platform.label)
                     Spacer()
                     Image(systemName: "plus.circle.fill")
                         .font(.system(size: 22))
@@ -245,7 +289,7 @@ struct LauncherView: View {
                         .font(.title3.bold())
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text("Detectado en tu red — toca para añadir")
+                    Text("Found on your network — tap to add")
                         .font(.caption)
                         .foregroundStyle(.cyan.opacity(0.8))
                 }
@@ -270,7 +314,7 @@ struct LauncherView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 30, weight: .semibold))
                     .foregroundStyle(.secondary)
-                Text("Añadir manualmente")
+                Text("Add manually")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
