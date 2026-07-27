@@ -8,14 +8,39 @@ import UniformTypeIdentifiers
 final class LocalStore: ObservableObject {
     struct Folder: Identifiable, Codable {
         let id: UUID
-        let name: String
+        var name: String
         let bookmark: Data
+        /// Opcional a propósito: los montajes guardados por versiones
+        /// anteriores no lo traen, y un campo no opcional haría fallar la
+        /// decodificación entera — se perderían todos los permisos.
+        var provider: CloudProvider?
+
+        var kind: CloudProvider { provider ?? .folder }
     }
 
     @Published private(set) var folders: [Folder] = []
     private var openScopes: [UUID: URL] = [:]
 
-    init() { load() }
+    /// Montajes de nube (Drive, OneDrive…) y carpetas normales, por separado:
+    /// la barra lateral los muestra en secciones distintas, como Archivos.
+    var mounts: [Folder] { folders.filter { $0.kind.isCloud } }
+    var plainFolders: [Folder] { folders.filter { !$0.kind.isCloud } }
+
+    init() {
+        load()
+        restoreAll()
+    }
+
+    /// Resuelve **todos** los marcadores al arrancar.
+    ///
+    /// No es solo para pintar la barra lateral: al resolverlos se registran
+    /// las raíces concedidas, y sin ese registro cualquier ruta interior de un
+    /// montaje (la que llega en un arrastre o en una vista previa) se
+    /// rechazaría por falta de permiso hasta que el usuario pulsara antes en
+    /// la nube correspondiente.
+    func restoreAll() {
+        for folder in folders { _ = url(for: folder) }
+    }
 
     private func load() {
         guard let data = UserDefaults.standard.data(forKey: "localFolders"),
@@ -39,11 +64,27 @@ final class LocalStore: ObservableObject {
         guard let bookmark = try? url.bookmarkData(options: .minimalBookmark,
                                                    includingResourceValuesForKeys: nil,
                                                    relativeTo: nil) else { return false }
-        let folder = Folder(id: UUID(), name: url.lastPathComponent, bookmark: bookmark)
+        let provider = CloudProvider.detect(url)
+        let folder = Folder(id: UUID(),
+                            name: provider.suggestedName(for: url),
+                            bookmark: bookmark,
+                            provider: provider)
         folders.removeAll { $0.name == folder.name }
         folders.append(folder)
         persist()
+        // el permiso vale desde ya, sin reiniciar
+        _ = self.url(for: folder)
         return true
+    }
+
+    /// Renombrar el montaje: la única forma de distinguir dos cuentas del
+    /// mismo servicio, porque el sistema no expone a cuál pertenece la ruta.
+    func rename(_ folder: Folder, to name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, let index = folders.firstIndex(where: { $0.id == folder.id })
+        else { return }
+        folders[index].name = clean
+        persist()
     }
 
     func remove(_ folder: Folder) {
@@ -78,7 +119,8 @@ final class LocalStore: ObservableObject {
                                                       includingResourceValuesForKeys: nil,
                                                       relativeTo: nil),
            let index = folders.firstIndex(where: { $0.id == folder.id }) {
-            folders[index] = Folder(id: folder.id, name: folder.name, bookmark: renewed)
+            folders[index] = Folder(id: folder.id, name: folder.name,
+                                    bookmark: renewed, provider: folder.provider)
             persist()
         }
         staleFolders.remove(folder.id)

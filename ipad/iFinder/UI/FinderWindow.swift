@@ -20,6 +20,10 @@ struct FinderWindow: View {
     @State private var selectedSidebar: String?
     /// Foco del teclado en el área de archivos (lo necesitan las flechas)
     @FocusState private var contentFocused: Bool
+    /// Montaje que se está renombrando y ayuda para montar una nube
+    @State private var renamingMount: LocalStore.Folder?
+    @State private var mountName = ""
+    @State private var showMountHelp = false
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     /// En ventanas estrechas la interfaz se simplifica (Split View pequeño)
@@ -41,6 +45,36 @@ struct FinderWindow: View {
         }
         .navigationSplitViewStyle(.balanced)
         .newFileAlert(model)
+        // Renombrar el montaje: dos cuentas del mismo servicio solo se
+        // distinguen por el nombre que les ponga el usuario.
+        .alert("Nombre en la barra lateral",
+               isPresented: Binding(get: { renamingMount != nil },
+                                    set: { if !$0 { renamingMount = nil } })) {
+            TextField("Ej.: OneDrive – Yachay Tech", text: $mountName)
+            Button("Guardar") {
+                if let mount = renamingMount { local.rename(mount, to: mountName) }
+                renamingMount = nil
+            }
+            Button("Cancelar", role: .cancel) { renamingMount = nil }
+        }
+        // Guía para montar: el selector no puede abrirse ya dentro de Drive,
+        // así que se explica el camino antes de mostrarlo.
+        .alert("Montar una nube", isPresented: $showMountHelp) {
+            Button("Abrir selector") {
+                pickerStart = nil
+                showFolderPicker = true
+            }
+            Button("Cancelar", role: .cancel) { }
+        } message: {
+            Text("""
+            Necesitas la app del servicio instalada y con la sesión iniciada \
+            (Google Drive, OneDrive…).
+
+            En el selector: toca «Explorar», luego el servicio en la barra \
+            lateral, y elige la carpeta que quieras montar. Si no aparece, \
+            actívalo en Explorar › ••• › Editar.
+            """)
+        }
         // Los menús de la barra superior operan sobre la ventana con foco:
         // esta línea es lo que se lo dice. Con dos ventanas abiertas, cada
         // una publica la suya y "Nueva carpeta" cae en la carpeta correcta.
@@ -104,21 +138,20 @@ struct FinderWindow: View {
 
     private var sidebar: some View {
         List(selection: $selectedSidebar) {
+            // Nubes montadas: Drive, OneDrive de cada universidad, Dropbox…
+            if !local.mounts.isEmpty {
+                Section {
+                    ForEach(local.mounts) { mount in
+                        mountRow(mount)
+                    }
+                } header: {
+                    Text("Nubes").macSidebarSectionHeader()
+                }
+            }
+
             Section {
-                ForEach(local.folders) { folder in
-                    Button {
-                        if let url = local.url(for: folder) { Task { await openLocal(url) } }
-                    } label: {
-                        SidebarRow(title: folder.name, systemImage: "folder.fill",
-                                   tint: Color(red: 0.35, green: 0.62, blue: 0.95))
-                    }
-                    .buttonStyle(.plain)
-                    .macSidebarRowInsets()
-                    .contextMenu {
-                        Button(role: .destructive) { local.remove(folder) } label: {
-                            Label("Quitar de la barra lateral", systemImage: "minus.circle")
-                        }
-                    }
+                ForEach(local.plainFolders) { folder in
+                    mountRow(folder)
                 }
                 Button {
                     Task { await openLocal(documentsURL) }
@@ -150,6 +183,14 @@ struct FinderWindow: View {
                 }
                 .buttonStyle(.plain)
                 .macSidebarRowInsets()
+                Button {
+                    showMountHelp = true
+                } label: {
+                    SidebarRow(title: "Montar nube…", systemImage: "externaldrive.badge.plus",
+                               tint: .cyan)
+                }
+                .buttonStyle(.plain)
+                .macSidebarRowInsets()
             } header: {
                 Text("Ubicaciones").macSidebarSectionHeader()
             }
@@ -170,6 +211,35 @@ struct FinderWindow: View {
         }
         .macSidebarStyle()
         .navigationTitle("iFinder")
+    }
+
+    /// Fila de una nube montada o de una carpeta concedida.
+    @ViewBuilder
+    private func mountRow(_ folder: LocalStore.Folder) -> some View {
+        let stale = local.staleFolders.contains(folder.id)
+        Button {
+            if let url = local.url(for: folder) {
+                Task { await openLocal(url) }
+            } else {
+                // el proveedor invalidó el permiso: hay que volver a concederlo
+                pickerStart = nil
+                showFolderPicker = true
+            }
+        } label: {
+            SidebarRow(title: folder.name,
+                       systemImage: stale ? "exclamationmark.triangle.fill" : folder.kind.icon,
+                       tint: stale ? .orange : folder.kind.tint)
+        }
+        .buttonStyle(.plain)
+        .macSidebarRowInsets()
+        .contextMenu {
+            Button { renamingMount = folder; mountName = folder.name } label: {
+                Label("Renombrar", systemImage: "pencil")
+            }
+            Button(role: .destructive) { local.remove(folder) } label: {
+                Label("Quitar de la barra lateral", systemImage: "minus.circle")
+            }
+        }
     }
 
     // MARK: - Contenido

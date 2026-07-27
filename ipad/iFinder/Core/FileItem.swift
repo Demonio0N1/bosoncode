@@ -16,6 +16,8 @@ struct FileItem: Identifiable, Hashable, Sendable {
     /// Solo en la nube (OneDrive, Drive, iCloud…) mientras no se descargue
     let isRemoteOnly: Bool
     let isDownloading: Bool
+    /// Lo gestiona un File Provider: puede descargarse y volver a liberarse
+    let isUbiquitous: Bool
 
     var id: String { url.path }
 
@@ -27,6 +29,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
         self.modified = values?.contentModificationDate
         self.type = values?.contentType
         self.isDownloading = values?.ubiquitousItemIsDownloading ?? false
+        self.isUbiquitous = values?.isUbiquitousItem ?? false
         if values?.isUbiquitousItem == true {
             self.isRemoteOnly = values?.ubiquitousItemDownloadingStatus == .notDownloaded
         } else {
@@ -44,6 +47,7 @@ struct FileItem: Identifiable, Hashable, Sendable {
         self.type = UTType(filenameExtension: (name as NSString).pathExtension)
         self.isRemoteOnly = false
         self.isDownloading = false
+        self.isUbiquitous = false
     }
 
     // MARK: - Presentación

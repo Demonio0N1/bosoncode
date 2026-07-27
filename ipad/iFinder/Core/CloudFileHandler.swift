@@ -121,6 +121,17 @@ actor CloudFileHandler {
         }
     }
 
+    /// Devuelve el archivo a la nube y recupera el espacio en el iPad.
+    ///
+    /// Es la operación inversa de `materialize`: el archivo sigue en el
+    /// listado, pero vuelve a ser un marcador de posición. Solo tiene sentido
+    /// en elementos gestionados por un File Provider.
+    func evict(_ url: URL) throws {
+        try Self.withAccess(url) {
+            try FileManager.default.evictUbiquitousItem(at: url)
+        }
+    }
+
     // MARK: - Lecturas coordinadas con plazo
 
     /// Lista un directorio de un proveedor externo sin colgar la interfaz.

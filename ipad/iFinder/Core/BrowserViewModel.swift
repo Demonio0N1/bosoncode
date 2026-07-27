@@ -416,6 +416,25 @@ final class BrowserViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Contenido bajo demanda (Drive, OneDrive, iCloud)
+
+    /// Baja el archivo al iPad sin abrirlo.
+    func downloadNow(_ item: FileItem) async {
+        downloadingName = item.name
+        defer { downloadingName = nil }
+        do {
+            try await CloudFileHandler.shared.materialize(item.url)
+            await reload()
+        } catch {
+            self.error = "No se pudo descargar \(item.name): \(error.localizedDescription)"
+        }
+    }
+
+    /// Lo devuelve a la nube y recupera el espacio.
+    func freeUpSpace(_ item: FileItem) async {
+        await run { try await CloudFileHandler.shared.evict(item.url) }
+    }
+
     /// Doble clic: abre, y **sin enseñar ningún menú**.
     ///
     /// iPadOS no permite lanzar un archivo en "su app por defecto" sin pasar

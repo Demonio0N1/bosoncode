@@ -24,6 +24,19 @@ struct FileContextMenu: ViewModifier {
             Button { model.quickLook(item) } label: {
                 Label("Vista rápida (espacio)", systemImage: "eye")
             }
+            // solo para elementos que gestiona un File Provider
+            if item.isUbiquitous, !item.isDirectory {
+                Divider()
+                if item.isRemoteOnly {
+                    Button { Task { await model.downloadNow(item) } } label: {
+                        Label("Descargar ahora", systemImage: "arrow.down.circle")
+                    }
+                } else {
+                    Button { Task { await model.freeUpSpace(item) } } label: {
+                        Label("Liberar espacio", systemImage: "icloud.slash")
+                    }
+                }
+            }
             Divider()
             Button { model.copySelection() } label: {
                 Label("Copiar", systemImage: "doc.on.doc")
