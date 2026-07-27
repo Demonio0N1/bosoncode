@@ -177,6 +177,29 @@ if [ ! -x "$IVSCODE_DIR/current/bin/code-server" ]; then
   echo "→ Instalado code-server v${VERSION} en $IVSCODE_DIR"
 fi
 
+# ---------- code-server linux para los contenedores (solo host macOS) ----------
+# Las máquinas Docker son Linux y montan el code-server del host en
+# /opt/code-server. Si el host es un Mac, ese binario es Mach-O y el contenedor
+# muere con "exec format error". Se baja una copia linux —una sola vez, y solo
+# si hay Docker— y el gestor monta esa.
+if [ "$PLATFORM" = macos ] && command -v docker >/dev/null 2>&1; then
+  CS_VER=$(basename "$(readlink "$IVSCODE_DIR/current" 2>/dev/null || echo "")" \
+           | sed -n 's/code-server-\([0-9][0-9.]*\)-.*/\1/p')
+  if [ -n "$CS_VER" ] && [ ! -x "$IVSCODE_DIR/code-server-${CS_VER}-linux-${ARCH}/bin/code-server" ]; then
+    echo "→ Descargando code-server linux-${ARCH} para las máquinas Docker…"
+    LTAR="code-server-${CS_VER}-linux-${ARCH}.tar.gz"
+    if curl -fL --progress-bar \
+        "https://github.com/coder/code-server/releases/download/v${CS_VER}/${LTAR}" \
+        -o "$IVSCODE_DIR/$LTAR"; then
+      tar -xzf "$IVSCODE_DIR/$LTAR" -C "$IVSCODE_DIR" && rm -f "$IVSCODE_DIR/$LTAR"
+    else
+      echo "⚠ No pude descargarlo: las máquinas Docker no arrancarán en este Mac."
+    fi
+  fi
+  [ -d "$IVSCODE_DIR/code-server-${CS_VER}-linux-${ARCH}" ] \
+    && ln -sfn "$IVSCODE_DIR/code-server-${CS_VER}-linux-${ARCH}" "$IVSCODE_DIR/linux-current"
+fi
+
 # ---------- extensiones por defecto (Jupyter, Python) ----------
 # Directorio AISLADO: si se usa el default, code-server mezcla las extensiones
 # del VS Code de escritorio (~/.vscode/extensions), builds para un motor más
@@ -462,7 +485,11 @@ HOST_DNS = sys.argv[1]
 PORT = int(sys.argv[2])
 HTTPS_PORT = int(sys.argv[3])   # puerto HTTPS canonico del host (app-bound)
 PASSWORD = open(os.path.expanduser("~/.ivscode/password")).read().strip()
-CS_DIR = os.path.expanduser("~/.ivscode/current")
+# En un host macOS, "current" es un code-server de macOS y no sirve dentro de
+# un contenedor Linux: serve.sh deja ahí una copia linux como "linux-current".
+CS_DIR = os.path.expanduser("~/.ivscode/linux-current") \
+    if os.path.isdir(os.path.expanduser("~/.ivscode/linux-current")) \
+    else os.path.expanduser("~/.ivscode/current")
 # carpeta compartida host<->maquinas: ~/ivscode-shared en el PC == /shared dentro
 SHARED_DIR = os.path.expanduser("~/ivscode-shared")
 os.makedirs(SHARED_DIR, exist_ok=True)
@@ -747,20 +774,31 @@ def _create_locked(name, osname):
     ]
     cmd = [IMAGES[osname], "/opt/code-server/bin/code-server",
            "--bind-addr", "0.0.0.0:8080", "--auth", "password", "--disable-telemetry"]
+    container = "ivsc_" + name
+
+    def _start(extra):
+        """Lanza el contenedor y confirma que sigue VIVO unos segundos despues.
+
+        No se mira el codigo de salida: docker 29 devuelve 0 aunque falle (el
+        mismo defecto del "permission denied"). Con --gpus all en un Mac deja
+        un contenedor creado y muerto, y fiandose del codigo el reintento sin
+        GPU no llegaba a ejecutarse nunca.
+        """
+        sh("docker", "run", "-d", *extra, *opts, *cmd)
+        for _ in range(6):
+            rc, state, _ = sh("docker", "inspect", "-f", "{{.State.Running}}", container)
+            if rc == 0 and state.strip() == "true":
+                return True
+            time.sleep(0.5)
+        return False
+
     try:
         # primero con GPU (RTX del host); si el runtime no lo soporta, sin GPU
-        rc, out, err = sh("docker", "run", "-d", "--gpus", "all", *opts, *cmd)
-        if rc != 0:
-            sh("docker", "rm", "-f", "ivsc_" + name)   # limpia el intento fallido
-            rc, out, err = sh("docker", "run", "-d", *opts, *cmd)
-        if rc != 0:
-            raise RuntimeError((err or out)[-400:])
-        # verificar que sigue viva: un contenedor que muere al instante (imagen
-        # incompatible) devolvia "ok" y aparecia como maquina rota
-        rc2, state, _ = sh("docker", "inspect", "-f", "{{.State.Running}}", "ivsc_" + name)
-        if rc2 == 0 and state.strip() != "true":
-            _, logs, _ = sh("docker", "logs", "--tail", "15", "ivsc_" + name)
-            raise RuntimeError("la maquina arranco y murio: " + logs[-300:])
+        if not _start(["--gpus", "all"]):
+            sh("docker", "rm", "-f", container)        # limpia el intento fallido
+            if not _start([]):
+                _, logs, _ = sh("docker", "logs", "--tail", "15", container)
+                raise RuntimeError("la maquina arranco y murio: " + (logs or "sin logs")[-300:])
         provision(name)
         mount(name, port)
     except BaseException:
