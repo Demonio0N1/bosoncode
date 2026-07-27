@@ -1,6 +1,20 @@
 import Foundation
 import UniformTypeIdentifiers
 
+enum FileServiceError: LocalizedError {
+    case invalidName
+    case cannotCreate(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidName:
+            return "Ese nombre no es válido. Escribe un nombre con su extensión, por ejemplo main.py"
+        case .cannotCreate(let name):
+            return "No se pudo crear \(name). Puede que la carpeta sea de solo lectura."
+        }
+    }
+}
+
 /// Capa de acceso a disco.
 ///
 /// Es un `actor`: **todo** el trabajo de FileManager ocurre fuera del hilo
@@ -37,6 +51,33 @@ actor FileService {
         let target = uniqueURL(directory.appendingPathComponent(name))
         try fm.createDirectory(at: target, withIntermediateDirectories: true)
         return target
+    }
+
+    /// Crea un archivo vacío (0 bytes) con la extensión que se pida.
+    ///
+    /// El nombre llega escrito a mano, así que se sanea antes de tocar el
+    /// disco: `/` es separador de rutas y `:` sigue siendo ilegal en el
+    /// Finder, de modo que "a/b.py" debe crear un archivo, no una carpeta.
+    /// Si ya existe uno igual, se numera como haría el Finder.
+    func createFile(in directory: URL, named name: String) throws -> URL {
+        let clean = Self.sanitized(name)
+        guard !clean.isEmpty else { throw FileServiceError.invalidName }
+
+        let target = uniqueURL(directory.appendingPathComponent(clean))
+        guard fm.createFile(atPath: target.path, contents: Data(), attributes: nil) else {
+            throw FileServiceError.cannotCreate(target.lastPathComponent)
+        }
+        return target
+    }
+
+    /// Deja el nombre en algo que el sistema de archivos acepta.
+    nonisolated static func sanitized(_ name: String) -> String {
+        var clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        for illegal in ["/", ":", "\0"] {
+            clean = clean.replacingOccurrences(of: illegal, with: "-")
+        }
+        // "." y ".." no son nombres válidos
+        return (clean == "." || clean == "..") ? "" : clean
     }
 
     func rename(_ url: URL, to newName: String) throws -> URL {

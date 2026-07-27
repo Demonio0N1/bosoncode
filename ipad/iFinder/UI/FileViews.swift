@@ -95,7 +95,7 @@ struct IconsView: View {
     var body: some View {
         GeometryReader { geo in
             ScrollViewReader { proxy in
-                grid
+                grid(viewportHeight: geo.size.height)
                     // las flechas arriba/abajo necesitan saber cuántas
                     // columnas hay para saltar una fila entera
                     .onChange(of: geo.size.width, initial: true) { _, width in
@@ -110,9 +110,13 @@ struct IconsView: View {
         }
     }
 
-    private var grid: some View {
+    private func grid(viewportHeight: CGFloat) -> some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 18) {
+            // el fondo va detrás de la rejilla y con la altura del visor: así
+            // el clic derecho funciona también donde no hay iconos
+            ZStack(alignment: .top) {
+                FolderBackground(model: model, minHeight: viewportHeight)
+                LazyVGrid(columns: columns, spacing: 18) {
                 ForEach(items) { item in
                     VStack(spacing: 6) {
                         ThumbnailView(item: item, size: CGSize(width: 52, height: 52))
@@ -139,8 +143,9 @@ struct IconsView: View {
                     .fileContextMenu(model, item: item)
                     .fileDragAndDrop(model, item: item, level: level)
                 }
+                }
+                .padding(16)
             }
-            .padding(16)
         }
     }
 
@@ -166,11 +171,15 @@ struct DetailListView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            ScrollViewReader { proxy in
+            GeometryReader { geo in
+              ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(items) { item in
-                            row(item).id(item.id)
+                    ZStack(alignment: .top) {
+                        FolderBackground(model: model, minHeight: geo.size.height)
+                        LazyVStack(spacing: 0) {
+                            ForEach(items) { item in
+                                row(item).id(item.id)
+                            }
                         }
                     }
                 }
@@ -180,6 +189,7 @@ struct DetailListView: View {
                         withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
                     }
                 }
+              }
             }
         }
     }
@@ -288,7 +298,13 @@ struct ColumnsBrowserView: View {
 
     private func column(_ level: DirectoryLevel, index: Int) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .top) {
+                // solo la última columna acepta el menú de carpeta: es la
+                // que representa "la carpeta actual"
+                if index == model.levels.count - 1 {
+                    FolderBackground(model: model, minHeight: 600)
+                }
+                LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(grouped(model.visibleItems(at: index)), id: \.0) { group, items in
                     Text(group)
                         .font(.caption.weight(.semibold))
@@ -300,8 +316,9 @@ struct ColumnsBrowserView: View {
                         row(item, level: index, selected: level.selection.contains(item.id))
                     }
                 }
+                }
+                .padding(.bottom, 12)
             }
-            .padding(.bottom, 12)
         }
         .dropDestination(for: URL.self) { urls, _ in
             Task { await model.receive(urls, into: level.url, move: false) }

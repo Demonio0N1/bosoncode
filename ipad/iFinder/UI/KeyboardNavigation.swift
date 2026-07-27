@@ -20,11 +20,8 @@ struct ArrowKeyNavigation: ViewModifier {
             .onKeyPress(.downArrow) { move(.down) }
             .onKeyPress(.leftArrow) { move(.left) }
             .onKeyPress(.rightArrow) { move(.right) }
-            .onKeyPress(.return) {
-                guard enabled else { return .ignored }
-                Task { await model.openSelection() }
-                return .handled
-            }
+        // Intro NO se toca: en el Finder renombra, y ese atajo ya existe.
+        // Abrir es ⌘O / ⌘↓, como en macOS.
     }
 
     /// En la rejilla, arriba y abajo saltan una fila entera; en lista y en

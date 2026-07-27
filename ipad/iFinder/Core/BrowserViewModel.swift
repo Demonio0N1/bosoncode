@@ -54,6 +54,11 @@ final class BrowserViewModel: ObservableObject {
     /// Columnas que la rejilla de iconos tiene ahora mismo en pantalla; lo
     /// publica la propia vista y lo usan las flechas arriba/abajo.
     @Published var gridColumnCount = 1
+    /// Alerta de "archivo nuevo" y el nombre que se escribe en ella
+    @Published var creatingFile = false
+    @Published var newFileName = ""
+    /// Nombre que debe quedar seleccionado tras la próxima recarga
+    private var pendingSelection: String?
 
     enum SortKey: String, CaseIterable, Identifiable {
         case name, size, date, kind
@@ -231,6 +236,13 @@ final class BrowserViewModel: ObservableObject {
             } else if !levels.isEmpty {
                 levels[levels.count - 1].items = sorted
             }
+            // si acabamos de crear algo, queda seleccionado al recargar
+            if let name = pendingSelection, let index = levels.indices.last,
+               let created = levels[index].items.first(where: { $0.name == name }) {
+                levels[index].selection = [created.id]
+                inspecting = created
+                pendingSelection = nil
+            }
             watch(url)
         } catch {
             self.error = "No pude abrir \(url.lastPathComponent): \(error.localizedDescription)"
@@ -289,6 +301,32 @@ final class BrowserViewModel: ObservableObject {
     func newFolder() async {
         guard let url = currentURL else { return }
         await run { try await FileService.shared.createFolder(in: url, named: "carpeta sin título") }
+    }
+
+    // MARK: - Archivo nuevo en blanco
+
+    /// Muestra la alerta para escribir el nombre.
+    func beginNewFile() {
+        newFileName = ""
+        creatingFile = true
+    }
+
+    /// Crea el archivo vacío y deja la vista lista para trabajar con él.
+    ///
+    /// No hace falta recargar a mano: `run` llama a `reload()` en cuanto la
+    /// operación termina, así que el archivo aparece en la rejilla al
+    /// instante. (El observador de `DispatchSource` también lo detectaría,
+    /// pero con retardo; recargar aquí lo hace inmediato.)
+    func createFile() async {
+        guard let directory = currentURL else { return }
+        let name = newFileName
+        creatingFile = false
+
+        await run {
+            let created = try await FileService.shared.createFile(in: directory, named: name)
+            // se selecciona lo recién creado, como hace el Finder
+            await MainActor.run { self.pendingSelection = created.lastPathComponent }
+        }
     }
 
     func copySelection() {

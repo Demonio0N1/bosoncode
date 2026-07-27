@@ -40,6 +40,7 @@ struct FinderWindow: View {
             content
         }
         .navigationSplitViewStyle(.balanced)
+        .newFileAlert(model)
         // la ventana se adapta a cualquier tamaño de Stage Manager / Split View
         .frame(minWidth: 320, minHeight: 400)
         .preferredColorScheme(scheme)
@@ -323,6 +324,8 @@ struct FinderWindow: View {
             Button("") { Task { await model.duplicateSelection() } }.keyboardShortcut("d", modifiers: .command)
             Button("") { Task { await model.deleteSelection() } }.keyboardShortcut(.delete, modifiers: .command)
             Button("") { Task { await model.newFolder() } }.keyboardShortcut("n", modifiers: [.command, .shift])
+            Button("") { model.beginNewFile() }.keyboardShortcut("n", modifiers: .command)
+            Button("") { Task { await model.openSelection() } }.keyboardShortcut("o", modifiers: .command)
             Button("") { model.inspecting = model.selectedItems.first }.keyboardShortcut("i", modifiers: .command)
             Button("") {
                 if let item = model.selectedItems.first, !item.isDirectory { openPreview(item) }
