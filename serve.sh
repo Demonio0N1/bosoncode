@@ -509,6 +509,18 @@ with open(SETTINGS_FILE, "w") as _f:
         "window.autoDetectColorScheme": True,
     }, _f)
 
+def _docker_running():
+    """Hay demonio de Docker al otro lado, no solo el binario instalado.
+
+    Sin esto, con Docker Desktop cerrado el contenedor no llegaba a arrancar y
+    el usuario recibia "la maquina arranco y murio: sin logs", que no dice
+    nada del problema real. Se comprueba la version del SERVIDOR, no la del
+    cliente: el cliente responde aunque el demonio este parado.
+    """
+    rc, out, err = sh("docker", "info", "--format", "{{.ServerVersion}}", timeout=20)
+    return rc == 0 and out.strip() != "" and "cannot connect" not in (err or "").lower()
+
+
 def _docker_direct_ok():
     # OJO: docker 29 sale con codigo 0 aunque escriba "permission denied", asi
     # que hay que mirar tambien stderr o la sonda miente.
@@ -750,6 +762,10 @@ def free_port():
 _create_lock = threading.Lock()
 
 def create(name, osname):
+    if not _docker_running():
+        raise RuntimeError("Docker no esta en marcha en este equipo. "
+                           "Abrelo (Docker Desktop en macOS, 'systemctl start docker' "
+                           "en Linux) y vuelve a intentarlo.")
     if not re.fullmatch(r"[a-zA-Z0-9_-]{1,30}", name):
         raise ValueError("nombre invalido: usa letras, numeros, - o _")
     if osname not in IMAGES:
