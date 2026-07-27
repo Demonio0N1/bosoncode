@@ -407,6 +407,9 @@ struct DockerMachinesView: View {
     @State private var newName = ""
     @State private var newOS = "ubuntu"
     @State private var creating = false
+    /// Error de la creación: se enseña DENTRO de la hoja, que es lo que el
+    /// usuario está mirando; una alerta detrás no se ve.
+    @State private var createError: String?
 
     private var client: ManagerClient? {
         guard let url = server.managerURL,
@@ -449,7 +452,9 @@ struct DockerMachinesView: View {
                     Button("Cerrar") { dismiss() }
                 }
             }
-            .sheet(isPresented: $showCreate) { createSheet }
+            .sheet(isPresented: $showCreate) {
+                createSheet.onAppear { createError = nil }
+            }
             .alert("No se pudo completar la acción",
                    isPresented: Binding(get: { errorMsg != nil && !machines.isEmpty },
                                         set: { if !$0 { errorMsg = nil } })) {
@@ -580,6 +585,18 @@ struct DockerMachinesView: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
+                if let createError {
+                    Section {
+                        Label {
+                            Text(createError)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
                 Section {
                     Picker("Sistema operativo", selection: $newOS) {
                         Text("Ubuntu 24.04").tag("ubuntu")
@@ -644,17 +661,32 @@ struct DockerMachinesView: View {
     }
 
     private func createMachine() async {
-        guard let client else { return }
+        // Antes esto era `guard let client else { return }`: al pulsar "Crear"
+        // sin gestor no ocurría absolutamente nada, ni mensaje ni indicador.
+        guard let client else {
+            createError = "Este equipo no tiene gestor de máquinas. Comprueba que serve.sh esté corriendo y que la contraseña del equipo esté guardada."
+            return
+        }
         creating = true
+        var failure: String?
         do {
             try await client.create(name: newName.trimmingCharacters(in: .whitespaces), os: newOS)
             showCreate = false
             newName = ""
+            createError = nil
         } catch {
-            errorMsg = error.localizedDescription
+            failure = error.localizedDescription
         }
         creating = false
+
+        // El orden importa: refresh() pone errorMsg a nil cuando la consulta va
+        // bien, así que asignar el fallo ANTES lo borraba al instante. Ese era
+        // el motivo de que crear fallara en silencio.
         await refresh()
+        if let failure {
+            createError = failure     // visible dentro de la hoja, que sigue abierta
+            errorMsg = failure
+        }
     }
 
     /// Al eliminar la máquina, borra también su tarjeta guardada en el launcher.
