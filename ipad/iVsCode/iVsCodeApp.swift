@@ -79,11 +79,18 @@ struct WindowSizer: UIViewRepresentable {
             if scene.session.userInfo == nil { scene.session.userInfo = [:] }
             scene.session.userInfo?["ivscodeRole"] = "terminal"
             guard let restrictions = scene.sizeRestrictions else { return }
+            // Truco para fijar el tamaño INICIAL: iPadOS solo lo respeta si
+            // mínimo y máximo coinciden. Se suelta enseguida — mientras dure,
+            // la ventana no se puede redimensionar.
             restrictions.minimumSize = size
             restrictions.maximumSize = size
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
-                restrictions.minimumSize = CGSize(width: 320, height: 220)
-                restrictions.maximumSize = CGSize(width: 4000, height: 4000)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                // A partir de aquí, libertad total: mínimo pequeño de verdad,
+                // sin techo práctico y con pantalla completa permitida (sin
+                // esto último la ventana se niega a ocupar todo).
+                restrictions.minimumSize = CGSize(width: 240, height: 160)
+                restrictions.maximumSize = CGSize(width: 10000, height: 10000)
+                restrictions.allowsFullScreen = true
             }
         }
         return view
@@ -143,7 +150,9 @@ struct TerminalWindowView: View {
                 }
             }
         }
-        .ignoresSafeArea(edges: .bottom)
+        // antes solo se ignoraba abajo: arriba quedaba una banda del fondo de
+        // la escena, que es la "línea gris" del borde superior
+        .ignoresSafeArea()
         .background(WindowSizer(size: CGSize(width: 640, height: 420)))
         .onAppear {
             // iPadOS restaura la última ventana usada: si la app arranca

@@ -364,7 +364,12 @@ struct FloatingTerminal: View {
         Group {
             if fullscreen {
                 panelContent
-                    .background(Color(red: 0.08, green: 0.08, blue: 0.10).ignoresSafeArea())
+                    // el color del propio terminal: un gris fijo se veía como
+                    // una franja ajena en modo claro
+                    .background(
+                        Color(uiColor: MacTerminalTheme.palette(for: colorScheme).background)
+                            .ignoresSafeArea()
+                    )
             } else {
                 GeometryReader { geo in
                     panelContent
@@ -500,14 +505,6 @@ struct FloatingTerminal: View {
         .padding(.horizontal, 10)
         .frame(height: 28)
         .background(barBackground)
-        .overlay(alignment: .bottom) {
-            // Línea de un píxel real, no de un punto: en macOS la separación
-            // se intuye, no se ve. La gruesa partía la ventana en dos.
-            Rectangle()
-                .fill(colorScheme == .dark ? SwiftUI.Color.white.opacity(0.07)
-                                           : SwiftUI.Color.black.opacity(0.07))
-                .frame(height: 1 / UIScreen.main.scale)
-        }
         .contentShape(Rectangle())
         .gesture(
             fullscreen ? nil :
@@ -587,9 +584,11 @@ struct FloatingTerminal: View {
                 DragGesture(coordinateSpace: .global)
                     .onChanged { value in
                         if resizeStart == nil { resizeStart = size }
+                        // mínimo pequeño de verdad: 340×220 impedía dejar el
+                        // panel como una tira estrecha junto al editor
                         size = CGSize(
-                            width: max(340, (resizeStart?.width ?? 0) + value.translation.width),
-                            height: max(220, (resizeStart?.height ?? 0) + value.translation.height)
+                            width: max(240, (resizeStart?.width ?? 0) + value.translation.width),
+                            height: max(160, (resizeStart?.height ?? 0) + value.translation.height)
                         )
                     }
                     .onEnded { _ in resizeStart = nil }
