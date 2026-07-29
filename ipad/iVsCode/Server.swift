@@ -72,6 +72,31 @@ final class ServerStore: ObservableObject {
         Keychain.setPassword(password, for: host.id)
     }
 
+    /// Equipos físicos: todo lo que no es un contenedor montado en una ruta.
+    var hosts: [Server] { servers.filter { !$0.isDockerMachine } }
+
+    /// Contenedores que viven dentro de ese equipo.
+    func machines(of host: Server) -> [Server] {
+        servers.filter { $0.isDockerMachine && $0.sharesHost(with: host) }
+    }
+
+    /// Contenedores cuyo equipo no está guardado: sin esto desaparecerían de
+    /// la pantalla al agrupar por anfitrión.
+    var orphanMachines: [Server] {
+        servers.filter { machine in
+            machine.isDockerMachine && !hosts.contains { $0.sharesHost(with: machine) }
+        }
+    }
+
+    /// Alias local del equipo. Solo cambia cómo se ve en la app; el anuncio
+    /// mDNS del equipo sigue diciendo lo suyo.
+    func rename(_ server: Server, to name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, let index = servers.firstIndex(where: { $0.id == server.id })
+        else { return }
+        servers[index].name = clean
+    }
+
     var active: Server? {
         if let match = servers.first(where: { $0.id == activeID }) { return match }
         // activeID apuntaba a un servidor borrado: se corrige para que la UI

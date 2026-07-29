@@ -81,6 +81,28 @@ enum BosonCodeInfo {
     """
 }
 
+/// Marco de la tarjeta: fondo, borde y —si el equipo tiene contenedores— la
+/// sección plegable debajo, ya fuera del área que conecta al tocar.
+private struct CardChrome<Nested: View>: ViewModifier {
+    let active: Bool
+    let fill: Color
+    let stroke: Color
+    @ViewBuilder let nested: Nested
+
+    func body(content: Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content.padding(20)
+            nested
+        }
+        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+        .background(fill, in: RoundedRectangle(cornerRadius: 22))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(active ? Color.green.opacity(0.4) : stroke, lineWidth: 1.5)
+        )
+    }
+}
+
 /// Pantalla de inicio: tarjetas con las computadoras guardadas y detectadas.
 struct LauncherView: View {
     @ObservedObject var store: ServerStore
@@ -93,6 +115,11 @@ struct LauncherView: View {
     @State private var reachable: [UUID: Bool] = [:]
     /// Ventana inicial en la que el aviso de búsqueda tiene sentido
     @State private var scanning = true
+    /// Equipos con sus contenedores desplegados
+    @State private var expanded: Set<UUID> = []
+    /// Equipo que se está renombrando
+    @State private var renaming: Server?
+    @State private var renameText = ""
     @AppStorage("appearance") private var appearanceRaw = AppearanceMode.auto.rawValue
     /// La guía se enseña una sola vez; luego queda en el pie por si acaso
     @AppStorage("bosonWelcomeSeen") private var welcomeSeen = false
@@ -143,8 +170,15 @@ struct LauncherView: View {
                 VStack(spacing: 36) {
                     header
                     LazyVGrid(columns: columns, spacing: 20) {
-                        ForEach(store.servers) { server in
-                            savedCard(server)
+                        // Solo equipos: sus contenedores van DENTRO de la
+                        // tarjeta, no sueltos como si fueran otro ordenador.
+                        ForEach(store.hosts) { host in
+                            savedCard(host)
+                        }
+                        // contenedores cuyo equipo no está guardado: sin esto
+                        // desaparecerían de la pantalla
+                        ForEach(store.orphanMachines) { machine in
+                            savedCard(machine)
                         }
                         ForEach(newDiscoveries) { d in
                             discoveredCard(d)
@@ -215,6 +249,18 @@ struct LauncherView: View {
             discovery.start()
             checkReachability()
             if !welcomeSeen { showWelcome = true }
+        }
+        .alert("Nombre del equipo",
+               isPresented: Binding(get: { renaming != nil },
+                                    set: { if !$0 { renaming = nil } })) {
+            TextField("Ej.: Portátil del laboratorio", text: $renameText)
+            Button("Guardar") {
+                if let server = renaming { store.rename(server, to: renameText) }
+                renaming = nil
+            }
+            Button("Cancelar", role: .cancel) { renaming = nil }
+        } message: {
+            Text("Solo cambia cómo lo ves aquí; el equipo sigue anunciándose con su nombre.")
         }
         .sheet(isPresented: $showWelcome) {
             WelcomeGuide {
@@ -312,6 +358,85 @@ struct LauncherView: View {
         .padding(.horizontal, 40)
     }
 
+    /// Contenedores de este equipo, plegables dentro de su propia tarjeta.
+    @ViewBuilder
+    private func nestedMachines(_ host: Server) -> some View {
+        let machines = store.machines(of: host)
+        if !machines.isEmpty {
+            let open = expanded.contains(host.id)
+            VStack(spacing: 0) {
+                Divider().opacity(0.4)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        if open { expanded.remove(host.id) } else { expanded.insert(host.id) }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.bold())
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                        Text(machines.count == 1 ? "1 container" : "\(machines.count) containers")
+                            .font(.caption.weight(.medium))
+                        Spacer()
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 9)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if open {
+                    VStack(spacing: 6) {
+                        ForEach(machines) { machine in
+                            machineRow(machine, host: host)
+                        }
+                    }
+                    .padding(.bottom, 10)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+
+    /// Fila de un contenedor: nombre corto, sin repetir el del equipo.
+    private func machineRow(_ machine: Server, host: Server) -> some View {
+        let short = machine.name.components(separatedBy: " · ").first ?? machine.name
+        return Button { onConnect(machine) } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "shippingbox.fill")
+                    .font(.caption)
+                    .foregroundStyle(.cyan)
+                Text(short)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if machine.id == store.activeID {
+                    Circle().fill(.green).frame(width: 7, height: 7)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(machine.id == store.activeID ? Color.green.opacity(0.12)
+                                                     : Color.primary.opacity(0.05),
+                        in: RoundedRectangle(cornerRadius: 9))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button { renaming = machine; renameText = machine.name } label: {
+                Label("Rename…", systemImage: "character.cursor.ibeam")
+            }
+            Button { machinesTarget = host } label: {
+                Label("Manage…", systemImage: "shippingbox")
+            }
+            Button(role: .destructive) { store.delete(machine) } label: {
+                Label("Remove card", systemImage: "minus.circle")
+            }
+        }
+    }
+
     private func savedCard(_ server: Server) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
@@ -364,18 +489,19 @@ struct LauncherView: View {
                 }
             }
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
-        .background(cardFill, in: RoundedRectangle(cornerRadius: 22))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(server.id == store.activeID
-                        ? Color.green.opacity(0.4)
-                        : cardStroke, lineWidth: 1.5)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 22))
+        // El toque de conectar cubre la cabecera, NO la tarjeta entera: si no,
+        // pulsar un contenedor anidado conectaría con el equipo.
+        .contentShape(Rectangle())
         .onTapGesture { onConnect(server) }
+        .overlay(alignment: .bottom) { EmptyView() }
+        .modifier(CardChrome(active: server.id == store.activeID,
+                             fill: cardFill, stroke: cardStroke) {
+            nestedMachines(server)
+        })
         .contextMenu {
+            Button { renaming = server; renameText = server.name } label: {
+                Label("Rename…", systemImage: "character.cursor.ibeam")
+            }
             Button { editorTarget = .edit(server) } label: {
                 Label("Edit", systemImage: "pencil")
             }
