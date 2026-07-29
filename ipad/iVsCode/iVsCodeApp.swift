@@ -102,6 +102,9 @@ struct WindowSizer: UIViewRepresentable {
 /// La ventana principal debe poder ocupar toda la pantalla: si una escena
 /// heredó las restricciones pequeñas de una ventana-terminal, se relajan.
 struct MainWindowUnrestrictor: UIViewRepresentable {
+    /// Tamaño de partida del editor: amplio, como en un escritorio.
+    static let standardSize = CGSize(width: 1180, height: 820)
+
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         for delay in [0.2, 1.0] {
@@ -113,8 +116,20 @@ struct MainWindowUnrestrictor: UIViewRepresentable {
                 // sepa que ya existe VS Code y no abra otra
                 if scene.session.userInfo == nil { scene.session.userInfo = [:] }
                 scene.session.userInfo?["ivscodeRole"] = "main"
-                restrictions.minimumSize = CGSize(width: 480, height: 400)
-                restrictions.maximumSize = CGSize(width: 10000, height: 10000)
+
+                // iPadOS restaura el tamaño de la sesión anterior: si cerraste
+                // la app con la ventana encogida, reabría diminuta. La ventana
+                // principal debe nacer siempre cómoda, así que la primera
+                // pasada la fija (mínimo == máximo, único modo de que iPadOS
+                // respete un tamaño) y la segunda suelta las restricciones.
+                if delay < 0.5 {
+                    restrictions.minimumSize = Self.standardSize
+                    restrictions.maximumSize = Self.standardSize
+                } else {
+                    restrictions.minimumSize = CGSize(width: 480, height: 400)
+                    restrictions.maximumSize = CGSize(width: 10000, height: 10000)
+                    restrictions.allowsFullScreen = true
+                }
             }
         }
         return view

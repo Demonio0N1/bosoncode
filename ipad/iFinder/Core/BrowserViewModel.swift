@@ -390,10 +390,26 @@ final class BrowserViewModel: ObservableObject {
     /// Recibe elementos arrastrados desde otra app o desde otra carpeta.
     func receive(_ urls: [URL], into directory: URL, move: Bool) async {
         await run {
-            if move {
-                try await FileService.shared.move(urls, to: directory)
+            // Un arrastre desde el editor remoto no trae un archivo: trae una
+            // URL vscode-remote://, que FileManager no sabe abrir ("URL type
+            // vscode-remote isn't supported"). Hay que traerse el contenido
+            // por la API del equipo antes de tocar el disco.
+            var local: [URL] = []
+            for url in urls {
+                if url.isFileURL {
+                    local.append(url)
+                } else {
+                    local.append(try await RemoteDrop.materialize(url))
+                }
+            }
+            guard !local.isEmpty else { return }
+            // lo traído de fuera se copia siempre: "mover" borraría el
+            // temporal, no el archivo del equipo
+            let onlyRemote = local.allSatisfy { $0.path.hasPrefix(FileManager.default.temporaryDirectory.path) }
+            if move && !onlyRemote {
+                try await FileService.shared.move(local, to: directory)
             } else {
-                try await FileService.shared.copy(urls, to: directory)
+                try await FileService.shared.copy(local, to: directory)
             }
         }
     }
