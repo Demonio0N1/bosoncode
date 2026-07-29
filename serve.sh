@@ -285,9 +285,24 @@ CANON_URL=""
 # Puerto HTTPS del gestor de máquinas: fijo por convención, la app lo asume.
 MGR_HTTPS_PORT=9500
 if [ -n "$TS" ]; then
-  TS_DNS=$("$TS" status --json 2>/dev/null \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' \
-    2>/dev/null || true)
+  # Arrancando con el sistema, este script le gana la carrera a tailscaled: un
+  # segundo despues del boot aun no hay DNSName, `tailscale serve` falla y
+  # CANON_URL queda vacio. Sin CANON_URL no arrancan NI el gestor NI el canal
+  # del terminal, pero el editor sigue sirviendose con el mapeo de la sesion
+  # anterior — asi que todo parece bien hasta que abres ⌃⌥T y da "connection
+  # refused". Por eso se espera aqui en lugar de rendirse al primer intento.
+  TS_DNS=""
+  tries=0
+  while [ -z "$TS_DNS" ] && [ "$tries" -lt 30 ]; do
+    TS_DNS=$("$TS" status --json 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' \
+      2>/dev/null || true)
+    if [ -z "$TS_DNS" ]; then
+      [ "$tries" = 0 ] && echo "→ Esperando a que Tailscale esté listo…"
+      tries=$((tries + 1))
+      sleep 2
+    fi
+  done
   # el listener HTTPS lo abre tailscaled: debe ir en un puerto DISTINTO al de
   # code-server o chocan (EADDRINUSE). Si ya existe un mapeo hacia nuestro
   # puerto, se reutiliza (la URL no cambia entre reinicios).
@@ -305,11 +320,20 @@ if [ -n "$TS" ]; then
       HTTPS_PORT=$((HTTPS_PORT + 1))
     done
   fi
-  if [ -n "$TS_DNS" ] && "$TS" serve --bg --https="$HTTPS_PORT" "http://127.0.0.1:$PORT" >/dev/null 2>&1; then
-    CANON_URL="https://${TS_DNS}:${HTTPS_PORT}"
-  else
+  # tailscaled puede responder al status y no aceptar todavia un serve: se
+  # reintenta unas cuantas veces antes de darlo por imposible.
+  tries=0
+  while [ -n "$TS_DNS" ] && [ -z "$CANON_URL" ] && [ "$tries" -lt 10 ]; do
+    if "$TS" serve --bg --https="$HTTPS_PORT" "http://127.0.0.1:$PORT" >/dev/null 2>&1; then
+      CANON_URL="https://${TS_DNS}:${HTTPS_PORT}"
+    else
+      tries=$((tries + 1))
+      sleep 3
+    fi
+  done
+  if [ -z "$CANON_URL" ]; then
     echo "⚠ No pude configurar tailscale serve (¿falta 'tailscale set --operator=$USER'?)."
-    echo "  Los notebooks necesitan HTTPS; por http funcionará el resto del editor."
+    echo "  Sin HTTPS no hay notebooks, NI gestor de máquinas, NI terminal (⌃⌥T)."
   fi
 fi
 
