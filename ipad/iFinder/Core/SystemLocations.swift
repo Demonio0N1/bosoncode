@@ -18,7 +18,7 @@ import Foundation
 /// Una vez concedida, se guarda como montaje y las siguientes veces navega
 /// directo, que es justo lo que faltaba.
 enum SystemLocation: String, CaseIterable, Identifiable {
-    case onMyIPad, iCloudDrive, downloads
+    case onMyIPad, iCloudDrive, downloads, externalDrive
 
     var id: String { rawValue }
 
@@ -27,6 +27,7 @@ enum SystemLocation: String, CaseIterable, Identifiable {
         case .onMyIPad: return "En mi iPad"
         case .iCloudDrive: return "iCloud Drive"
         case .downloads: return "Descargas"
+        case .externalDrive: return "Unidad externa"
         }
     }
 
@@ -35,6 +36,7 @@ enum SystemLocation: String, CaseIterable, Identifiable {
         case .onMyIPad: return "ipad"
         case .iCloudDrive: return "icloud.fill"
         case .downloads: return "arrow.down.circle.fill"
+        case .externalDrive: return "externaldrive"
         }
     }
 
@@ -44,6 +46,11 @@ enum SystemLocation: String, CaseIterable, Identifiable {
         case .onMyIPad: return Self.documentsFolder
         case .downloads: return Self.downloadsFolder
         case .iCloudDrive: return Self.iCloudDocuments
+        // iPadOS NO expone /Volumes ni deja enumerar los discos conectados:
+        // el sandbox no los ve y no hay API para listarlos. La única vía es
+        // que el usuario elija la unidad una vez en el selector; después el
+        // marcador de seguridad la recuerda como cualquier otra ubicación.
+        case .externalDrive: return nil
         }
     }
 

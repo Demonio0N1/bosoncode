@@ -75,9 +75,11 @@ struct FinderWindow: View {
             Necesitas la app del servicio instalada y con la sesión iniciada \
             (Google Drive, OneDrive…).
 
-            En el selector: toca «Explorar», luego el servicio en la barra \
-            lateral, y elige la carpeta que quieras montar. Si no aparece, \
-            actívalo en Explorar › ••• › Editar.
+            En el selector: toca el servicio en la barra lateral, ENTRA en él y \
+            elige una carpeta de dentro. La raíz del servicio no se puede \
+            seleccionar — es una limitación de iPadOS, no de la app.
+
+            Si el servicio no aparece, actívalo en Explorar › ••• › Editar.
             """)
         }
         // Los menús de la barra superior operan sobre la ventana con foco:
@@ -97,12 +99,21 @@ struct FinderWindow: View {
         .background(shortcuts)
         // selector nativo de SwiftUI: acepta carpetas y archivos sueltos
         // Único punto de la app que abre el selector.
+        // Se aceptan carpetas Y archivos a propósito. Limitándolo a carpetas,
+        // iPadOS ATENÚA todo lo demás, y en la raíz de OneDrive o Drive casi
+        // todo son archivos: la pantalla parecía bloqueada. Si el usuario
+        // elige un archivo se le dice qué hacer, en vez de no dejarle tocar.
         .fileImporter(isPresented: $showFolderPicker,
-                      allowedContentTypes: [.folder],
+                      allowedContentTypes: [.folder, .item],
                       allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
+                guard isDirectory(url) else {
+                    model.error = "Eso es un archivo. Entra en la carpeta que quieras montar y elígela con «Abrir» — así ZeroSpin puede ver todo lo que hay dentro."
+                    pendingLocation = nil
+                    return
+                }
                 if let location = pendingLocation {
                     // venía de una ubicación del sistema: el nombre ya se sabe
                     save(url, as: location.title)
@@ -237,6 +248,15 @@ struct FinderWindow: View {
         }
         .macSidebarStyle()
         .navigationTitle("ZeroSpin")
+    }
+
+    /// ¿Es una carpeta? Se comprueba con el ámbito abierto: sin él, un
+    /// recurso de un proveedor externo responde que no existe.
+    private func isDirectory(_ url: URL) -> Bool {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+        return values?.isDirectory ?? false
     }
 
     /// Guarda el permiso con el nombre elegido y entra en la carpeta.
