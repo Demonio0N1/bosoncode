@@ -73,6 +73,19 @@ final class BrowserViewModel: ObservableObject {
     @Published var inspecting: FileItem?
     /// Archivo abierto en el editor propio
     @Published var editing: FileItem?
+    /// Nombre del archivo que se está enviando al equipo
+    @Published var sendingToBoson: String?
+
+    /// Sube el archivo al equipo y lo abre en BosonCode, donde sí hay kernel.
+    func runInBosonCode(_ item: FileItem) async {
+        sendingToBoson = item.name
+        defer { sendingToBoson = nil }
+        do {
+            _ = try await RunInBosonCode.run(item.url)
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
     @Published var quickLookURL: URL?
     /// Nombre del archivo que se está bajando de la nube (para el aviso)
     @Published var downloadingName: String?

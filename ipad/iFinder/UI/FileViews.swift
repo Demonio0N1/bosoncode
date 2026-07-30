@@ -29,6 +29,14 @@ struct FileContextMenu: ViewModifier {
                     Label("Editar", systemImage: "pencil.and.outline")
                 }
             }
+            // Notebooks y scripts: ejecutar significa mandarlo al equipo, que
+            // es donde vive el intérprete.
+            if !item.isDirectory,
+               ["ipynb", "py", "jl", "sh", "r"].contains(item.url.pathExtension.lowercased()) {
+                Button { Task { await model.runInBosonCode(item) } } label: {
+                    Label("Ejecutar en BosonCode", systemImage: "play.circle")
+                }
+            }
             // solo para elementos que gestiona un File Provider
             if item.isUbiquitous, !item.isDirectory {
                 Divider()

@@ -49,6 +49,8 @@ struct ContentView: View {
     /// Último terminal abierto, para descartar disparos duplicados del atajo
     @State private var lastTerminalOpen = Date.distantPast
     @State private var showSSH = false
+    /// Archivo que ZeroSpin pidió abrir (llega por bosoncode://)
+    @State private var pendingFile: String?
     @State private var connecting = true
     @AppStorage("appearance") private var appearanceRaw = AppearanceMode.auto.rawValue
     @Environment(\.colorScheme) private var systemScheme
@@ -64,7 +66,7 @@ struct ContentView: View {
             (systemScheme == .dark ? Color.black : Color(white: 0.96))
                 .ignoresSafeArea()
 
-            if let server = store.active, let url = server.url {
+            if let server = store.active, let url = editorURL(for: server) {
                 CodeWebView(
                     url: url,
                     dataStoreID: server.id,
@@ -282,6 +284,22 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(appearance.colorScheme)
+        // ZeroSpin manda aquí los archivos que quiere ejecutar: sube el
+        // archivo al equipo y nos pasa su ruta.
+        .onOpenURL { incoming in
+            guard incoming.scheme == "bosoncode",
+                  let comps = URLComponents(url: incoming, resolvingAgainstBaseURL: false)
+            else { return }
+            let items = comps.queryItems ?? []
+            if let raw = items.first(where: { $0.name == "server" })?.value,
+               let id = UUID(uuidString: raw),
+               store.servers.contains(where: { $0.id == id }) {
+                store.activeID = id
+            }
+            pendingFile = items.first(where: { $0.name == "file" })?.value
+            withAnimation { showLauncher = false }
+            reloadToken = UUID()          // recarga con ?file=
+        }
         // ⌃⌥T a nivel de VENTANA, no del editor.
         //
         // Antes vivía como UIKeyCommand dentro del WKWebView, que solo los
@@ -337,6 +355,21 @@ struct ContentView: View {
             guard !Task.isCancelled else { return }
             withAnimation { connecting = false }
         }
+    }
+
+    /// URL del editor, con el archivo que se pidió abrir si lo hay.
+    ///
+    /// code-server acepta `?file=` para abrir un archivo concreto al cargar;
+    /// así ZeroSpin puede mandar un notebook al equipo y que aparezca abierto,
+    /// sin que el usuario tenga que buscarlo en el explorador.
+    private func editorURL(for server: Server) -> URL? {
+        guard let base = server.url else { return nil }
+        guard let file = pendingFile, !file.isEmpty,
+              var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            return base
+        }
+        comps.queryItems = (comps.queryItems ?? []) + [URLQueryItem(name: "file", value: file)]
+        return comps.url ?? base
     }
 
     /// Abre el terminal como ventana propia de iPadOS.
