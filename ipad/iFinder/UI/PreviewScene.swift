@@ -94,11 +94,19 @@ struct SafeQuickLookView: View {
     var body: some View {
         Group {
             if let ready {
-                QuickLookPreview(url: ready, onClose: onClose)
-                    // el visor gestiona sus propios márgenes: debe ocupar todo
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea()
-                    .background(Color(uiColor: .systemBackground))
+                // Notebooks y código los enseña ZeroSpin: Quick Look los abre
+                // como texto plano y un .ipynb así es ilegible.
+                switch DocumentKind.of(url) {
+                case .notebook, .code:
+                    DocumentViewer(url: ready)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .other:
+                    QuickLookPreview(url: ready, onClose: onClose)
+                        // el visor gestiona sus propios márgenes: debe ocupar todo
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .ignoresSafeArea()
+                        .background(Color(uiColor: .systemBackground))
+                }
             } else if preparing {
                 VStack(spacing: 14) {
                     ProgressView()
