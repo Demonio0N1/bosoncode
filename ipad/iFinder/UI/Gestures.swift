@@ -69,18 +69,21 @@ extension View {
     func fileTapGestures(_ model: BrowserViewModel,
                          item: FileItem,
                          level: Int) -> some View {
+        // `.onTapGesture` en vez de un `ExclusiveGesture` montado a mano.
+        //
+        // El gesto explícito robaba el toque al ScrollView: SwiftUI dejaba de
+        // reconocer el arrastre como desplazamiento y el scroll se paraba en
+        // seco al levantar el dedo, sin inercia. Además, en filas altas se
+        // comía el segundo toque y el doble clic no llegaba.
+        //
+        // Declarando primero el de dos toques, SwiftUI le da prioridad y solo
+        // dispara uno de los dos — sin interferir con el desplazamiento.
         contentShape(Rectangle())
-            .gesture(
-                ExclusiveGesture(
-                    // 1º: doble clic → abrir, y nada más
-                    TapGesture(count: 2).onEnded {
-                        Task { await model.openDoubleClick(item, at: level) }
-                    },
-                    // 2º: clic simple → seleccionar
-                    TapGesture(count: 1).onEnded {
-                        Task { await model.select(item, at: level) }
-                    }
-                )
-            )
+            .onTapGesture(count: 2) {
+                Task { await model.openDoubleClick(item, at: level) }
+            }
+            .onTapGesture(count: 1) {
+                Task { await model.select(item, at: level) }
+            }
     }
 }

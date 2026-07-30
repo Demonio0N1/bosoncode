@@ -42,7 +42,31 @@ final class BrowserViewModel: ObservableObject {
     @Published var viewMode: ViewMode = .columns
     @Published var showHidden = false
     @Published var sortKey: SortKey = .name
-    @Published var busy = false
+    /// Operaciones en curso. Es un contador y no un booleano porque dos
+    /// tareas solapadas se pisaban: la primera en terminar apagaba el
+    /// indicador aunque la otra siguiera.
+    @Published private(set) var busy = false
+    private var busyCount = 0 {
+        didSet { busy = busyCount > 0 }
+    }
+    /// Red de seguridad: si algo no vuelve nunca —un proveedor que no
+    /// responde—, el indicador no se queda girando para siempre.
+    private var busyWatchdog: Task<Void, Never>?
+
+    private func beginWork() {
+        busyCount += 1
+        busyWatchdog?.cancel()
+        busyWatchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 45_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.busyCount = 0 }
+        }
+    }
+
+    private func endWork() {
+        busyCount = max(0, busyCount - 1)
+        if busyCount == 0 { busyWatchdog?.cancel(); busyWatchdog = nil }
+    }
     @Published var error: String?
     @Published var renaming: FileItem?
     @Published var renameText = ""
@@ -221,8 +245,8 @@ final class BrowserViewModel: ObservableObject {
     }
 
     private func load(_ url: URL, appending: Bool) async {
-        busy = true
-        defer { busy = false }
+        beginWork()
+        defer { endWork() }
         do {
             let items = isExternal(url)
                 ? try await CloudFileHandler.shared.list(url, showHidden: showHidden)
@@ -527,8 +551,8 @@ final class BrowserViewModel: ObservableObject {
 
     /// Envoltura común: marca ocupado, captura errores y recarga al terminar.
     private func run(_ work: @escaping () async throws -> Void) async {
-        busy = true
-        defer { busy = false }
+        beginWork()
+        defer { endWork() }
         do {
             try await work()
             await reload()

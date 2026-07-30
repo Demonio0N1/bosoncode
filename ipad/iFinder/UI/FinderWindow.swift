@@ -248,6 +248,9 @@ struct FinderWindow: View {
         }
         .macSidebarStyle()
         .navigationTitle("ZeroSpin")
+        // sin esto iPadOS reserva una barra de título alta que rompe la
+        // proporción de la ventana
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     /// ¿Es una carpeta? Se comprueba con el ámbito abierto: sin él, un

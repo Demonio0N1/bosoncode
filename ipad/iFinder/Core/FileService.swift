@@ -26,7 +26,7 @@ actor FileService {
 
     private let fm = FileManager.default
     private let keys: [URLResourceKey] = [
-        .nameKey, .localizedNameKey, .isDirectoryKey, .fileSizeKey,
+        .nameKey, .localizedNameKey, .isDirectoryKey, .fileSizeKey, .totalFileSizeKey, .creationDateKey,
         .contentModificationDateKey, .contentTypeKey,
         .isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey,
         .ubiquitousItemIsDownloadingKey,

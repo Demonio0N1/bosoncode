@@ -26,9 +26,16 @@ struct FileItem: Identifiable, Hashable, Sendable {
         // el localizado primero: traduce carpetas del sistema y nubes
         self.name = values?.localizedName ?? values?.name ?? url.lastPathComponent
         self.isDirectory = values?.isDirectory ?? false
-        self.size = Int64(values?.fileSize ?? 0)
-        self.modified = values?.contentModificationDate
-        self.type = values?.contentType
+        // Los proveedores externos (OneDrive, Drive) devuelven a menudo
+        // fileSize nulo y contentType genérico mientras el archivo no está
+        // materializado: por eso el inspector enseñaba "data" y "Zero KB".
+        // Se completa con lo que sí se sabe: el tamaño total y la extensión.
+        self.size = Int64(values?.fileSize ?? values?.totalFileSize ?? 0)
+        self.modified = values?.contentModificationDate ?? values?.creationDate
+        let declared = values?.contentType
+        let byExtension = UTType(filenameExtension: url.pathExtension)
+        self.type = (declared == nil || declared == .data || declared == .item)
+            ? (byExtension ?? declared) : declared
         self.isDownloading = values?.ubiquitousItemIsDownloading ?? false
         self.isUbiquitous = values?.isUbiquitousItem ?? false
         if values?.isUbiquitousItem == true {
@@ -81,7 +88,11 @@ struct FileItem: Identifiable, Hashable, Sendable {
     }
 
     var sizeLabel: String {
-        isDirectory ? "--" : ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+        if isDirectory { return "--" }
+        // 0 puede significar "vacío" o "aún no lo sé" (archivo en la nube sin
+        // descargar). "Zero KB" en el inspector confundía; el guion es honesto.
+        guard size > 0 else { return isRemoteOnly ? "en la nube" : "—" }
+        return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
     }
 
     /// Distintivo de nube, como la nubecita del Finder

@@ -53,7 +53,7 @@ actor CloudFileHandler {
     }
 
     private static let listKeys: [URLResourceKey] = [
-        .nameKey, .localizedNameKey, .isDirectoryKey, .fileSizeKey, .contentModificationDateKey,
+        .nameKey, .localizedNameKey, .isDirectoryKey, .fileSizeKey, .totalFileSizeKey, .creationDateKey, .contentModificationDateKey,
         .contentTypeKey, .isUbiquitousItemKey,
         .ubiquitousItemDownloadingStatusKey, .ubiquitousItemIsDownloadingKey,
     ]
