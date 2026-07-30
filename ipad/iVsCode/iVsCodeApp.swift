@@ -38,10 +38,13 @@ enum TerminalScene {
     /// Abre una terminal nueva. Cada llamada genera su propio identificador de
     /// sesión, que es lo que hace que dos ventanas del MISMO equipo tengan
     /// shells independientes en lugar de compartir uno espejado.
-    static func open(serverID: UUID, sessionID: String = String(UUID().uuidString.prefix(8)).lowercased()) {
+    static func open(serverID: UUID,
+                     sessionID: String = String(UUID().uuidString.prefix(8)).lowercased(),
+                     sshTarget: String = "") {
         let activity = NSUserActivity(activityType: activityType)
         activity.targetContentIdentifier = activityType
-        activity.userInfo = ["serverID": serverID.uuidString, "sessionID": sessionID]
+        activity.userInfo = ["serverID": serverID.uuidString, "sessionID": sessionID,
+                             "sshTarget": sshTarget]
         let options = UIScene.ActivationRequestOptions()
         options.requestingScene = UIApplication.shared.connectedScenes.first { $0.activationState == .foregroundActive }
         // session: nil ⇒ SIEMPRE una ventana nueva
@@ -146,6 +149,7 @@ struct TerminalWindowView: View {
     /// Sesión propia de esta ventana. Se fija una vez y no cambia, así que al
     /// reconectar (o al volver de segundo plano) se reengancha a su shell.
     @State private var sessionID = String(UUID().uuidString.prefix(8)).lowercased()
+    @State private var sshTarget = ""
 
     private var server: Server? {
         let id = activityServerID ?? serverID
@@ -156,7 +160,8 @@ struct TerminalWindowView: View {
     var body: some View {
         Group {
             if let server {
-                FloatingTerminal(server: server, sessionID: sessionID, fullscreen: true) {}
+                FloatingTerminal(server: server, sessionID: sessionID,
+                                 sshTarget: sshTarget, fullscreen: true) {}
             } else {
                 ZStack {
                     Color(red: 0.08, green: 0.08, blue: 0.10)
@@ -184,6 +189,9 @@ struct TerminalWindowView: View {
             // iPadOS vuelve a su shell y no al de otra ventana
             if let incoming = activity.userInfo?["sessionID"] as? String, !incoming.isEmpty {
                 sessionID = incoming
+            }
+            if let target = activity.userInfo?["sshTarget"] as? String {
+                sshTarget = target
             }
         }
     }

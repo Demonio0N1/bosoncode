@@ -48,6 +48,7 @@ struct ContentView: View {
     @State private var showTerminal = false
     /// Último terminal abierto, para descartar disparos duplicados del atajo
     @State private var lastTerminalOpen = Date.distantPast
+    @State private var showSSH = false
     @State private var connecting = true
     @AppStorage("appearance") private var appearanceRaw = AppearanceMode.auto.rawValue
     @Environment(\.colorScheme) private var systemScheme
@@ -196,6 +197,11 @@ struct ContentView: View {
                                                        : "Abrir dentro de la app",
                                           systemImage: "rectangle.inset.filled")
                                 }
+                                Button {
+                                    showSSH = true
+                                } label: {
+                                    Label("Conectar por SSH…", systemImage: "network")
+                                }
                             }
                             .padding(.trailing, 12)
                             .padding(.bottom, 12)
@@ -259,6 +265,13 @@ struct ContentView: View {
                     }
                 )
                 .transition(.opacity)
+            }
+        }
+        .sheet(isPresented: $showSSH) {
+            if let server = store.active {
+                SSHConnectView(server: server) { target in
+                    TerminalScene.open(serverID: server.id, sshTarget: target)
+                }
             }
         }
         .sheet(isPresented: $showFilePicker) {

@@ -1129,6 +1129,18 @@ def _term_client(client):
         if not re.fullmatch(r"[a-zA-Z0-9_-]{0,32}", session):
             session = ""
         tmux_name = "ivscode-" + session if session else "ivscode"
+
+        # Salto SSH a otra maquina: lo ejecuta ESTE equipo, no el iPad.
+        #
+        # Es deliberado. El OpenSSH del host ya sabe de claves, known_hosts,
+        # agente y teclado-interactivo; meter un cliente SSH en la app seria
+        # reimplementar todo eso con menos garantias. Ademas la contrasena, si
+        # hace falta, la pide ssh dentro del terminal: la app nunca la ve ni la
+        # guarda.
+        ssh_target = str(req.get("ssh", "") or "").strip()
+        if ssh_target and not re.fullmatch(r"[A-Za-z0-9._@%+:-]{1,120}", ssh_target):
+            client.sendall(b"destino ssh invalido\r\n")
+            return
         if machine:
             if not re.fullmatch(r"[a-zA-Z0-9_-]+", machine):
                 return
@@ -1144,7 +1156,23 @@ def _term_client(client):
                 argv = ["sg", "docker", "-c", " ".join(shlex.quote(a) for a in argv)]
         else:
             # con tmux, la sesion sobrevive a desconexiones (reattach automatico)
-            if shutil.which("tmux"):
+            if ssh_target:
+                # -t fuerza pty en el destino: sin el, no hay editor ni prompt
+                # en color al otro lado.
+                ssh_cmd = ["ssh", "-t"]
+                if ":" in ssh_target and "@" in ssh_target:
+                    host_part, _, port = ssh_target.rpartition(":")
+                    if port.isdigit():
+                        ssh_cmd += ["-p", port]
+                        ssh_target = host_part
+                ssh_cmd.append(ssh_target)
+                if shutil.which("tmux"):
+                    _tmux_conf()
+                    argv = ["tmux", "-f", TMUX_CONF, "new-session", "-A",
+                            "-s", tmux_name] + ssh_cmd
+                else:
+                    argv = ssh_cmd
+            elif shutil.which("tmux"):
                 _tmux_conf()
                 argv = ["tmux", "-f", TMUX_CONF, "new-session", "-A", "-s", tmux_name]
             else:

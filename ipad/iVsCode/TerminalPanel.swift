@@ -15,6 +15,8 @@ final class PTYConnection: NSObject, TerminalViewDelegate {
     /// distintos: es lo que hace que sean shells independientes en vez de la
     /// misma sesión espejada.
     private let session: String
+    /// Destino `usuario@host[:puerto]`. Vacío = shell del propio equipo.
+    private let sshTarget: String
     private var manualClose = false
     private var reconnectScheduled = false
     /// Datos (teclas/resize) producidos antes de que el handshake viaje: se
@@ -32,11 +34,13 @@ final class PTYConnection: NSObject, TerminalViewDelegate {
     var onAuthFailure: (() -> Void)?
     private var sawAuthFailure = false
 
-    init(host: String, password: String, machine: String, session: String = "") {
+    init(host: String, password: String, machine: String,
+         session: String = "", sshTarget: String = "") {
         self.host = host
         self.password = password
         self.machine = machine
         self.session = session
+        self.sshTarget = sshTarget
     }
 
     deinit {
@@ -65,6 +69,7 @@ final class PTYConnection: NSObject, TerminalViewDelegate {
                     "password": self.password,
                     "machine": self.machine,
                     "session": self.session,
+                    "ssh": self.sshTarget,
                     "cols": cols, "rows": rows,
                 ]
                 if var data = try? JSONSerialization.data(withJSONObject: hello) {
@@ -336,6 +341,8 @@ struct FloatingTerminal: View {
     /// Sesión de tmux de ESTA ventana. Estable mientras la ventana viva, para
     /// que al reconectar se vuelva a enganchar al mismo shell.
     var sessionID: String = ""
+    /// Si no está vacío, el equipo salta por SSH a esta máquina.
+    var sshTarget: String = ""
     /// En Slide Over / ancho compacto la terminal llena toda la ventana
     var fullscreen: Bool = false
     var onClose: () -> Void
@@ -484,6 +491,14 @@ struct FloatingTerminal: View {
 
     /// Título como el de Terminal.app: "usuario — host — sesión — 80×24"
     private var titleText: String {
+        // El destino SSH manda en el título: saber a qué máquina estás
+        // escribiendo importa más que recordar por dónde saltaste.
+        if !sshTarget.isEmpty {
+            if let term = session?.terminalView?.getTerminal() {
+                return "\(sshTarget) — ssh — \(term.cols)×\(term.rows)"
+            }
+            return "\(sshTarget) — ssh"
+        }
         let name = server.dockerMachineName.isEmpty
             ? server.name
             : "\(server.dockerMachineName) — docker"
@@ -627,7 +642,8 @@ struct FloatingTerminal: View {
         let connection = PTYConnection(host: host,
                                        password: password,
                                        machine: server.dockerMachineName,
-                                       session: sessionID)
+                                       session: sessionID,
+                                       sshTarget: sshTarget)
         connection.onAuthFailure = { authFailed = true }
         session = connection
     }
