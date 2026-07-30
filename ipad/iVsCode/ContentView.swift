@@ -90,11 +90,7 @@ struct ContentView: View {
                     onFilePaste: {
                         Task { await filePaste(server: server) }
                     },
-                    onTerminalToggle: {
-                        // ⌃⌥T abre la terminal como ventana independiente de
-                        // iPadOS (no el panel dentro de la app)
-                        TerminalScene.open(serverID: server.id)
-                    },
+                    onTerminalToggle: nil,   // ⌃⌥T se atiende en la ventana
                     onLoading: { stillOnLogin in
                         withAnimation { connecting = stillOnLogin }
                     }
@@ -169,6 +165,31 @@ struct ContentView: View {
                             } primaryAction: {
                                 withAnimation { showLauncher = true }
                             }
+                            .padding(.trailing, 8)
+                            .padding(.bottom, 12)
+
+                            // Botón propio del terminal: un toque y listo. La
+                            // entrada del menú seguía existiendo, pero estaba a
+                            // dos toques y no se encontraba.
+                            Button {
+                                openTerminalWindow(for: server)
+                            } label: {
+                                Image(systemName: "terminal.fill")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.9))
+                                    .frame(width: 42, height: 42)
+                                    .background(.black.opacity(0.45), in: Circle())
+                                    .overlay(Circle().stroke(.white.opacity(0.15)))
+                            }
+                            .contextMenu {
+                                Button {
+                                    withAnimation { showTerminal.toggle() }
+                                } label: {
+                                    Label(showTerminal ? "Cerrar panel dentro de la app"
+                                                       : "Abrir dentro de la app",
+                                          systemImage: "rectangle.inset.filled")
+                                }
+                            }
                             .padding(.trailing, 12)
                             .padding(.bottom, 12)
                         }
@@ -241,6 +262,23 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(appearance.colorScheme)
+        // ⌃⌥T a nivel de VENTANA, no del editor.
+        //
+        // Antes vivía como UIKeyCommand dentro del WKWebView, que solo los
+        // recibe teniendo el foco: nada más entrar en una máquina, sin haber
+        // tocado el editor, el atajo no hacía nada. Aquí responde desde el
+        // primer instante, y comparte camino con el botón para que los dos
+        // hagan exactamente lo mismo.
+        .background(
+            Button("") {
+                if let server = store.active, !showLauncher {
+                    openTerminalWindow(for: server)
+                }
+            }
+            .keyboardShortcut("t", modifiers: [.control, .option])
+            .opacity(0)
+            .frame(width: 0, height: 0)
+        )
     }
 
     /// Pantalla nativa mientras el auto-login trabaja: la página de login de
@@ -279,6 +317,14 @@ struct ContentView: View {
             guard !Task.isCancelled else { return }
             withAnimation { connecting = false }
         }
+    }
+
+    /// Abre el terminal como ventana propia de iPadOS.
+    ///
+    /// Un solo camino para el botón y para ⌃⌥T: si cada uno hiciera lo suyo,
+    /// acabarían divergiendo.
+    private func openTerminalWindow(for server: Server) {
+        TerminalScene.open(serverID: server.id)
     }
 
     private func showToast(_ message: String) {
