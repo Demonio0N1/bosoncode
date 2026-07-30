@@ -33,6 +33,38 @@ enum SharedStorage {
     static var isShared: Bool { defaults !== UserDefaults.standard }
 }
 
+/// Qué equipo mira ESTA ventana.
+///
+/// Vivía dentro de `ServerStore`, que es un singleton, y por eso abrir una
+/// segunda ventana y cambiar de máquina cambiaba también la primera: las dos
+/// leían el mismo `activeID`. La lista de equipos SÍ debe ser común —es tu
+/// inventario, y guardarla dos veces sería peor— pero la selección es de cada
+/// ventana. Como cada escena crea su propio `@StateObject`, quedan aisladas
+/// sin más ceremonia.
+@MainActor
+final class WindowSession: ObservableObject {
+    @Published var activeID: UUID?
+
+    /// Arranca donde lo dejaste: la última selección se recuerda como valor
+    /// inicial, no como estado compartido.
+    init(initial: UUID? = ServerStore.shared.lastActiveID) {
+        activeID = initial
+    }
+
+    var active: Server? {
+        let store = ServerStore.shared
+        if let match = store.servers.first(where: { $0.id == activeID }) { return match }
+        return store.servers.first
+    }
+
+    /// Cambia de equipo en ESTA ventana y lo deja como preferencia para las
+    /// que se abran después.
+    func select(_ id: UUID?) {
+        activeID = id
+        ServerStore.shared.lastActiveID = id
+    }
+}
+
 /// Lista de servidores persistida en UserDefaults; contraseñas en el Llavero.
 final class ServerStore: ObservableObject {
     /// Instancia única: si cada ventana creara la suya, escribirían el mismo
@@ -42,8 +74,10 @@ final class ServerStore: ObservableObject {
     @Published var servers: [Server] {
         didSet { persist() }
     }
-    @Published var activeID: UUID? {
-        didSet { UserDefaults.standard.set(activeID?.uuidString, forKey: "activeServerID") }
+    /// Última selección, solo para que una ventana nueva no arranque en blanco.
+    /// NO es el estado activo de nadie: eso vive en `WindowSession`.
+    @Published var lastActiveID: UUID? {
+        didSet { SharedStorage.defaults.set(lastActiveID?.uuidString, forKey: "activeServerID") }
     }
 
     /// Contraseña que valida el **host**: la que esperan el gestor (puerto
@@ -114,15 +148,9 @@ final class ServerStore: ObservableObject {
         servers[index].name = clean
     }
 
+    /// Equipo por defecto para una ventana nueva.
     var active: Server? {
-        if let match = servers.first(where: { $0.id == activeID }) { return match }
-        // activeID apuntaba a un servidor borrado: se corrige para que la UI
-        // no muestre "conectado" a ninguna tarjeta mientras carga otra
-        let fallback = servers.first
-        if let fallback, activeID != fallback.id {
-            DispatchQueue.main.async { [weak self] in self?.activeID = fallback.id }
-        }
-        return fallback
+        servers.first { $0.id == lastActiveID } ?? servers.first
     }
 
     init() {
@@ -147,9 +175,9 @@ final class ServerStore: ObservableObject {
             servers = []
         }
         if let raw = defaults.string(forKey: "activeServerID"), let id = UUID(uuidString: raw) {
-            activeID = id
+            lastActiveID = id
         } else {
-            activeID = servers.first?.id
+            lastActiveID = servers.first?.id
         }
         migrateLegacyMachineURLs()
         persist()
@@ -182,8 +210,8 @@ final class ServerStore: ObservableObject {
                 Keychain.deletePassword(for: old.id)
             }
         }
-        if let active = activeID, !servers.contains(where: { $0.id == active }) {
-            activeID = servers.first?.id
+        if let active = lastActiveID, !servers.contains(where: { $0.id == active }) {
+            lastActiveID = servers.first?.id
         }
     }
 
@@ -198,14 +226,14 @@ final class ServerStore: ObservableObject {
         } else {
             Keychain.setPassword(password, for: server.id)
         }
-        if activeID == nil { activeID = server.id }
+        if lastActiveID == nil { lastActiveID = server.id }
     }
 
     func delete(_ server: Server) {
         servers.removeAll { $0.id == server.id }
         Keychain.deletePassword(for: server.id)
         WKWebsiteDataStore.remove(forIdentifier: server.id) { _ in }
-        if activeID == server.id { activeID = servers.first?.id }
+        if lastActiveID == server.id { lastActiveID = servers.first?.id }
     }
 
     private func persist() {

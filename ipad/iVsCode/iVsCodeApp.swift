@@ -9,7 +9,9 @@ struct BosonCodeApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        // Con id, `openWindow` puede pedir otra ventana igual. Cada una crea su
+        // propio WindowSession, así que miran máquinas distintas sin pisarse.
+        WindowGroup(id: MainScene.id) {
             ContentView()
                 .ignoresSafeArea()
                 .background(MainWindowUnrestrictor())
@@ -32,6 +34,10 @@ struct BosonCodeApp: App {
 /// Crea la ventana-terminal como una ESCENA nueva de iPadOS: aparece como una
 /// ventana independiente de la app (igual que arrastrar el icono para abrir una
 /// segunda ventana), no como un panel dentro de la ventana actual.
+enum MainScene {
+    static let id = "editor"
+}
+
 enum TerminalScene {
     static let activityType = "com.garyguaman.ivscode.terminal"
 

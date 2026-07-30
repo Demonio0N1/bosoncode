@@ -106,6 +106,8 @@ private struct CardChrome<Nested: View>: ViewModifier {
 /// Pantalla de inicio: tarjetas con las computadoras guardadas y detectadas.
 struct LauncherView: View {
     @ObservedObject var store: ServerStore
+    /// Qué mira la ventana que muestra este lanzador
+    @ObservedObject var session: WindowSession
     @StateObject private var discovery = ServerDiscovery()
     var canClose: Bool
     var onConnect: (Server) -> Void
@@ -300,7 +302,7 @@ struct LauncherView: View {
     }
 
     private func onConnectActive() {
-        if let active = store.active { onConnect(active) }
+        if let active = session.active { onConnect(active) }
     }
 
     private var header: some View {
@@ -420,13 +422,13 @@ struct LauncherView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                if machine.id == store.activeID {
+                if machine.id == session.activeID {
                     Circle().fill(.green).frame(width: 7, height: 7)
                 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(machine.id == store.activeID ? Color.green.opacity(0.12)
+            .background(machine.id == session.activeID ? Color.green.opacity(0.12)
                                                      : Color.primary.opacity(0.05),
                         in: RoundedRectangle(cornerRadius: 9))
             .contentShape(Rectangle())
@@ -473,7 +475,7 @@ struct LauncherView: View {
                     .lineLimit(1)
             }
             HStack {
-                if server.id == store.activeID {
+                if server.id == session.activeID {
                     Text("CONNECTED")
                         .font(.caption2.bold())
                         .foregroundStyle(.green)
@@ -502,7 +504,7 @@ struct LauncherView: View {
         .contentShape(Rectangle())
         .onTapGesture { onConnect(server) }
         .overlay(alignment: .bottom) { EmptyView() }
-        .modifier(CardChrome(active: server.id == store.activeID,
+        .modifier(CardChrome(active: server.id == session.activeID,
                              fill: cardFill, stroke: cardStroke) {
             nestedMachines(server)
         })

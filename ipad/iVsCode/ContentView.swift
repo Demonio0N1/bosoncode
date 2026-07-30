@@ -45,6 +45,10 @@ struct ContentView: View {
     @State private var toastToken = UUID()
     @State private var editorDropTargeted = false
     @State private var showFilePicker = false
+    /// Selección propia de ESTA ventana. Al ser un @StateObject, cada escena
+    /// crea la suya: es lo que hace que dos ventanas puedan mirar máquinas
+    /// distintas sin pisarse.
+    @StateObject private var session = WindowSession()
     @State private var showTerminal = false
     /// Último terminal abierto, para descartar disparos duplicados del atajo
     @State private var lastTerminalOpen = Date.distantPast
@@ -68,7 +72,7 @@ struct ContentView: View {
             (systemScheme == .dark ? Color.black : Color(white: 0.96))
                 .ignoresSafeArea()
 
-            if let server = store.active, let url = editorURL(for: server) {
+            if let server = session.active, let url = editorURL(for: server) {
                 CodeWebView(
                     url: url,
                     dataStoreID: server.id,
@@ -206,6 +210,12 @@ struct ContentView: View {
                                 } label: {
                                     Label("Conectar por SSH…", systemImage: "network")
                                 }
+                                Divider()
+                                Button {
+                                    openWindow(id: MainScene.id)
+                                } label: {
+                                    Label("Nueva ventana", systemImage: "macwindow.badge.plus")
+                                }
                             }
                             .padding(.trailing, 12)
                             .padding(.bottom, 12)
@@ -214,7 +224,7 @@ struct ContentView: View {
                 }
             }
 
-            if showTerminal, let server = store.active {
+            if showTerminal, let server = session.active {
                 // en Slide Over (ancho compacto) la terminal ocupa todo:
                 // la app se convierte en una terminal pura sobre otras apps
                 FloatingTerminal(server: server,
@@ -229,7 +239,7 @@ struct ContentView: View {
                 .transition(.scale(scale: 0.9).combined(with: .opacity))
             }
 
-            if connecting, !showLauncher, loadError == nil, let server = store.active {
+            if connecting, !showLauncher, loadError == nil, let server = session.active {
                 connectingOverlay(server.name)
             }
 
@@ -254,10 +264,11 @@ struct ContentView: View {
             if showLauncher {
                 LauncherView(
                     store: store,
-                    canClose: store.active != nil,
+                    session: session,
+                    canClose: session.active != nil,
                     onConnect: { server in
-                        let sameServer = store.activeID == server.id
-                        store.activeID = server.id
+                        let sameServer = session.activeID == server.id
+                        session.select(server.id)
                         // tocar el MISMO servidor tras un error también debe
                         // recargar (antes se quedaba con el overlay de error)
                         if !sameServer || loadError != nil {
@@ -272,14 +283,14 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showSSH) {
-            if let server = store.active {
+            if let server = session.active {
                 SSHConnectView(server: server) { target in
                     TerminalScene.open(serverID: server.id, sshTarget: target)
                 }
             }
         }
         .sheet(isPresented: $showFilePicker) {
-            if let server = store.active {
+            if let server = session.active {
                 FilePickerView(server: server) { path in
                     Task { await fileCopy(path: path, server: server) }
                 }
@@ -296,7 +307,7 @@ struct ContentView: View {
             if let raw = items.first(where: { $0.name == "server" })?.value,
                let id = UUID(uuidString: raw),
                store.servers.contains(where: { $0.id == id }) {
-                store.activeID = id
+                session.select(id)
             }
             pendingFile = items.first(where: { $0.name == "file" })?.value
             withAnimation { showLauncher = false }
@@ -311,7 +322,7 @@ struct ContentView: View {
         // hagan exactamente lo mismo.
         .background(
             Button("") {
-                if let server = store.active, !showLauncher {
+                if let server = session.active, !showLauncher {
                     openTerminalWindow(for: server)
                 }
             }
@@ -536,7 +547,7 @@ struct ContentView: View {
             Image(systemName: "wifi.exclamationmark")
                 .font(.system(size: 44))
                 .foregroundStyle(.orange)
-            Text("Sin conexión con \(store.active?.name ?? "el backend")")
+            Text("Sin conexión con \(session.active?.name ?? "el backend")")
                 .font(.title3.bold())
             Text(message)
                 .font(.footnote)
@@ -555,7 +566,7 @@ struct ContentView: View {
             // ruta /m-<n>/ desaparece del proxy, la petición cae en el editor
             // raíz y responde 401. El mensaje no dice nada, así que se ofrece
             // la salida aquí mismo.
-            if let active = store.active, active.isDockerMachine {
+            if let active = session.active, active.isDockerMachine {
                 Divider().frame(maxWidth: 260)
                 Text("Si borraste esta máquina en el equipo, su tarjeta ya no lleva a ninguna parte.")
                     .font(.caption)

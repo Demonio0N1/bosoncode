@@ -135,7 +135,7 @@ struct ServerEditorView: View {
                 // máquinas Docker de un PC comparten su clave). Nunca se
                 // prefila hacia un host distinto: un equipo desconocido
                 // anunciándose por Bonjour recibiría tu contraseña.
-                if password.isEmpty, let activeID = store.activeID,
+                if password.isEmpty, let activeID = store.lastActiveID,
                    let active = store.servers.first(where: { $0.id == activeID }),
                    let activeHost = URLComponents(string: active.urlString)?.host,
                    let newHost = URLComponents(string: urlString)?.host,
