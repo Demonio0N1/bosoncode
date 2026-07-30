@@ -46,6 +46,8 @@ struct ContentView: View {
     @State private var editorDropTargeted = false
     @State private var showFilePicker = false
     @State private var showTerminal = false
+    /// Último terminal abierto, para descartar disparos duplicados del atajo
+    @State private var lastTerminalOpen = Date.distantPast
     @State private var connecting = true
     @AppStorage("appearance") private var appearanceRaw = AppearanceMode.auto.rawValue
     @Environment(\.colorScheme) private var systemScheme
@@ -90,7 +92,12 @@ struct ContentView: View {
                     onFilePaste: {
                         Task { await filePaste(server: server) }
                     },
-                    onTerminalToggle: nil,   // ⌃⌥T se atiende en la ventana
+                    onTerminalToggle: {
+                        // Este camino es el que funciona con el foco DENTRO del
+                        // editor: ahí la página web se queda la tecla y el
+                        // atajo de la ventana no llega a verla.
+                        openTerminalWindow(for: server)
+                    },
                     onLoading: { stillOnLogin in
                         withAnimation { connecting = stillOnLogin }
                     }
@@ -321,9 +328,19 @@ struct ContentView: View {
 
     /// Abre el terminal como ventana propia de iPadOS.
     ///
-    /// Un solo camino para el botón y para ⌃⌥T: si cada uno hiciera lo suyo,
-    /// acabarían divergiendo.
+    /// Hay tres caminos hasta aquí y los tres hacen falta:
+    ///   · el botón flotante,
+    ///   · el UIKeyCommand del editor —el único que ve la tecla cuando el foco
+    ///     está dentro de la página web, que se la queda—,
+    ///   · el atajo de la ventana, que responde cuando el editor NO tiene el
+    ///     foco: nada más entrar en una máquina, por ejemplo.
+    ///
+    /// Con el foco en el editor pueden dispararse dos a la vez, así que se
+    /// ignoran los disparos repetidos: si no, ⌃⌥T abriría dos terminales.
     private func openTerminalWindow(for server: Server) {
+        let now = Date()
+        guard now.timeIntervalSince(lastTerminalOpen) > 0.6 else { return }
+        lastTerminalOpen = now
         TerminalScene.open(serverID: server.id)
     }
 
