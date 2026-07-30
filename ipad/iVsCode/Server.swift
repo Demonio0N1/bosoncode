@@ -16,6 +16,23 @@ struct Server: Identifiable, Codable, Equatable {
     var url: URL? { URL(string: urlString) }
 }
 
+/// Dónde viven los datos que BosonCode y ZeroSpin comparten.
+///
+/// Son dos apps distintas y cada una tiene su propio contenedor: sin un App
+/// Group, ZeroSpin no ve ni un solo equipo de los que has guardado en
+/// BosonCode — de ahí el "No hay ningún equipo conectado" aunque estuvieras
+/// conectado. El grupo les da un UserDefaults y un Llavero comunes.
+enum SharedStorage {
+    static let appGroup = "group.com.garyguaman.boson"
+    static let keychainGroup = "QJ2824WK6Q.com.garyguaman.boson"
+
+    /// Preferencias compartidas, con la de la app como respaldo por si el
+    /// grupo no estuviera disponible (perfil sin la capacidad).
+    static let defaults: UserDefaults = UserDefaults(suiteName: appGroup) ?? .standard
+
+    static var isShared: Bool { defaults !== UserDefaults.standard }
+}
+
 /// Lista de servidores persistida en UserDefaults; contraseñas en el Llavero.
 final class ServerStore: ObservableObject {
     /// Instancia única: si cada ventana creara la suya, escribirían el mismo
@@ -109,7 +126,17 @@ final class ServerStore: ObservableObject {
     }
 
     init() {
-        let defaults = UserDefaults.standard
+        let defaults = SharedStorage.defaults
+        // Traslado desde la época en que cada app guardaba lo suyo: si el
+        // almacén compartido está vacío pero el propio tiene datos, se copian
+        // una vez. Sin esto, activar el grupo parecería borrar los equipos.
+        if SharedStorage.isShared, defaults.data(forKey: "servers") == nil,
+           let legacy = UserDefaults.standard.data(forKey: "servers") {
+            defaults.set(legacy, forKey: "servers")
+            if let active = UserDefaults.standard.string(forKey: "activeServerID") {
+                defaults.set(active, forKey: "activeServerID")
+            }
+        }
         if let data = defaults.data(forKey: "servers"),
            let list = try? JSONDecoder().decode([Server].self, from: data) {
             servers = list
@@ -183,7 +210,7 @@ final class ServerStore: ObservableObject {
 
     private func persist() {
         if let data = try? JSONEncoder().encode(servers) {
-            UserDefaults.standard.set(data, forKey: "servers")
+            SharedStorage.defaults.set(data, forKey: "servers")
         }
     }
 }
@@ -193,24 +220,43 @@ enum Keychain {
 
     static func setPassword(_ password: String, for id: UUID) {
         deletePassword(for: id)
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: id.uuidString,
             kSecValueData as String: Data(password.utf8),
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
-        SecItemAdd(query as CFDictionary, nil)
+        // En el grupo compartido, para que ZeroSpin pueda leerla también.
+        query[kSecAttrAccessGroup as String] = SharedStorage.keychainGroup
+        if SecItemAdd(query as CFDictionary, nil) != errSecSuccess {
+            // sin la capacidad de Llavero compartido, se guarda como siempre
+            query.removeValue(forKey: kSecAttrAccessGroup as String)
+            SecItemAdd(query as CFDictionary, nil)
+        }
     }
 
     static func password(for id: UUID) -> String? {
-        let query: [String: Any] = [
+        // Primero el grupo compartido; si no está, el propio de la app —ahí
+        // viven las contraseñas guardadas antes de compartir— y en ese caso se
+        // copian al compartido para que la otra app las vea a partir de ahora.
+        if let shared = read(id: id, group: SharedStorage.keychainGroup) { return shared }
+        if let legacy = read(id: id, group: nil) {
+            setPassword(legacy, for: id)
+            return legacy
+        }
+        return nil
+    }
+
+    private static func read(id: UUID, group: String?) -> String? {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: id.uuidString,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
+        if let group { query[kSecAttrAccessGroup as String] = group }
         var result: AnyObject?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data else { return nil }
@@ -218,6 +264,19 @@ enum Keychain {
     }
 
     static func deletePassword(for id: UUID) {
+        // sin grupo: borra la del contenedor propio y la compartida
+        for group in [SharedStorage.keychainGroup, nil] {
+            var query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: id.uuidString,
+            ]
+            if let group { query[kSecAttrAccessGroup as String] = group }
+            SecItemDelete(query as CFDictionary)
+        }
+    }
+
+    private static func deleteLegacy(for id: UUID) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
