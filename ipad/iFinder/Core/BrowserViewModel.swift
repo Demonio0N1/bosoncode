@@ -387,9 +387,27 @@ final class BrowserViewModel: ObservableObject {
         await run { try await FileService.shared.duplicate(urls) }
     }
 
+    /// Mueve lo seleccionado a la papelera de ZeroSpin (no borra de golpe).
     func deleteSelection() async {
         let urls = selectedItems.map(\.url)
+        guard !urls.isEmpty else { return }
+        await run { _ = try await Trash.shared.move(urls) }
+        trashCount = await (try? Trash.shared.contents().count) ?? 0
+    }
+
+    /// Borrado definitivo, saltándose la papelera. Va en el menú aparte y con
+    /// confirmación: es la única acción de la app sin vuelta atrás.
+    func deleteForever() async {
+        let urls = selectedItems.map(\.url)
+        guard !urls.isEmpty else { return }
         await run { try await FileService.shared.delete(urls) }
+    }
+
+    /// Cuántos elementos hay en la papelera (para la barra lateral).
+    @Published var trashCount = 0
+
+    func refreshTrashCount() async {
+        trashCount = (try? await Trash.shared.contents().count) ?? 0
     }
 
     func compressSelection() async {

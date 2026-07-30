@@ -32,13 +32,17 @@ struct SidebarRow: View {
 
 extension View {
     /// Aplica el aspecto compacto de escritorio a una `List` de barra lateral.
-    func macSidebarStyle() -> some View {
+    ///
+    /// - Parameter width: ancho preferido. El rango es amplio a propósito: en
+    ///   macOS la barra lateral se arrastra a gusto, y limitarla a 60 puntos de
+    ///   margen —como estaba— hacía que el arrastre pareciera roto.
+    func macSidebarStyle(width: Double = 220) -> some View {
         self
             .listStyle(.sidebar)
             .environment(\.defaultMinListRowHeight, 26)      // 44 → 26 pt
             .scrollContentBackground(.hidden)
             .listSectionSpacing(.compact)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
+            .navigationSplitViewColumnWidth(min: 150, ideal: width, max: 420)
     }
 
     /// Encabezado de sección como el del Finder: pequeño, gris y sin mayúsculas.

@@ -11,6 +11,8 @@ struct FinderWindow: View {
 
     @AppStorage("finderAppearance") private var appearanceRaw = "auto"
     @AppStorage("finderColumnWidth") private var columnWidth: Double = 260
+    /// Ancho de la barra lateral, recordado entre sesiones
+    @AppStorage("finderSidebarWidth") private var sidebarWidth: Double = 220
     @AppStorage("finderOnboarded") private var onboarded = false
     @AppStorage("finderShowInspector") private var showInspector = true
 
@@ -24,6 +26,7 @@ struct FinderWindow: View {
     @State private var renamingMount: LocalStore.Folder?
     @State private var mountName = ""
     @State private var showMountHelp = false
+    @State private var showTrash = false
     /// Ubicación del sistema que espera permiso (si el selector viene de ahí)
     @State private var pendingLocation: SystemLocation?
     /// Carpeta recién elegida, a la espera de que el usuario la nombre
@@ -48,6 +51,8 @@ struct FinderWindow: View {
         } detail: {
             content
         }
+        // El ancho de la barra lateral lo controla el usuario y se recuerda:
+        // iPadOS solo respeta el rango si se le da explícitamente.
         .navigationSplitViewStyle(.balanced)
         .newFileAlert(model)
         // Renombrar el montaje: dos cuentas del mismo servicio solo se
@@ -124,17 +129,26 @@ struct FinderWindow: View {
                 // Se guarda YA, sin esperar a ningún diálogo: así la ubicación
                 // aparece en la barra lateral aunque la alerta se pierda. El
                 // nombre se puede corregir después, y de hecho se ofrece.
-                let suggested = location?.title ?? CloudProvider.detect(url).suggestedName(for: url)
+                // El nombre del servicio manda sobre la etiqueta de la fila
+                // que abrió el selector: entrar por "Unidad externa" y acabar
+                // con OneDrive guardado como "Unidad externa" es justo lo que
+                // hacía irreconocible el montaje en la barra lateral.
+                let detected = CloudProvider.detect(url)
+                let suggested = detected.isCloud ? detected.suggestedName(for: url)
+                                                 : (url.displayName.isEmpty ? (location?.title ?? "Carpeta")
+                                                                            : url.displayName)
                 guard local.add(url: url, name: suggested) else {
                     present { model.error = "No pude guardar el permiso de esa carpeta. Vuelve a elegirla desde la barra lateral del selector." }
                     return
                 }
                 Task { await openLocal(url) }
-                if location == nil {
-                    present {
-                        pendingName = suggested
-                        pendingURL = url          // abre la alerta de renombrado
-                    }
+                // Se pregunta SIEMPRE: la ruta de un proveedor externo suele
+                // ser un contenedor anónimo ("File Provider Storage"), así que
+                // ni detectándola se acierta con el nombre que el usuario
+                // reconocería.
+                present {
+                    pendingName = suggested
+                    pendingURL = url
                 }
             case .failure(let error):
                 present { model.error = error.localizedDescription }
@@ -152,6 +166,7 @@ struct FinderWindow: View {
         } message: {
             Text("Ya está añadida. Puedes cambiarle el nombre — así distingues dos cuentas del mismo servicio.")
         }
+        .sheet(isPresented: $showTrash) { TrashView(model: model) }
         .sheet(isPresented: Binding(get: { !onboarded }, set: { if !$0 { onboarded = true } })) {
             OnboardingView(onPick: { root in
                 onboarded = true
@@ -173,6 +188,7 @@ struct FinderWindow: View {
             Text(model.error ?? "")
         }
         .task { await openDefault() }
+        .task { await model.refreshTrashCount() }
         // las vistas (doble toque, menú contextual) piden la previa por aquí
         .onChange(of: model.previewRequest) { _, item in
             guard let item else { return }
@@ -239,6 +255,15 @@ struct FinderWindow: View {
                 }
                 .buttonStyle(.plain)
                 .macSidebarRowInsets()
+                Button {
+                    showTrash = true
+                } label: {
+                    SidebarRow(title: model.trashCount > 0 ? "Papelera (\(model.trashCount))" : "Papelera",
+                               systemImage: model.trashCount > 0 ? "trash.fill" : "trash",
+                               tint: .secondary)
+                }
+                .buttonStyle(.plain)
+                .macSidebarRowInsets()
             } header: {
                 Text("Ubicaciones").macSidebarSectionHeader()
             }
@@ -257,7 +282,7 @@ struct FinderWindow: View {
                 }
             }
         }
-        .macSidebarStyle()
+        .macSidebarStyle(width: sidebarWidth)
         .navigationTitle("ZeroSpin")
         // sin esto iPadOS reserva una barra de título alta que rompe la
         // proporción de la ventana
@@ -481,6 +506,11 @@ struct FinderWindow: View {
                     Text("Estrecha").tag(200.0)
                     Text("Normal").tag(260.0)
                     Text("Ancha").tag(340.0)
+                }
+                Picker("Barra lateral", selection: $sidebarWidth) {
+                    Text("Estrecha").tag(170.0)
+                    Text("Normal").tag(220.0)
+                    Text("Ancha").tag(300.0)
                 }
                 Picker("Apariencia", selection: $appearanceRaw) {
                     Label("Automático", systemImage: "circle.lefthalf.filled").tag("auto")
