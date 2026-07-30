@@ -106,40 +106,51 @@ struct FinderWindow: View {
         .fileImporter(isPresented: $showFolderPicker,
                       allowedContentTypes: [.folder, .item],
                       allowsMultipleSelection: false) { result in
+            let location = pendingLocation
+            pendingLocation = nil
+            pickerStart = nil
+
+            // TODO lo que se presente aquí va con retardo. Una alerta lanzada
+            // mientras el selector aún se está cerrando la descarta iPadOS EN
+            // SILENCIO: ni alerta de nombre, ni mensaje de error, nada — que
+            // es justo lo que se veía al pulsar "Open".
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
                 guard isDirectory(url) else {
-                    model.error = "Eso es un archivo. Entra en la carpeta que quieras montar y elígela con «Abrir» — así ZeroSpin puede ver todo lo que hay dentro."
-                    pendingLocation = nil
+                    present { model.error = "Eso es un archivo. Entra en la carpeta que quieras montar y elígela con «Abrir»." }
                     return
                 }
-                if let location = pendingLocation {
-                    // venía de una ubicación del sistema: el nombre ya se sabe
-                    save(url, as: location.title)
-                } else {
-                    // carpeta arbitraria: se pregunta cómo llamarla, porque el
-                    // sistema devuelve cosas como "File Provider Storage"
-                    pendingURL = url
-                    pendingName = CloudProvider.detect(url).suggestedName(for: url)
+                // Se guarda YA, sin esperar a ningún diálogo: así la ubicación
+                // aparece en la barra lateral aunque la alerta se pierda. El
+                // nombre se puede corregir después, y de hecho se ofrece.
+                let suggested = location?.title ?? CloudProvider.detect(url).suggestedName(for: url)
+                guard local.add(url: url, name: suggested) else {
+                    present { model.error = "No pude guardar el permiso de esa carpeta. Vuelve a elegirla desde la barra lateral del selector." }
+                    return
+                }
+                Task { await openLocal(url) }
+                if location == nil {
+                    present {
+                        pendingName = suggested
+                        pendingURL = url          // abre la alerta de renombrado
+                    }
                 }
             case .failure(let error):
-                model.error = error.localizedDescription
+                present { model.error = error.localizedDescription }
             }
-            pendingLocation = nil
-            pickerStart = nil
         }
         .alert("Nombre de la ubicación",
                isPresented: Binding(get: { pendingURL != nil },
                                     set: { if !$0 { pendingURL = nil } })) {
             TextField("Ej.: Google Drive", text: $pendingName)
             Button("Guardar") {
-                if let url = pendingURL { save(url, as: pendingName) }
+                if let folder = local.folders.last { local.rename(folder, to: pendingName) }
                 pendingURL = nil
             }
-            Button("Cancelar", role: .cancel) { pendingURL = nil }
+            Button("Dejar así", role: .cancel) { pendingURL = nil }
         } message: {
-            Text("Así aparecerá en la barra lateral.")
+            Text("Ya está añadida. Puedes cambiarle el nombre — así distingues dos cuentas del mismo servicio.")
         }
         .sheet(isPresented: Binding(get: { !onboarded }, set: { if !$0 { onboarded = true } })) {
             OnboardingView(onPick: { root in
@@ -253,13 +264,30 @@ struct FinderWindow: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
+    /// Presenta algo DESPUÉS de que el selector termine de cerrarse.
+    ///
+    /// Sin este respiro, iPadOS descarta la presentación sin avisar: hay dos
+    /// intentos de presentar a la vez y gana el que ya estaba.
+    private func present(_ action: @escaping () -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: action)
+    }
+
     /// ¿Es una carpeta? Se comprueba con el ámbito abierto: sin él, un
     /// recurso de un proveedor externo responde que no existe.
     private func isDirectory(_ url: URL) -> Bool {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
-        return values?.isDirectory ?? false
+        if let values = try? url.resourceValues(forKeys: [.isDirectoryKey]),
+           let isDir = values.isDirectory {
+            return isDir
+        }
+        // algunos proveedores no responden a los valores de recurso: se
+        // pregunta al FileManager antes de rendirse
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
+            return isDir.boolValue
+        }
+        return url.hasDirectoryPath
     }
 
     /// Guarda el permiso con el nombre elegido y entra en la carpeta.
