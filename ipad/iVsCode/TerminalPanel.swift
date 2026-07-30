@@ -230,12 +230,10 @@ enum MacTerminalTheme {
         let ansi: [SwiftTerm.Color]
     }
 
+    /// Paleta efectiva: la del tema elegido por el usuario, que solo mira el
+    /// modo claro/oscuro cuando está en "Automático".
     static func palette(for scheme: ColorScheme) -> Palette {
-        scheme == .dark
-            ? Palette(background: background, foreground: foreground,
-                      cursor: cursor, selection: selection, ansi: ansi)
-            : Palette(background: lightBackground, foreground: lightForeground,
-                      cursor: lightCursor, selection: lightSelection, ansi: lightAnsi)
+        TerminalTheme.current.palette(for: scheme)
     }
 
     /// Aplica la paleta a una terminal **ya viva**, sin recrearla: el búfer,
@@ -254,12 +252,10 @@ enum MacTerminalTheme {
         SwiftTerm.Color(red: UInt16(r * 257), green: UInt16(g * 257), blue: UInt16(b * 257))
     }
 
-    /// MesloLGS NF: la fuente de Powerlevel10k (incluye los glifos Nerd Font).
+    /// Tipografía elegida por el usuario (por defecto MesloLGS NF, la de
+    /// Powerlevel10k, que trae los glifos Nerd Font).
     static func font(size: CGFloat) -> UIFont {
-        UIFont(name: "MesloLGSNF-Regular", size: size)
-            ?? UIFont(name: "MesloLGS NF", size: size)
-            ?? UIFont(name: "Menlo", size: size)
-            ?? UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        TerminalTypeface.current.font(size: size)
     }
 }
 
@@ -270,6 +266,10 @@ struct SwiftTermView: UIViewRepresentable {
     /// Tema del sistema. Al ser una propiedad del representable, cambiarlo
     /// dispara `updateUIView` sobre la MISMA vista, no `makeUIView`.
     var colorScheme: ColorScheme = .dark
+    /// Identidad del aspecto elegido: cambiarla obliga a repintar, igual que
+    /// el tema del sistema. Sin esto, elegir otra paleta no se notaba hasta
+    /// cerrar y reabrir la ventana.
+    var appearanceID: String = TerminalTheme.current.rawValue + TerminalTypeface.current.rawValue
     var onFontSizeChange: ((CGFloat) -> Void)? = nil
 
     func makeUIView(context: Context) -> TerminalView {
@@ -296,8 +296,11 @@ struct SwiftTermView: UIViewRepresentable {
             uiView.font = MacTerminalTheme.font(size: fontSize)
         }
         // repintado en caliente al cambiar el tema del iPad
-        if context.coordinator.scheme != colorScheme {
+        if context.coordinator.scheme != colorScheme
+            || context.coordinator.appearanceID != appearanceID {
             context.coordinator.scheme = colorScheme
+            context.coordinator.appearanceID = appearanceID
+            uiView.font = MacTerminalTheme.font(size: fontSize)
             MacTerminalTheme.apply(MacTerminalTheme.palette(for: colorScheme), to: uiView)
         }
         if let mac = uiView as? MacTerminalView {
@@ -309,14 +312,20 @@ struct SwiftTermView: UIViewRepresentable {
         }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(scheme: colorScheme) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(scheme: colorScheme, appearanceID: appearanceID)
+    }
 
     /// Recuerda el último tema aplicado. Sin esta memoria, `updateUIView`
     /// reinstalaría la paleta en cada refresco (cambio de fuente, arrastre…),
     /// lo que provoca un parpadeo innecesario.
     final class Coordinator {
         var scheme: ColorScheme
-        init(scheme: ColorScheme) { self.scheme = scheme }
+        var appearanceID: String
+        init(scheme: ColorScheme, appearanceID: String) {
+            self.scheme = scheme
+            self.appearanceID = appearanceID
+        }
     }
 }
 
@@ -344,6 +353,11 @@ struct FloatingTerminal: View {
     @State private var center = CGPoint(x: 480, y: 340)
     @State private var size = CGSize(width: 600, height: 380)
     @AppStorage("terminalFontSize") private var fontSize: Double = 13
+    // Observarlas aquí es lo que hace que un cambio de tema repinte el
+    // terminal YA abierto: sin esto la vista no se recompone y el color nuevo
+    // no llegaba hasta cerrar y volver a abrir la ventana.
+    @AppStorage(TerminalTheme.storageKey) private var themeRaw = TerminalTheme.system.rawValue
+    @AppStorage(TerminalTypeface.storageKey) private var faceRaw = TerminalTypeface.meslo.rawValue
     @State private var centered = false
     @State private var dropMessage: String?
     @State private var dropTargeted = false
@@ -441,7 +455,8 @@ struct FloatingTerminal: View {
             } else if let session {
                 SwiftTermView(session: session,
                               fontSize: CGFloat(fontSize),
-                              colorScheme: colorScheme) { newSize in
+                              colorScheme: colorScheme,
+                              appearanceID: themeRaw + faceRaw) { newSize in
                     fontSize = Double(newSize)
                 }
                 .onDrop(of: ["public.data"], isTargeted: $dropTargeted) { providers in

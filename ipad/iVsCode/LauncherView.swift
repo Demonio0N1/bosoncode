@@ -124,6 +124,7 @@ struct LauncherView: View {
     /// La guía se enseña una sola vez; luego queda en el pie por si acaso
     @AppStorage("bosonWelcomeSeen") private var welcomeSeen = false
     @State private var showWelcome = false
+    @State private var showTerminalSettings = false
     @Environment(\.colorScheme) private var scheme
 
     private var isDark: Bool { scheme == .dark }
@@ -236,6 +237,12 @@ struct LauncherView: View {
                         }
                     }
                 }
+                Divider()
+                Button {
+                    showTerminalSettings = true
+                } label: {
+                    Label("Aspecto del terminal…", systemImage: "paintpalette")
+                }
             } label: {
                 Image(systemName: (AppearanceMode(rawValue: appearanceRaw) ?? .auto).icon)
                     .font(.system(size: 15, weight: .semibold))
@@ -262,6 +269,7 @@ struct LauncherView: View {
         } message: {
             Text("Solo cambia cómo lo ves aquí; el equipo sigue anunciándose con su nombre.")
         }
+        .sheet(isPresented: $showTerminalSettings) { TerminalSettingsView() }
         .sheet(isPresented: $showWelcome) {
             WelcomeGuide {
                 welcomeSeen = true
