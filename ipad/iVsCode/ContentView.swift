@@ -51,6 +51,8 @@ struct ContentView: View {
     @State private var showSSH = false
     /// Archivo que ZeroSpin pidió abrir (llega por bosoncode://)
     @State private var pendingFile: String?
+    /// Segundos esperando, solo para ajustar el mensaje
+    @State private var connectingSeconds = 0
     @State private var connecting = true
     @AppStorage("appearance") private var appearanceRaw = AppearanceMode.auto.rawValue
     @Environment(\.colorScheme) private var systemScheme
@@ -339,14 +341,47 @@ struct ContentView: View {
                         LinearGradient(colors: [.cyan, .blue],
                                        startPoint: .topLeading, endPoint: .bottomTrailing)
                     )
-                ProgressView()
                 Text("Conectando a \(name)…")
                     .font(.headline)
                     .foregroundStyle(.secondary)
+
+                // Barra continua, no un círculo: una línea que avanza deja
+                // claro que la app sigue trabajando, y aquí la espera puede
+                // ser larga si el equipo está por relé.
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .tint(.cyan)
+                    .frame(maxWidth: 260)
+
+                Text(elapsedHint)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .transition(.opacity)
+
+                Button {
+                    cancelConnection()
+                } label: {
+                    Label("Cancelar", systemImage: "xmark.circle")
+                        .font(.callout.weight(.medium))
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 9)
+                        .background(.primary.opacity(0.08), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.escape, modifiers: [])
+                .padding(.top, 4)
             }
         }
         .transition(.opacity)
         .task(id: reloadToken) {
+            connectingSeconds = 0
+            // cuenta aparte del tiempo de espera: solo alimenta el mensaje
+            Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    await MainActor.run { connectingSeconds += 1 }
+                }
+            }
             // red de seguridad: si en 10s no llegó el workbench (p. ej.
             // contraseña incorrecta), se muestra lo que haya
             try? await Task.sleep(nanoseconds: 10_000_000_000)
@@ -355,6 +390,26 @@ struct ContentView: View {
             guard !Task.isCancelled else { return }
             withAnimation { connecting = false }
         }
+    }
+
+    /// Aviso que aparece cuando la espera se alarga, para que el usuario sepa
+    /// que puede irse en vez de quedarse mirando.
+    private var elapsedHint: String {
+        connectingSeconds < 8 ? "Autenticando…"
+            : "Está tardando. Comprueba que el equipo esté encendido y en la red."
+    }
+
+    /// Corta el intento y vuelve a la lista de equipos.
+    ///
+    /// Se cambia la identidad de la vista web (`reloadToken`) para que SwiftUI
+    /// la destruya: es lo que aborta de verdad la carga en curso, en lugar de
+    /// dejarla trabajando detrás de la pantalla.
+    private func cancelConnection() {
+        connecting = false
+        loadError = nil
+        pendingFile = nil
+        reloadToken = UUID()
+        withAnimation { showLauncher = true }
     }
 
     /// URL del editor, con el archivo que se pidió abrir si lo hay.

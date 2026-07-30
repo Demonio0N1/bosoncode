@@ -13,6 +13,8 @@ struct FinderWindow: View {
     @AppStorage("finderColumnWidth") private var columnWidth: Double = 260
     /// Ancho de la barra lateral, recordado entre sesiones
     @AppStorage("finderSidebarWidth") private var sidebarWidth: Double = 220
+    /// Ancho del inspector, ajustable arrastrando su separador
+    @AppStorage("finderInspectorWidth") private var inspectorWidth: Double = 260
     @AppStorage("finderOnboarded") private var onboarded = false
     @AppStorage("finderShowInspector") private var showInspector = true
 
@@ -384,6 +386,12 @@ struct FinderWindow: View {
 
     private var content: some View {
         HStack(spacing: 0) {
+            // Asa de la barra lateral. NavigationSplitView no deja arrastrar su
+            // divisor, pero sí respeta el ancho ideal que se le dé: moviendo
+            // esta asa se cambia ese valor y la barra sigue al dedo.
+            if horizontalSizeClass == .regular, visibility != .detailOnly {
+                ResizableDivider(width: $sidebarWidth, range: 150...420, resetTo: 220)
+            }
             VStack(spacing: 0) {
                 toolbar
                 Divider()
@@ -406,10 +414,11 @@ struct FinderWindow: View {
             if showInspector,
                horizontalSizeClass == .regular,
                let selected = model.inspecting ?? model.selectedItems.first {
-                Divider()
+                ResizableDivider(width: $inspectorWidth, range: 200...520,
+                                 growsLeading: true, resetTo: 260)
                 InspectorPanel(model: model, item: selected,
                                onPreview: { openPreview($0) })
-                    .frame(width: 260)
+                    .frame(width: inspectorWidth)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
