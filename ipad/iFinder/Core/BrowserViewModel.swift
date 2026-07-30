@@ -475,10 +475,18 @@ final class BrowserViewModel: ObservableObject {
             await select(item, at: level)
             return
         }
-        if QLPreviewController.canPreview(item.url as NSURL) {
+        // Primero lo que ZeroSpin sabe enseñar por su cuenta. Quick Look dice
+        // que NO puede con un .ipynb —no conoce el tipo— y sin esta comprobación
+        // el doble clic caía en la lista de apps en vez de abrir el visor.
+        switch DocumentKind.of(item.url) {
+        case .notebook, .code:
             quickLook(item)
-        } else {
-            await openInDefaultApp(item)
+        case .other:
+            if QLPreviewController.canPreview(item.url as NSURL) {
+                quickLook(item)
+            } else {
+                await openInDefaultApp(item)
+            }
         }
     }
 

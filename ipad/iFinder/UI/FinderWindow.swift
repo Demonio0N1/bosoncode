@@ -349,21 +349,27 @@ struct FinderWindow: View {
         .modifier(ArrowKeyNavigation(model: model, enabled: model.renaming == nil))
         // Barra espaciadora = Quick Look, como en macOS. Se ignora cuando hay
         // un campo de texto activo (renombrar) para no tragarse los espacios.
-        .onKeyPress(.space) {
-            // no robar el espacio a un campo de texto (renombrar)
-            guard model.renaming == nil else { return .ignored }
-            // si la previa está abierta, la barra espaciadora la CIERRA,
-            // aunque no haya nada seleccionado (igual que en macOS)
-            // si ya hay una previa abierta, el espacio la cierra (como macOS)
-            if let open = previewState.openURLs.first {
-                dismissWindow(id: PreviewScene.id, value: open)
-                previewState.closed(open)
-                return .handled
-            }
-            guard let item = model.selectedItems.first, !item.isDirectory else { return .ignored }
-            openPreview(item)
-            return .handled
+        .onKeyPress(.space) { toggleQuickLook() ? .handled : .ignored }
+    }
+
+    /// Espacio: abre la vista rápida, o la cierra si ya está abierta.
+    ///
+    /// - Returns: `false` si no había nada que hacer, para que la tecla siga
+    ///   su camino (por ejemplo hacia un campo de texto).
+    @discardableResult
+    private func toggleQuickLook() -> Bool {
+        // no robarle el espacio a un campo de texto (renombrar)
+        guard model.renaming == nil else { return false }
+        // con una previa abierta, el espacio la cierra aunque no haya nada
+        // seleccionado, igual que en macOS
+        if let open = previewState.openURLs.first {
+            dismissWindow(id: PreviewScene.id, value: open)
+            previewState.closed(open)
+            return true
         }
+        guard let item = model.selectedItems.first, !item.isDirectory else { return false }
+        openPreview(item)
+        return true
     }
 
     /// Abre (o reutiliza) la ventana de vista previa con el archivo elegido.
@@ -467,6 +473,11 @@ struct FinderWindow: View {
             .keyboardShortcut(.downArrow, modifiers: .command)   // ⌘↓ abrir, como macOS
             Button("") { if let item = model.selectedItems.first { model.beginRename(item) } }
                 .keyboardShortcut(.return, modifiers: [])        // Intro renombra
+            // El espacio también aquí: .onKeyPress solo llega si el área de
+            // archivos tiene el foco, y basta tocar la barra lateral para
+            // perderlo. Este atajo vive en la ventana y siempre responde.
+            Button("") { toggleQuickLook() }
+                .keyboardShortcut(.space, modifiers: [])
         }
         .opacity(0)
         .frame(width: 0, height: 0)
