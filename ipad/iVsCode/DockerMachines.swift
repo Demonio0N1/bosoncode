@@ -13,7 +13,8 @@ struct DockerMachine: Identifiable, Codable, Equatable {
 
     var osLabel: String {
         ["ubuntu": "Ubuntu 24.04", "debian": "Debian 12",
-         "fedora": "Fedora 41", "arch": "Arch Linux"][os] ?? os
+         "fedora": "Fedora 41", "arch": "Arch Linux",
+         "slim": "Debian slim"][os] ?? os
     }
 }
 
@@ -410,7 +411,7 @@ struct DockerMachinesView: View {
     @State private var repairTarget: DockerMachine?
     @State private var showCreate = false
     @State private var newName = ""
-    @State private var newOS = "ubuntu"
+    @State private var newOS = "slim"
     @State private var creating = false
     /// Error de la creación: se enseña DENTRO de la hoja, que es lo que el
     /// usuario está mirando; una alerta detrás no se ve.
@@ -508,6 +509,38 @@ struct DockerMachinesView: View {
         }
     }
 
+    /// Crea una máquina ligera con nombre automático y entra en ella.
+    ///
+    /// Es el camino del vídeo de referencia: un toque y estás dentro. El resto
+    /// de opciones siguen en "Nueva máquina…" para quien quiera elegir.
+    private func quickDeploy() async {
+        guard let client else {
+            errorMsg = "Este equipo no tiene gestor de máquinas."
+            return
+        }
+        // nombre libre: dev, dev2, dev3…
+        let existing = Set(machines.map(\.name))
+        var name = "dev"
+        var index = 2
+        while existing.contains(name) { name = "dev\(index)"; index += 1 }
+
+        creating = true
+        var failure: String?
+        do {
+            try await client.create(name: name, os: "slim")
+        } catch {
+            failure = error.localizedDescription
+        }
+        creating = false
+        await refresh()
+        if let failure {
+            errorMsg = failure
+            return
+        }
+        // entrar en ella, que es a lo que se venía
+        if let created = machines.first(where: { $0.name == name }) { connect(created) }
+    }
+
     private var list: some View {
         List {
             Section {
@@ -516,6 +549,31 @@ struct DockerMachinesView: View {
                 }
             } footer: {
                 Text("Cada máquina es un contenedor Docker en \(server.name) con su propio VS Code. Su disco persiste aunque la detengas.")
+            }
+
+            Section {
+                Button {
+                    Task { await quickDeploy() }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "bolt.fill")
+                            .font(.title3)
+                            .foregroundStyle(.yellow)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Despliegue rápido").font(.headline)
+                            Text("Máquina ligera con VS Code, lista en segundos")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if creating { ProgressView() }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(creating)
+            } footer: {
+                Text("Crea un contenedor Debian slim con nombre automático y entra directamente. El VS Code lo aporta \(server.name), así que no se descarga nada.")
             }
         }
         .refreshable { await refresh() }
@@ -638,6 +696,7 @@ struct DockerMachinesView: View {
                 }
                 Section {
                     Picker("Sistema operativo", selection: $newOS) {
+                        Text("Ligera (Debian slim)").tag("slim")
                         Text("Ubuntu 24.04").tag("ubuntu")
                         Text("Debian 12").tag("debian")
                         Text("Fedora 41").tag("fedora")

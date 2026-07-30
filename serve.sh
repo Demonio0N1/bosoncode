@@ -587,6 +587,14 @@ DOCKER_VIA_SG = (sys.platform.startswith("linux")
                  and shutil.which("sg") is not None
                  and not _docker_direct_ok())
 IMAGES = {
+    # "slim" es la opcion ligera y la que usa el despliegue rapido: arranca en
+    # segundos y ocupa la mitad que ubuntu.
+    #
+    # No hay Alpine a proposito. El code-server que se monta desde el host trae
+    # su propio node con modulos nativos compilados contra glibc, y Alpine usa
+    # musl: sin gcompat da "no such file or directory" y CON gcompat sigue
+    # fallando ("Error relocating node: fcntl64: symbol not found"). Comprobado.
+    "slim": "debian:12-slim",
     "ubuntu": "ubuntu:24.04",
     "debian": "debian:12",
     "fedora": "fedora:41",
