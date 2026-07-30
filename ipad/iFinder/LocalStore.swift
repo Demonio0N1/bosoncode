@@ -79,16 +79,35 @@ final class LocalStore: ObservableObject {
                                                    includingResourceValuesForKeys: nil,
                                                    relativeTo: nil) else { return false }
         let provider = CloudProvider.detect(url)
+        // Se identifica el montaje por su RUTA, no por su nombre.
+        //
+        // Antes se descartaba cualquier montaje que se llamara igual, y dos
+        // cuentas del mismo servicio suelen llamarse igual: montar el OneDrive
+        // del segundo campus borraba el del primero sin decir nada. Además el
+        // permiso del que se iba quedaba abierto para siempre.
+        for old in folders where self.url(for: old)?.standardizedFileURL == url.standardizedFileURL {
+            stopAccess(old.id)
+            folders.removeAll { $0.id == old.id }
+        }
         let folder = Folder(id: UUID(),
-                            name: provider.suggestedName(for: url),
+                            name: uniqueName(provider.suggestedName(for: url)),
                             bookmark: bookmark,
                             provider: provider)
-        folders.removeAll { $0.name == folder.name }
         folders.append(folder)
         persist()
         // el permiso vale desde ya, sin reiniciar
         _ = self.url(for: folder)
         return true
+    }
+
+    /// "OneDrive", "OneDrive 2"… Dos cuentas del mismo servicio con la carpeta
+    /// raíz igual llegan aquí con el mismo nombre, y en la barra lateral serían
+    /// indistinguibles. Numerarlas deja al usuario renombrarlas después.
+    private func uniqueName(_ name: String) -> String {
+        guard folders.contains(where: { $0.name == name }) else { return name }
+        var index = 2
+        while folders.contains(where: { $0.name == "\(name) \(index)" }) { index += 1 }
+        return "\(name) \(index)"
     }
 
     /// Renombrar el montaje: la única forma de distinguir dos cuentas del

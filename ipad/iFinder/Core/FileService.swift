@@ -80,11 +80,21 @@ actor FileService {
         return (clean == "." || clean == "..") ? "" : clean
     }
 
+    /// Renombra y devuelve **dónde quedó de verdad**.
+    ///
+    /// Antes se movía a `uniqueURL(target)` pero se devolvía `target`: con un
+    /// archivo del mismo nombre ya presente, el resultado apuntaba a un sitio
+    /// equivocado. Y el nombre no pasaba por el saneado, así que renombrar a
+    /// "informes/2026.pdf" fallaba con un error del sistema en vez de crear un
+    /// archivo llamado "informes-2026.pdf".
     func rename(_ url: URL, to newName: String) throws -> URL {
-        let target = url.deletingLastPathComponent().appendingPathComponent(newName)
+        let clean = Self.sanitized(newName)
+        guard !clean.isEmpty else { throw FileServiceError.invalidName }
+        let target = url.deletingLastPathComponent().appendingPathComponent(clean)
         guard target != url else { return url }
-        try fm.moveItem(at: url, to: uniqueURL(target))
-        return target
+        let final = uniqueURL(target)
+        try fm.moveItem(at: url, to: final)
+        return final
     }
 
     func move(_ urls: [URL], to directory: URL) throws {

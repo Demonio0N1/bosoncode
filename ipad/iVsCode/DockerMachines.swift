@@ -300,6 +300,14 @@ struct FilePickerView: View {
         let provider = NSItemProvider()
         provider.suggestedName = name
         let type = UTType(filenameExtension: (name as NSString).pathExtension) ?? .data
+        // El cliente y la máquina se resuelven AQUÍ, en el hilo principal.
+        //
+        // El bloque de abajo lo llama iPadOS desde donde quiere, y leer allí
+        // `client` significaba tocar el Llavero y el almacén de servidores
+        // fuera del actor principal. Capturando ya los valores, el bloque solo
+        // hace la descarga.
+        let client = self.client
+        let machine = server.dockerMachineName
         provider.registerFileRepresentation(forTypeIdentifier: type.identifier,
                                             fileOptions: [],
                                             visibility: .all) { completion in
@@ -309,8 +317,7 @@ struct FilePickerView: View {
                         throw NSError(domain: "manager", code: 0,
                                       userInfo: [NSLocalizedDescriptionKey: "sin gestor"])
                     }
-                    let data = try await client.download(path: path,
-                                                         machine: server.dockerMachineName)
+                    let data = try await client.download(path: path, machine: machine)
                     let tmp = FileManager.default.temporaryDirectory
                         .appendingPathComponent(name)
                     try data.write(to: tmp)

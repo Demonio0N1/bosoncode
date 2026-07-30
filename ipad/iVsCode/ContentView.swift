@@ -109,6 +109,12 @@ struct ContentView: View {
                     },
                     onLoading: { stillOnLogin in
                         withAnimation { connecting = stillOnLogin }
+                        // El archivo que mandó ZeroSpin ya está abierto: se
+                        // olvida. Si se quedara puesto, CUALQUIER recarga
+                        // posterior —reconectar, cambiar de máquina— volvería a
+                        // pedir esa misma ruta, en un equipo donde puede que ni
+                        // exista.
+                        if !stillOnLogin { pendingFile = nil }
                     }
                 )
                 // incluir la URL en la identidad: si una tarjeta se repara
@@ -261,13 +267,19 @@ struct ContentView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            if showLauncher {
+            // Sin equipo no hay nada que enseñar: si el que miraba esta ventana
+            // se borró desde otra, se vuelve a la lista en vez de quedarse en
+            // una pantalla vacía.
+            if showLauncher || session.active == nil {
                 LauncherView(
                     store: store,
                     session: session,
                     canClose: session.active != nil,
                     onConnect: { server in
                         let sameServer = session.activeID == server.id
+                        // cambiar de equipo descarta el archivo pendiente: es
+                        // una ruta del equipo anterior
+                        if !sameServer { pendingFile = nil }
                         session.select(server.id)
                         // tocar el MISMO servidor tras un error también debe
                         // recargar (antes se quedaba con el overlay de error)
@@ -386,19 +398,23 @@ struct ContentView: View {
         .transition(.opacity)
         .task(id: reloadToken) {
             connectingSeconds = 0
-            // cuenta aparte del tiempo de espera: solo alimenta el mensaje
-            Task {
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    await MainActor.run { connectingSeconds += 1 }
-                }
+            // El contador y la espera comparten bucle a propósito.
+            //
+            // Antes el contador vivía en un `Task { }` suelto dentro de este.
+            // Una tarea así NO es hija de la que la crea: cancelar la vista no
+            // la cancelaba, su `Task.isCancelled` nunca era cierto y el bucle
+            // seguía despertando cada segundo para siempre. Cada intento de
+            // conexión dejaba uno más vivo.
+            //
+            // Diez vueltas son también la red de seguridad: si en 10s no llegó
+            // el workbench (contraseña mala, por ejemplo), se enseña lo que haya.
+            for _ in 0..<10 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                // la vista se retiró: no tocar el estado, o la pantalla
+                // "Conectando…" desaparecería antes de tiempo
+                guard !Task.isCancelled else { return }
+                connectingSeconds += 1
             }
-            // red de seguridad: si en 10s no llegó el workbench (p. ej.
-            // contraseña incorrecta), se muestra lo que haya
-            try? await Task.sleep(nanoseconds: 10_000_000_000)
-            // si la tarea se canceló (la vista se retiró), NO tocar el estado:
-            // si no, la pantalla "Conectando…" desaparecía antes de tiempo
-            guard !Task.isCancelled else { return }
             withAnimation { connecting = false }
         }
     }

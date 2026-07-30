@@ -11,6 +11,13 @@ final class WebContainerView: UIView {
     private var lastSize: CGSize = .zero
     private var resizeWork: DispatchWorkItem?
     private var watchdog: Timer?
+    /// Observadores de activación de escena, para poder retirarlos.
+    ///
+    /// El bloque queda registrado en el centro de notificaciones aunque la
+    /// vista muera, y aquí se crea una vista por conexión: reconectar, cambiar
+    /// de máquina o recargar dejaba dos observadores más vivos cada vez, todos
+    /// despertando en cada cambio de ventana.
+    var sceneObservers: [NSObjectProtocol] = []
 
     /// Vigilante: la página puede quedarse con un viewport viejo sin que cambie
     /// el marco (pasa al activar otra ventana de la app). Se compara lo que la
@@ -31,11 +38,11 @@ final class WebContainerView: UIView {
         // tener el editor dibujado corto.
         let expected = bounds.height
         let js = "(document.querySelector('.monaco-workbench')||document.body).getBoundingClientRect().height"
-        let webH = webView.bounds.height
         webView.evaluateJavaScript(js) { [weak self] value, _ in
             guard let self else { return }
             let used = (value as? CGFloat) ?? -1
-            print("[vp] contenedor=\(Int(expected)) webview=\(Int(webH)) workbench=\(Int(used))")
+            // Aquí había una traza que se imprimía cada 1,5 s por cada ventana
+            // abierta, también en la app publicada.
             if used > 0, abs(used - expected) > 24 { self.forceViewportRefresh() }
         }
     }
@@ -63,7 +70,10 @@ final class WebContainerView: UIView {
         }
     }
 
-    deinit { watchdog?.invalidate() }
+    deinit {
+        watchdog?.invalidate()
+        sceneObservers.forEach(NotificationCenter.default.removeObserver)
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -367,7 +377,8 @@ struct CodeWebView: UIViewRepresentable {
         container.startWatchdog()
         // al volver a primer plano (p. ej. tras abrir la ventana-terminal) la
         // página también debe recalcular su tamaño
-        for name in [UIScene.didActivateNotification, UIScene.willDeactivateNotification] {
+        container.sceneObservers = [UIScene.didActivateNotification,
+                                    UIScene.willDeactivateNotification].map { name in
             NotificationCenter.default.addObserver(
                 forName: name, object: nil, queue: .main
             ) { [weak container] _ in
@@ -463,9 +474,14 @@ struct CodeWebView: UIViewRepresentable {
         /// Pide el token de descarga al gestor e instala el interceptor de
         /// arrastre para que salga el archivo y no un .txt con la ruta.
         private func installDragOut(in webView: WKWebView) {
+            // La del HOST: el gestor lo atiende el equipo, no el contenedor.
+            // Con la propia de la máquina la petición del token se iba en 401 y
+            // el interceptor no llegaba a instalarse, así que arrastrar un
+            // archivo fuera del editor de un contenedor seguía dando un .txt
+            // con la ruta en lugar del archivo.
             guard let server = serverForDragOut,
                   let mgr = server.managerURL,
-                  let pw = Keychain.password(for: server.id) else { return }
+                  let pw = ServerStore.shared.hostPassword(for: server) else { return }
             Task {
                 do {
                     let client = ManagerClient(baseURL: mgr, password: pw)

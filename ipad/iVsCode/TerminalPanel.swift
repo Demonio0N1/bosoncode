@@ -424,8 +424,11 @@ struct FloatingTerminal: View {
 
     /// Sube los archivos soltados desde Archivos/Fotos a la sesión actual.
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        // Igual que en el editor: la subida la atiende el gestor del EQUIPO, y
+        // ese valida la contraseña del equipo. Con la del contenedor, soltar un
+        // archivo sobre la terminal de una máquina Docker se iba en 401.
         guard let mgrURL = server.managerURL,
-              let pw = Keychain.password(for: server.id) else { return false }
+              let pw = ServerStore.shared.hostPassword(for: server) else { return false }
         let client = ManagerClient(baseURL: mgrURL, password: pw)
         let machine = server.dockerMachineName
         for provider in providers {

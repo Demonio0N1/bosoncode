@@ -51,10 +51,18 @@ final class WindowSession: ObservableObject {
         activeID = initial
     }
 
+    /// El equipo de esta ventana, o nada si el que había ya no existe.
+    ///
+    /// Antes, no encontrarlo caía en `servers.first`. Eso hacía que borrar una
+    /// máquina desde otra ventana convirtiera esta —en silencio, sin cambiar
+    /// nada en pantalla— en una ventana de OTRO equipo. Devolver nil es más
+    /// honesto: la ventana vuelve a la lista y eliges tú.
+    ///
+    /// Sin selección todavía (arranque sin nada guardado) sí vale el primero.
     var active: Server? {
         let store = ServerStore.shared
-        if let match = store.servers.first(where: { $0.id == activeID }) { return match }
-        return store.servers.first
+        guard let activeID else { return store.servers.first }
+        return store.servers.first { $0.id == activeID }
     }
 
     /// Cambia de equipo en ESTA ventana y lo deja como preferencia para las
@@ -302,14 +310,5 @@ enum Keychain {
             if let group { query[kSecAttrAccessGroup as String] = group }
             SecItemDelete(query as CFDictionary)
         }
-    }
-
-    private static func deleteLegacy(for id: UUID) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: id.uuidString,
-        ]
-        SecItemDelete(query as CFDictionary)
     }
 }
