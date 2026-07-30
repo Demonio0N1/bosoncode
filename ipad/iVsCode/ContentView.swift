@@ -364,12 +364,16 @@ struct ContentView: View {
     /// sin que el usuario tenga que buscarlo en el explorador.
     private func editorURL(for server: Server) -> URL? {
         guard let base = server.url else { return nil }
-        guard let file = pendingFile, !file.isEmpty,
-              var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
-            return base
-        }
-        comps.queryItems = (comps.queryItems ?? []) + [URLQueryItem(name: "file", value: file)]
-        return comps.url ?? base
+        guard let file = pendingFile, !file.isEmpty else { return base }
+
+        // Cargar directamente `/?file=…` NO funciona: code-server redirige al
+        // login y, tras autenticarse, vuelve a `/` perdiendo la consulta — el
+        // archivo llegaba al equipo pero el editor abría vacío. La vía es
+        // pasar por el login con `?to=`, que sí se respeta tras autenticar.
+        var login = URLComponents(url: base.appendingPathComponent("login"),
+                                  resolvingAgainstBaseURL: false)
+        login?.queryItems = [URLQueryItem(name: "to", value: "/?file=" + file)]
+        return login?.url ?? base
     }
 
     /// Abre el terminal como ventana propia de iPadOS.

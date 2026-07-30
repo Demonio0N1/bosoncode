@@ -33,8 +33,8 @@ struct FileContextMenu: ViewModifier {
             // es donde vive el intérprete.
             if !item.isDirectory,
                ["ipynb", "py", "jl", "sh", "r"].contains(item.url.pathExtension.lowercased()) {
-                Button { Task { await model.runInBosonCode(item) } } label: {
-                    Label("Ejecutar en BosonCode", systemImage: "play.circle")
+                Button { model.runTarget = item } label: {
+                    Label("Ejecutar en BosonCode…", systemImage: "play.circle")
                 }
             }
             // solo para elementos que gestiona un File Provider

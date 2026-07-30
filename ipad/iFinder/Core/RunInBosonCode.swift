@@ -22,13 +22,19 @@ enum RunInBosonCode {
         }
     }
 
-    /// Sube el archivo al equipo activo y abre BosonCode con él.
-    /// - Returns: la ruta donde quedó en el equipo, para poder decírselo al usuario.
+    /// Equipos y contenedores donde se puede ejecutar algo.
+    @MainActor
+    static var destinations: [Server] {
+        ServerStore.shared.servers.filter { $0.managerURL != nil }
+    }
+
+    /// Sube el archivo al destino elegido y abre BosonCode con él.
+    /// - Returns: la ruta donde quedó, para poder decírselo al usuario.
     @MainActor
     @discardableResult
-    static func run(_ url: URL) async throws -> String {
+    static func run(_ url: URL, on target: Server? = nil) async throws -> String {
         let store = ServerStore.shared
-        let candidates = [store.active].compactMap { $0 } + store.servers
+        let candidates = [target, store.active].compactMap { $0 } + store.servers
         guard let server = candidates.first(where: { $0.managerURL != nil }),
               let managerURL = server.managerURL,
               let password = store.hostPassword(for: server) else {
@@ -39,10 +45,12 @@ enum RunInBosonCode {
         // El archivo puede estar en la nube sin descargar: se materializa antes
         // de subirlo, o se enviarían cero bytes.
         let data = try await CloudFileHandler.shared.read(url)
+        // Carpeta propia dentro del equipo: dejarlo suelto en el home mezcla
+        // lo que mandas desde el iPad con todo lo demás.
         let destination = try await client.upload(data: data,
                                                   filename: url.lastPathComponent,
                                                   machine: server.dockerMachineName,
-                                                  dest: "")
+                                                  dest: "@zerospin")
         let path = destination.hasSuffix("/")
             ? destination + url.lastPathComponent
             : destination + "/" + url.lastPathComponent

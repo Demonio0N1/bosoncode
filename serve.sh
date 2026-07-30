@@ -709,6 +709,16 @@ def resolve_dest(machine, dest):
     # "@cwd": el destino es donde esté la terminal en ese momento
     if d == "@cwd":
         return session_cwd(machine) or home
+    # "@zerospin": carpeta propia para lo que llega desde el explorador del
+    # iPad. Se crea si no existe: dejar los archivos sueltos en el home los
+    # mezcla con todo lo demas y no hay forma de saber de donde salieron.
+    if d == "@zerospin":
+        target = os.path.join(home, "ZeroSpin")
+        if machine:
+            sh("docker", "exec", "ivsc_" + machine, "mkdir", "-p", target)
+        else:
+            os.makedirs(target, exist_ok=True)
+        return target
     if not d.startswith("/"):
         return home
     if machine:

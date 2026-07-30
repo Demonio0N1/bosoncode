@@ -76,12 +76,15 @@ final class BrowserViewModel: ObservableObject {
     /// Nombre del archivo que se está enviando al equipo
     @Published var sendingToBoson: String?
 
-    /// Sube el archivo al equipo y lo abre en BosonCode, donde sí hay kernel.
-    func runInBosonCode(_ item: FileItem) async {
+    /// Archivo a la espera de que se elija dónde ejecutarlo
+    @Published var runTarget: FileItem?
+
+    /// Sube el archivo al equipo elegido y lo abre en BosonCode.
+    func runInBosonCode(_ item: FileItem, on server: Server?) async {
         sendingToBoson = item.name
         defer { sendingToBoson = nil }
         do {
-            _ = try await RunInBosonCode.run(item.url)
+            _ = try await RunInBosonCode.run(item.url, on: server)
         } catch {
             self.error = error.localizedDescription
         }
