@@ -111,26 +111,31 @@ enum CodeHighlighter {
 
     // MARK: - Análisis
 
-    /// Convierte el código en HTML con etiquetas de color.
-    static func html(_ source: String, extension ext: String) -> String {
-        guard let language = language(forExtension: ext) else {
-            return escape(source)          // texto plano, pero seguro
-        }
+    /// Qué es cada trozo de código.
+    enum Token { case plain, keyword, string, number, comment }
 
-        var out = ""
-        var buffer = ""                    // identificador o número en curso
+    /// Tramos del código con su tipo, en orden.
+    ///
+    /// El analizador produce esto y no HTML directamente: así el mismo
+    /// recorrido sirve para pintar la vista previa (HTML) y el editor nativo
+    /// (texto con atributos), sin dos analizadores que se desincronicen.
+    static func spans(_ source: String, extension ext: String) -> [(text: String, token: Token)] {
+        guard let language = language(forExtension: ext) else {
+            return [(source, .plain)]
+        }
+        var spans: [(String, Token)] = []
+        var buffer = ""
         let chars = Array(source)
         var i = 0
 
-        /// Vuelca lo acumulado decidiendo si era palabra reservada o número.
         func flush() {
             guard !buffer.isEmpty else { return }
             if language.keywords.contains(buffer) {
-                out += "<span class='kw'>\(escape(buffer))</span>"
+                spans.append((buffer, .keyword))
             } else if buffer.first?.isNumber == true {
-                out += "<span class='num'>\(escape(buffer))</span>"
+                spans.append((buffer, .number))
             } else {
-                out += escape(buffer)
+                spans.append((buffer, .plain))
             }
             buffer = ""
         }
@@ -138,7 +143,6 @@ enum CodeHighlighter {
         while i < chars.count {
             let rest = String(chars[i...].prefix(3))
 
-            // comentario de bloque
             if let block = language.blockComment, rest.hasPrefix(block.open) {
                 flush()
                 var comment = ""
@@ -146,21 +150,16 @@ enum CodeHighlighter {
                     comment.append(chars[i]); i += 1
                     if comment.hasSuffix(block.close) { break }
                 }
-                out += "<span class='com'>\(escape(comment))</span>"
+                spans.append((comment, .comment))
                 continue
             }
-
-            // comentario de línea
-            if let marker = language.lineComments.first(where: { rest.hasPrefix($0) }) {
+            if language.lineComments.contains(where: { rest.hasPrefix($0) }) {
                 flush()
-                _ = marker
                 var comment = ""
                 while i < chars.count, chars[i] != "\n" { comment.append(chars[i]); i += 1 }
-                out += "<span class='com'>\(escape(comment))</span>"
+                spans.append((comment, .comment))
                 continue
             }
-
-            // cadena, respetando el escape con barra invertida
             if language.quotes.contains(chars[i]) {
                 flush()
                 let quote = chars[i]
@@ -176,21 +175,37 @@ enum CodeHighlighter {
                     i += 1
                     if closed { break }
                 }
-                out += "<span class='str'>\(escape(text))</span>"
+                spans.append((text, .string))
                 continue
             }
-
             if chars[i].isLetter || chars[i].isNumber || chars[i] == "_" {
                 buffer.append(chars[i])
             } else {
                 flush()
-                out += escape(String(chars[i]))
+                spans.append((String(chars[i]), .plain))
             }
             i += 1
         }
         flush()
-        return out
+        return spans
     }
+
+    /// Convierte el código en HTML con etiquetas de color.
+    static func html(_ source: String, extension ext: String) -> String {
+        guard language(forExtension: ext) != nil else {
+            return escape(source)          // texto plano, pero seguro
+        }
+        return spans(source, extension: ext).map { span in
+            switch span.token {
+            case .plain: return escape(span.text)
+            case .keyword: return "<span class='kw'>\(escape(span.text))</span>"
+            case .string: return "<span class='str'>\(escape(span.text))</span>"
+            case .number: return "<span class='num'>\(escape(span.text))</span>"
+            case .comment: return "<span class='com'>\(escape(span.text))</span>"
+            }
+        }.joined()
+    }
+
 
     /// Escapa lo que en HTML tiene otro significado. Va SIEMPRE antes de
     /// insertar en la página: un archivo de código puede contener `<script>`.

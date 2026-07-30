@@ -18,6 +18,7 @@ struct PreviewWindowView: View {
     /// URL propia de ESTA ventana: llega como valor de escena y no cambia
     /// aunque la ventana principal seleccione otro archivo.
     let url: URL?
+    @State private var editing = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -35,10 +36,20 @@ struct PreviewWindowView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if let url {
+                    if CodeHighlighter.isCode(url) {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button { editing = true } label: {
+                                Image(systemName: "pencil.and.outline")
+                            }
+                        }
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
                     }
                 }
+            }
+            .sheet(isPresented: $editing) {
+                if let url { CodeEditorView(url: url) }
             }
         }
         .frame(minWidth: 320, minHeight: 320)

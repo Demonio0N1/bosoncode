@@ -24,6 +24,11 @@ struct FileContextMenu: ViewModifier {
             Button { model.quickLook(item) } label: {
                 Label("Vista rápida (espacio)", systemImage: "eye")
             }
+            if CodeHighlighter.isCode(item.url), !item.isDirectory {
+                Button { model.editing = item } label: {
+                    Label("Editar", systemImage: "pencil.and.outline")
+                }
+            }
             // solo para elementos que gestiona un File Provider
             if item.isUbiquitous, !item.isDirectory {
                 Divider()

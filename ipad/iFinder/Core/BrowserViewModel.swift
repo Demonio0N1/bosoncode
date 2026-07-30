@@ -71,6 +71,8 @@ final class BrowserViewModel: ObservableObject {
     @Published var renaming: FileItem?
     @Published var renameText = ""
     @Published var inspecting: FileItem?
+    /// Archivo abierto en el editor propio
+    @Published var editing: FileItem?
     @Published var quickLookURL: URL?
     /// Nombre del archivo que se está bajando de la nube (para el aviso)
     @Published var downloadingName: String?
