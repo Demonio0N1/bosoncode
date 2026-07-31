@@ -495,7 +495,7 @@ final class BrowserViewModel: ObservableObject {
                 previewRequest = item
                 await reload()
             } catch {
-                self.error = error.localizedDescription
+                self.error = Self.cloudFailure(item, error)
             }
         }
     }
@@ -510,7 +510,7 @@ final class BrowserViewModel: ObservableObject {
             try await CloudFileHandler.shared.materialize(item.url)
             await reload()
         } catch {
-            self.error = "No se pudo descargar \(item.name): \(error.localizedDescription)"
+            self.error = Self.cloudFailure(item, error)
         }
     }
 
@@ -581,8 +581,32 @@ final class BrowserViewModel: ObservableObject {
             try data.write(to: copy, options: .atomic)
             deliver(item.url, copy)
         } catch {
-            self.error = "No se pudo abrir \(item.name): \(error.localizedDescription)"
+            self.error = Self.cloudFailure(item, error)
         }
+    }
+
+    /// Traduce el fallo al abrir un archivo que vive en la nube.
+    ///
+    /// El sistema devuelve aquí cosas como "Your device couldn't connect to the
+    /// server", que no dice ni qué archivo, ni de qué servicio, ni qué hacer.
+    /// El dato que falta y que lo explica todo es que el archivo **no está en
+    /// el iPad**: solo figura en el listado, y traerlo depende del proveedor.
+    static func cloudFailure(_ item: FileItem, _ error: Error) -> String {
+        let service = CloudProvider.detect(item.url)
+        let origin = service == .folder ? "la nube" : service.title
+        guard item.isRemoteOnly || item.isDownloading else {
+            // el archivo sí estaba en el iPad: el fallo es otra cosa
+            return "No se pudo abrir \(item.name): \(error.localizedDescription)"
+        }
+        return """
+        No pude traer «\(item.name)» desde \(origin).
+
+        El archivo está en la nube, no en el iPad, y \(origin) no lo entregó. \
+        Comprueba la conexión, o ábrelo una vez desde la app Archivos para \
+        forzar su descarga y vuelve aquí.
+
+        (\(error.localizedDescription))
+        """
     }
 
     /// Envoltura común: marca ocupado, captura errores y recarga al terminar.

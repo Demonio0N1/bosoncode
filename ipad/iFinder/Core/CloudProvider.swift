@@ -14,7 +14,7 @@ import SwiftUI
 /// del mismo servicio ("OneDrive – Yachay Tech" y "OneDrive – EPN"), que se
 /// distinguen por la cuenta, no por el proveedor.
 enum CloudProvider: String, Codable, CaseIterable {
-    case googleDrive, oneDrive, dropbox, box, mega, proton, iCloud, smb, folder
+    case googleDrive, oneDrive, dropbox, box, mega, proton, iCloud, smb, usb, onDevice, folder
 
     /// Trozos de ruta que identifican a cada servicio.
     private static let signatures: [(CloudProvider, [String])] = [
@@ -26,6 +26,12 @@ enum CloudProvider: String, Codable, CaseIterable {
         (.proton,      ["ch.protonmail", "ProtonDrive"]),
         (.iCloud,      ["com~apple~CloudDocs", "Mobile Documents"]),
         (.smb,         ["/Volumes/", "smb:"]),
+        // Unidades físicas conectadas por USB-C. iPadOS las sirve mediante
+        // UserFS, bajo LiveFiles: es la única pista, porque la ruta no lleva
+        // el nombre del disco. Sin esta firma acababan como "Carpeta".
+        (.usb,         ["com.apple.filesystems.userfsd", "UserFS.FileProvider"]),
+        // "En mi iPad": el almacenamiento local que expone la app Archivos.
+        (.onDevice,    ["com.apple.FileProvider.LocalStorage"]),
     ]
 
     /// Deduce el servicio a partir de la ruta que devolvió el selector.
@@ -47,6 +53,8 @@ enum CloudProvider: String, Codable, CaseIterable {
         case .proton: return "Proton Drive"
         case .iCloud: return "iCloud Drive"
         case .smb: return "Servidor"
+        case .usb: return "Unidad externa"
+        case .onDevice: return "En mi iPad"
         case .folder: return "Carpeta"
         }
     }
@@ -57,6 +65,8 @@ enum CloudProvider: String, Codable, CaseIterable {
         case .oneDrive: return "cloud.fill"
         case .iCloud: return "icloud.fill"
         case .smb: return "externaldrive.connected.to.line.below"
+        case .usb: return "externaldrive.fill"
+        case .onDevice: return "ipad.landscape"
         case .folder: return "folder.fill"
         }
     }
@@ -71,14 +81,18 @@ enum CloudProvider: String, Codable, CaseIterable {
         case .proton: return Color(red: 0.42, green: 0.33, blue: 0.83)
         case .iCloud: return Color(red: 0.35, green: 0.62, blue: 0.95)
         case .smb: return .gray
+        case .usb: return Color(red: 0.55, green: 0.55, blue: 0.58)
+        case .onDevice: return Color(red: 0.35, green: 0.62, blue: 0.95)
         case .folder: return Color(red: 0.35, green: 0.62, blue: 0.95)
         }
     }
 
     /// Un montaje de nube va en su propia sección de la barra lateral.
+    /// Un USB y el almacenamiento del propio iPad no son nubes: van con las
+    /// carpetas, pero conservan su icono y su nombre propios.
     var isCloud: Bool {
         switch self {
-        case .folder: return false
+        case .folder, .usb, .onDevice: return false
         default: return true
         }
     }

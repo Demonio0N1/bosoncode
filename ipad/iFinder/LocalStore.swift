@@ -64,11 +64,15 @@ final class LocalStore: ObservableObject {
     }
 
     /// Guarda una carpeta con un nombre elegido por el usuario.
+    ///
+    /// Devuelve el montaje creado para que quien llame pueda renombrarlo luego
+    /// sin adivinar cuál es. Antes se hacía con `folders.last`, que acierta por
+    /// casualidad: cualquier cambio en el orden lo rompía en silencio.
     @discardableResult
-    func add(url: URL, name: String) -> Bool {
-        guard add(url: url) else { return false }
-        if let last = folders.last { rename(last, to: name) }
-        return true
+    func add(url: URL, named name: String) -> Folder? {
+        guard add(url: url), let created = folders.last else { return nil }
+        rename(created, to: name)
+        return folders.first { $0.id == created.id }
     }
 
     @discardableResult
@@ -103,10 +107,17 @@ final class LocalStore: ObservableObject {
     /// "OneDrive", "OneDrive 2"… Dos cuentas del mismo servicio con la carpeta
     /// raíz igual llegan aquí con el mismo nombre, y en la barra lateral serían
     /// indistinguibles. Numerarlas deja al usuario renombrarlas después.
-    private func uniqueName(_ name: String) -> String {
-        guard folders.contains(where: { $0.name == name }) else { return name }
+    ///
+    /// `excluding` es el propio montaje cuando se está renombrando: sin él, un
+    /// montaje se consideraría en conflicto consigo mismo y "OneDrive" se
+    /// convertiría en "OneDrive 2" al confirmar su propio nombre.
+    private func uniqueName(_ name: String, excluding id: UUID? = nil) -> String {
+        func taken(_ candidate: String) -> Bool {
+            folders.contains { $0.name == candidate && $0.id != id }
+        }
+        guard taken(name) else { return name }
         var index = 2
-        while folders.contains(where: { $0.name == "\(name) \(index)" }) { index += 1 }
+        while taken("\(name) \(index)") { index += 1 }
         return "\(name) \(index)"
     }
 
@@ -116,7 +127,11 @@ final class LocalStore: ObservableObject {
         let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, let index = folders.firstIndex(where: { $0.id == folder.id })
         else { return }
-        folders[index].name = clean
+        // También aquí se numera. Este es el camino por el que pasa el nombre
+        // sugerido al montar, así que sin esto la segunda cuenta de OneDrive
+        // volvía a llamarse igual que la primera y el arreglo de `add` no
+        // servía de nada: dos filas idénticas en la barra lateral.
+        folders[index].name = uniqueName(clean, excluding: folder.id)
         persist()
     }
 

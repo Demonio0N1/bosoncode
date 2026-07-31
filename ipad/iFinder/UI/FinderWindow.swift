@@ -32,7 +32,8 @@ struct FinderWindow: View {
     /// Ubicación del sistema que espera permiso (si el selector viene de ahí)
     @State private var pendingLocation: SystemLocation?
     /// Carpeta recién elegida, a la espera de que el usuario la nombre
-    @State private var pendingURL: URL?
+    /// Montaje recién creado al que se refiere el diálogo de nombre.
+    @State private var pendingMount: LocalStore.Folder?
     @State private var pendingName = ""
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
@@ -139,7 +140,7 @@ struct FinderWindow: View {
                 let suggested = detected.isCloud ? detected.suggestedName(for: url)
                                                  : (url.displayName.isEmpty ? (location?.title ?? "Carpeta")
                                                                             : url.displayName)
-                guard local.add(url: url, name: suggested) else {
+                guard let created = local.add(url: url, named: suggested) else {
                     present { model.error = "No pude guardar el permiso de esa carpeta. Vuelve a elegirla desde la barra lateral del selector." }
                     return
                 }
@@ -149,22 +150,25 @@ struct FinderWindow: View {
                 // ni detectándola se acierta con el nombre que el usuario
                 // reconocería.
                 present {
-                    pendingName = suggested
-                    pendingURL = url
+                    // el nombre REAL con el que quedó: si ya había otra cuenta
+                    // del mismo servicio, es "OneDrive 2" y no "OneDrive"
+                    pendingName = created.name
+                    pendingMount = created
                 }
             case .failure(let error):
                 present { model.error = error.localizedDescription }
             }
         }
         .alert("Nombre de la ubicación",
-               isPresented: Binding(get: { pendingURL != nil },
-                                    set: { if !$0 { pendingURL = nil } })) {
+               isPresented: Binding(get: { pendingMount != nil },
+                                    set: { if !$0 { pendingMount = nil } })) {
             TextField("Ej.: Google Drive", text: $pendingName)
             Button("Guardar") {
-                if let folder = local.folders.last { local.rename(folder, to: pendingName) }
-                pendingURL = nil
+                // se renombra ESTE montaje, no "el último de la lista"
+                if let mount = pendingMount { local.rename(mount, to: pendingName) }
+                pendingMount = nil
             }
-            Button("Dejar así", role: .cancel) { pendingURL = nil }
+            Button("Dejar así", role: .cancel) { pendingMount = nil }
         } message: {
             Text("Ya está añadida. Puedes cambiarle el nombre — así distingues dos cuentas del mismo servicio.")
         }
@@ -319,7 +323,7 @@ struct FinderWindow: View {
 
     /// Guarda el permiso con el nombre elegido y entra en la carpeta.
     private func save(_ url: URL, as name: String) {
-        guard local.add(url: url, name: name) else {
+        guard local.add(url: url, named: name) != nil else {
             model.error = "No pude guardar el permiso de esa carpeta. Elige la ubicación desde la barra lateral del selector."
             return
         }
@@ -464,6 +468,28 @@ struct FinderWindow: View {
         openWindow(id: PreviewScene.id, value: item.url)
     }
 
+    /// Aviso de "estoy trabajando" de la barra de herramientas.
+    ///
+    /// El nombre del archivo va SIEMPRE en una línea y recortado por el medio.
+    /// Sin `lineLimit`, un nombre largo como el de un perfil de VPN no cabía en
+    /// el hueco que deja la barra y SwiftUI lo partía carácter a carácter: una
+    /// columna vertical de letras que además empujaba el resto de los botones.
+    ///
+    /// El ancho tiene tope propio para que el aviso ceda espacio a los botones
+    /// y no al revés — el buscador y los iconos deben seguir alcanzables.
+    private func statusLabel(_ verb: String, _ name: String) -> some View {
+        HStack(spacing: 5) {
+            ProgressView().controlSize(.small)
+            Text("\(verb) \(name)…")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .frame(maxWidth: 220, alignment: .trailing)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var toolbar: some View {
         HStack(spacing: 14) {
             Button { Task { await model.goUp() } } label: { Image(systemName: "chevron.left") }
@@ -481,15 +507,9 @@ struct FinderWindow: View {
             Spacer(minLength: 8)
 
             if let name = model.openingExternally {
-                HStack(spacing: 5) {
-                    ProgressView().controlSize(.small)
-                    Text("Abriendo \(name)…").font(.caption2).foregroundStyle(.secondary)
-                }
+                statusLabel("Abriendo", name)
             } else if let name = model.downloadingName {
-                HStack(spacing: 5) {
-                    ProgressView().controlSize(.small)
-                    Text("Bajando \(name)…").font(.caption2).foregroundStyle(.secondary)
-                }
+                statusLabel("Bajando", name)
             } else if model.busy {
                 ProgressView().controlSize(.small)
             }
