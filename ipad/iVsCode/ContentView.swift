@@ -122,7 +122,8 @@ struct ContentView: View {
                         // pedir esa misma ruta, en un equipo donde puede que ni
                         // exista.
                         if !stillOnLogin { pendingFile = nil }
-                    }
+                    },
+                    isVisible: !showLauncher
                 )
                 // incluir la URL en la identidad: si una tarjeta se repara
                 // (URL nueva), el WebView se recrea sí o sí

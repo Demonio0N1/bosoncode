@@ -23,12 +23,28 @@ final class WebContainerView: UIView {
     /// el marco (pasa al activar otra ventana de la app). Se compara lo que la
     /// página cree medir con el tamaño real y se corrige solo si difieren.
     func startWatchdog() {
-        watchdog?.invalidate()
+        guard watchdog == nil else { return }
         let timer = Timer(timeInterval: 1.5, repeats: true) { [weak self] _ in
             self?.checkViewport()
         }
         RunLoop.main.add(timer, forMode: .common)
         watchdog = timer
+    }
+
+    func stopWatchdog() {
+        watchdog?.invalidate()
+        watchdog = nil
+    }
+
+    /// Enciende o apaga el vigilante según el editor esté a la vista.
+    ///
+    /// Tapado por la lista de equipos, el editor no necesita vigilancia —nadie
+    /// lo está mirando— y sí molesta: cada 1,5 s medía la página y, al no
+    /// coincidir con un contenedor que ya no se ve, forzaba dos pasadas de
+    /// maquetación seguidas. Ese trabajo cae en el hilo principal, el mismo que
+    /// mueve el desplazamiento de la lista, y ahí se nota: el scroll se frena.
+    func setWatchdogActive(_ active: Bool) {
+        active ? startWatchdog() : stopWatchdog()
     }
 
     private func checkViewport() {
@@ -71,7 +87,7 @@ final class WebContainerView: UIView {
     }
 
     deinit {
-        watchdog?.invalidate()
+        stopWatchdog()
         sceneObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
@@ -148,6 +164,10 @@ struct CodeWebView: UIViewRepresentable {
     /// true mientras la sesión sigue en la página de login (oculta); false al
     /// llegar al workbench — la app usa esto para su pantalla "Conectando…"
     var onLoading: ((Bool) -> Void)? = nil
+    /// ¿Está el editor a la vista? Con la lista de equipos delante, no: el
+    /// vigilante del viewport se apaga para no robarle el hilo principal a lo
+    /// que sí se está usando.
+    var isVisible: Bool = true
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onOpenSettings: onOpenSettings, onLoadError: onLoadError,
@@ -374,7 +394,7 @@ struct CodeWebView: UIViewRepresentable {
         ])
         container.bottomConstraint = bottom
         container.webView = webView
-        container.startWatchdog()
+        container.setWatchdogActive(isVisible)
         // al volver a primer plano (p. ej. tras abrir la ventana-terminal) la
         // página también debe recalcular su tamaño
         container.sceneObservers = [UIScene.didActivateNotification,
@@ -396,6 +416,7 @@ struct CodeWebView: UIViewRepresentable {
         webView.onFileCopy = onFileCopy
         webView.onFilePaste = onFilePaste
         webView.onTerminalToggle = onTerminalToggle
+        uiView.setWatchdogActive(isVisible)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKDownloadDelegate {

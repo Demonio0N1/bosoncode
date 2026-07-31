@@ -6,7 +6,7 @@ import SwiftUI
 /// del anuncio mDNS y ahí no hay nada que adivinar. La heurística sobre el
 /// nombre del host queda solo para los casos en que no hay anuncio: equipos
 /// añadidos a mano y equipos con una versión antigua del script.
-enum HostPlatform {
+enum HostPlatform: Hashable {
     case linux, windows, mac
 
     private static let windowsMarks = ["windows", "win10", "win11", "win-", "-win", "msi"]
@@ -36,16 +36,27 @@ enum HostPlatform {
 
     /// SF Symbols no tiene pingüino: para Linux se usa el símbolo de terminal,
     /// que es el que Apple emplea para entornos de línea de comandos.
-    var symbol: String {
-        let name: String
-        switch self {
-        case .linux: name = "terminal.fill"
-        case .windows: name = "pc"
-        case .mac: name = "apple.logo"
+    ///
+    /// El resultado se calcula UNA vez y se guarda. Antes se resolvía en el
+    /// cuerpo de la vista, así que `UIImage(systemName:)` —que consulta el
+    /// catálogo del sistema y construye una imagen— se ejecutaba por cada
+    /// tarjeta en cada pasada de dibujado. Durante un desplazamiento eso son
+    /// decenas de llamadas por segundo en el hilo principal, y es justo el tipo
+    /// de trabajo que se come los fotogramas y hace que el scroll se atasque.
+    /// El catálogo no cambia mientras la app vive: preguntarlo una vez basta.
+    private static let resolved: [HostPlatform: String] = {
+        var map: [HostPlatform: String] = [:]
+        for (platform, preferred) in [(HostPlatform.linux, "terminal.fill"),
+                                      (.windows, "pc"),
+                                      (.mac, "apple.logo")] {
+            // si el símbolo no existe en esta versión de iOS, monitor genérico
+            map[platform] = UIImage(systemName: preferred) != nil ? preferred
+                                                                  : "desktopcomputer"
         }
-        // si el símbolo no existe en esta versión de iOS, monitor genérico
-        return UIImage(systemName: name) != nil ? name : "desktopcomputer"
-    }
+        return map
+    }()
+
+    var symbol: String { Self.resolved[self] ?? "desktopcomputer" }
 
     var label: String {
         switch self {
