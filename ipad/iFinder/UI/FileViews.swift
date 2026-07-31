@@ -18,15 +18,22 @@ struct FileContextMenu: ViewModifier {
             Button { Task { await model.openInDefaultApp(item) } } label: {
                 Label("Abrir en otra app…", systemImage: "arrow.up.forward.square")
             }
-            Button { Task { await model.chooseAppFor(item) } } label: {
-                Label("Más opciones… (3 dedos ×2)", systemImage: "square.grid.2x2")
-            }
             Button { model.quickLook(item) } label: {
                 Label("Vista rápida (espacio)", systemImage: "eye")
             }
             if CodeHighlighter.isCode(item.url), !item.isDirectory {
                 Button { model.editing = item } label: {
                     Label("Editar", systemImage: "pencil.and.outline")
+                }
+            }
+            // Acciones propias de una imagen. Solo aparecen si lo es: un menú
+            // que ofrece "Editar imagen" sobre un PDF enseña a desconfiar de él.
+            if item.isImage {
+                Button { model.drawingOn = item } label: {
+                    Label("Editar imagen (dibujar)", systemImage: "scribble.variable")
+                }
+                Button { Task { await model.useAsWallpaper(item) } } label: {
+                    Label("Usar como fondo de ZeroSpin", systemImage: "photo.on.rectangle")
                 }
             }
             // Notebooks y scripts: ejecutar significa mandarlo al equipo, que

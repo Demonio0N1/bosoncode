@@ -75,6 +75,19 @@ final class BrowserViewModel: ObservableObject {
     @Published var inspecting: FileItem?
     /// Archivo abierto en el editor propio
     @Published var editing: FileItem?
+    /// Imagen abierta en el editor de dibujo
+    @Published var drawingOn: FileItem?
+
+    /// Deja la imagen como fondo de la ventana de archivos.
+    func useAsWallpaper(_ item: FileItem) async {
+        downloadingName = item.name        // puede estar en la nube
+        defer { downloadingName = nil }
+        do {
+            try await Wallpaper.shared.set(from: item.url)
+        } catch {
+            self.error = Self.cloudFailure(item, error)
+        }
+    }
     /// Nombre del archivo que se está enviando al equipo
     @Published var sendingToBoson: String?
 

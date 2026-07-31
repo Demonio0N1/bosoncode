@@ -174,6 +174,13 @@ struct FinderWindow: View {
         } message: {
             Text("Ya está añadida. Puedes cambiarle el nombre — así distingues dos cuentas del mismo servicio.")
         }
+        .sheet(item: Binding(get: { model.drawingOn },
+                             set: { model.drawingOn = $0 })) { item in
+            ImageEditorView(url: item.url) {
+                // la miniatura guardada ya no vale: el archivo cambió
+                Task { await model.reload() }
+            }
+        }
         .sheet(isPresented: $showTrash) { TrashView(model: model) }
         .sheet(isPresented: Binding(get: { !onboarded }, set: { if !$0 { onboarded = true } })) {
             OnboardingView(onPick: { root in
@@ -634,6 +641,9 @@ struct FinderWindow: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // el fondo va DETRÁS del listado, no del panel lateral ni de
+                // las barras: esas son cromo y deben seguir legibles
+                .background(WallpaperBackground())
                 Divider()
                 statusBar
             }

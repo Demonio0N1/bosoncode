@@ -58,6 +58,18 @@ struct FileItem: Identifiable, Hashable, Sendable {
         self.isUbiquitous = false
     }
 
+    /// ¿Es una imagen que se puede abrir y dibujar encima?
+    ///
+    /// Se pregunta por el tipo declarado y no por la extensión: un archivo de
+    /// una nube puede llegar sin extensión útil, y `UTType` ya sabe qué desciende
+    /// de `image` sin tener que enumerar formatos a mano.
+    var isImage: Bool {
+        guard !isDirectory else { return false }
+        if let type, type.conforms(to: .image) { return true }
+        return ["jpg", "jpeg", "png", "heic", "gif", "tiff", "bmp", "webp"]
+            .contains(url.pathExtension.lowercased())
+    }
+
     // MARK: - Presentación
 
     var icon: String {
