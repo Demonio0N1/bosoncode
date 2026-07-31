@@ -356,7 +356,8 @@ struct FinderWindow: View {
                 Button {
                     Task { await openLocal(documentsURL) }
                 } label: {
-                    SidebarRow(title: "Archivos de ZeroSpin", systemImage: "iphone")
+                    SidebarRow(title: "Archivos de ZeroSpin", systemImage: "iphone",
+                               isSelected: isCurrent(documentsURL))
                 }
                 .buttonStyle(.plain)
                 .macSidebarRowInsets()
@@ -371,7 +372,8 @@ struct FinderWindow: View {
                     } label: {
                         SidebarRow(title: location.title,
                                    systemImage: location.icon,
-                                   dimmed: !isReachable(location))
+                                   dimmed: !isReachable(location),
+                                   isSelected: isCurrent(location.url))
                     }
                     .buttonStyle(.plain)
                     .macSidebarRowInsets()
@@ -463,6 +465,16 @@ struct FinderWindow: View {
 
     // MARK: - Enrutado de la barra lateral
 
+    /// ¿Es esta la ubicación abierta ahora mismo?
+    ///
+    /// La burbuja sigue a dónde ESTÁS, no a lo último que tocaste: entrar en
+    /// una subcarpeta o volver atrás cambia el resaltado solo, y una fila que
+    /// no llevó a ninguna parte no se queda marcada.
+    private func isCurrent(_ url: URL?) -> Bool {
+        guard let url, let current = model.currentURL else { return false }
+        return url.standardizedFileURL == current.standardizedFileURL
+    }
+
     /// ¿Se puede entrar sin pedir permiso? (ruta nativa o ya concedida)
     private func isReachable(_ location: SystemLocation) -> Bool {
         location.url != nil || local.folder(named: location.title) != nil
@@ -503,7 +515,8 @@ struct FinderWindow: View {
         } label: {
             SidebarRow(title: folder.name,
                        systemImage: stale ? "exclamationmark.triangle.fill" : folder.kind.icon,
-                       tint: stale ? .orange : folder.kind.tint)
+                       tint: stale ? .orange : folder.kind.tint,
+                       isSelected: isCurrent(local.resolvedURL(for: folder)))
         }
         .buttonStyle(.plain)
         .macSidebarRowInsets()

@@ -177,6 +177,14 @@ final class LocalStore: ObservableObject {
         return url
     }
 
+    /// Ruta ya resuelta, SIN resolver nada ni tocar el estado.
+    ///
+    /// `url(for:)` publica cambios —marca marcadores caducados, renueva los
+    /// obsoletos, persiste—, así que llamarlo desde el cuerpo de una vista
+    /// sería modificar estado en mitad del dibujado. Para decidir qué fila va
+    /// resaltada basta con lo que ya está abierto.
+    func resolvedURL(for folder: Folder) -> URL? { openScopes[folder.id] }
+
     func stopAccess(_ id: UUID) {
         openScopes[id]?.stopAccessingSecurityScopedResource()
         openScopes[id] = nil
