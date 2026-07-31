@@ -55,14 +55,7 @@ struct FinderWindow: View {
             if horizontalSizeClass == .compact {
                 compactLayout
             } else {
-                NavigationSplitView(columnVisibility: $visibility) {
-                    sidebar
-                } detail: {
-                    content
-                }
-                // El ancho de la barra lateral lo controla el usuario y se
-                // recuerda: iPadOS solo respeta el rango si se le da explícito.
-                .navigationSplitViewStyle(.balanced)
+                regularLayout
             }
         }
         .newFileAlert(model)
@@ -232,6 +225,49 @@ struct FinderWindow: View {
 
     // MARK: - Barra lateral
 
+    /// Ventana normal: la barra lateral es una COLUMNA, no un panel encima.
+    ///
+    /// Aquí tampoco se usa `NavigationSplitView`. Decide por su cuenta cuándo
+    /// enseñar la barra como superposición translúcida sobre el contenido, y en
+    /// cuanto la ventana no da para las dos columnas a su ancho ideal lo hace
+    /// aunque el estilo sea `.balanced`. El resultado era una barra flotando
+    /// encima de los archivos, con el fondo atenuado y todo movido.
+    ///
+    /// Un HStack no tiene esa duda: la barra ocupa su sitio y el contenido el
+    /// suyo. De paso, el asa de redimensionar —que vive al principio de
+    /// `content`— queda justo entre las dos, que es donde se espera.
+    private var regularLayout: some View {
+        HStack(spacing: 0) {
+            if visibility != .detailOnly {
+                sidebar
+                    .frame(width: sidebarWidth)
+                    .transition(.move(edge: .leading))
+            }
+            NavigationStack {
+                content
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) { sidebarToggle }
+                    }
+            }
+        }
+    }
+
+    /// Muestra u oculta la barra. Sustituye al botón que ponía
+    /// `NavigationSplitView`, que se fue con él.
+    private var sidebarToggle: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.22)) {
+                if horizontalSizeClass == .compact {
+                    showCompactSidebar.toggle()
+                } else {
+                    visibility = visibility == .detailOnly ? .all : .detailOnly
+                }
+            }
+        } label: {
+            Image(systemName: "sidebar.leading")
+        }
+    }
+
     /// Ventana estrecha: la barra lateral entra y sale, no se queda.
     ///
     /// Aquí NO se usa `NavigationSplitView`. Al colapsar en ancho compacto, la
@@ -250,15 +286,7 @@ struct FinderWindow: View {
             NavigationStack {
                 content
                     .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            Button {
-                                withAnimation(.easeOut(duration: 0.22)) {
-                                    showCompactSidebar = true
-                                }
-                            } label: {
-                                Image(systemName: "sidebar.leading")
-                            }
-                        }
+                        ToolbarItem(placement: .navigationBarLeading) { sidebarToggle }
                     }
             }
 
