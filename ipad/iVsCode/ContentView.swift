@@ -58,6 +58,12 @@ struct ContentView: View {
     /// Segundos esperando, solo para ajustar el mensaje
     @State private var connectingSeconds = 0
     @State private var connecting = true
+    /// ¿Ha terminado de cargar alguna página en este intento?
+    ///
+    /// Distingue "el equipo contesta pero se queda en el login" de "el equipo
+    /// no contesta". Sin esa distinción, la pantalla de conexión se retiraba
+    /// igual en los dos casos y en el segundo dejaba ver un WebView vacío.
+    @State private var pageArrived = false
     @AppStorage("appearance") private var appearanceRaw = AppearanceMode.auto.rawValue
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -108,6 +114,7 @@ struct ContentView: View {
                         openTerminalWindow(for: server)
                     },
                     onLoading: { stillOnLogin in
+                        pageArrived = true
                         withAnimation { connecting = stillOnLogin }
                         // El archivo que mandó ZeroSpin ya está abierto: se
                         // olvida. Si se quedara puesto, CUALQUIER recarga
@@ -398,6 +405,7 @@ struct ContentView: View {
         .transition(.opacity)
         .task(id: reloadToken) {
             connectingSeconds = 0
+            pageArrived = false
             // El contador y la espera comparten bucle a propósito.
             //
             // Antes el contador vivía en un `Task { }` suelto dentro de este.
@@ -415,6 +423,43 @@ struct ContentView: View {
                 guard !Task.isCancelled else { return }
                 connectingSeconds += 1
             }
+
+            // AQUÍ estaba el hueco negro.
+            //
+            // Se retiraba la pantalla a los 10s pasara lo que pasara. Con el
+            // equipo apagado, a los 10s no ha llegado ninguna página: lo que
+            // quedaba al descubierto era el WebView vacío, negro, durante todo
+            // el rato que WebKit tarda en rendirse por su cuenta —bastante más
+            // de 10s—, y solo entonces aparecía "sin conexión".
+            //
+            // Retirarla solo tiene sentido si hay algo debajo que enseñar: la
+            // página de login, típicamente, cuando la contraseña no cuela.
+            if pageArrived {
+                withAnimation { connecting = false }
+                return
+            }
+
+            // Nada ha respondido todavía: se sigue esperando CON la pantalla
+            // puesta, que informa, en vez de con un vacío que no dice nada.
+            for _ in 10..<30 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                connectingSeconds += 1
+                if pageArrived {
+                    withAnimation { connecting = false }
+                    return
+                }
+            }
+
+            // Medio minuto sin una sola respuesta ya no es una espera: es un
+            // fallo. Se dice, en vez de esperar a que WebKit se dé por vencido.
+            if loadError == nil {
+                loadError = """
+                El equipo no respondió en 30 segundos. Comprueba que esté \
+                encendido, que serve.sh siga corriendo y que ambos estéis en \
+                la misma tailnet.
+                """
+            }
             withAnimation { connecting = false }
         }
     }
@@ -422,8 +467,9 @@ struct ContentView: View {
     /// Aviso que aparece cuando la espera se alarga, para que el usuario sepa
     /// que puede irse en vez de quedarse mirando.
     private var elapsedHint: String {
-        connectingSeconds < 8 ? "Autenticando…"
-            : "Está tardando. Comprueba que el equipo esté encendido y en la red."
+        if connectingSeconds < 8 { return "Autenticando…" }
+        if pageArrived { return "El equipo respondió; terminando de abrir el editor." }
+        return "Está tardando. Comprueba que el equipo esté encendido y en la red."
     }
 
     /// Corta el intento y vuelve a la lista de equipos.
