@@ -242,7 +242,9 @@ struct FinderWindow: View {
             if visibility != .detailOnly {
                 sidebar
                     .frame(width: sidebarWidth)
-                    .background(.ultraThinMaterial)
+                    .background(sidebarSurface)
+                    .padding(.leading, 8)
+                    .padding(.vertical, 8)
                     .transition(.move(edge: .leading))
             }
             NavigationStack {
@@ -263,6 +265,24 @@ struct FinderWindow: View {
     private func sidebarPanelWidth(in available: CGFloat) -> CGFloat {
         guard available > 1 else { return 270 }
         return min(270, available * 0.82)
+    }
+
+    /// Superficie de la barra: panel flotante con esquinas redondeadas.
+    ///
+    /// En macOS la barra lateral no es un rectángulo pegado al borde: es un
+    /// panel despegado de la ventana, con sus cuatro esquinas redondeadas. El
+    /// margen exterior es lo que lo hace flotar —sin él, las esquinas de arriba
+    /// y abajo quedarían cortadas por el borde y no se vería el efecto—.
+    ///
+    /// El borde tenue delimita el panel cuando él y el fondo son oscuros, que
+    /// es cuando un material translúcido se confunde con lo que hay detrás.
+    private var sidebarSurface: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(.ultraThinMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5)
+            )
     }
 
     /// Muestra u oculta la barra. Sustituye al botón que ponía
@@ -318,12 +338,9 @@ struct FinderWindow: View {
                 // material grueso parecía otra pantalla encima.
                 sidebar
                     .frame(width: sidebarPanelWidth(in: geo.size.width))
-                    .background(.ultraThinMaterial)
-                    // el borde separa el panel del contenido cuando los dos son
-                    // oscuros; sin él, translúcido se confunde con el fondo
-                    .overlay(alignment: .trailing) {
-                        Divider().ignoresSafeArea()
-                    }
+                    .background(sidebarSurface)
+                    .padding(.leading, 8)
+                    .padding(.vertical, 8)
                     .shadow(color: .black.opacity(0.28), radius: 14, x: 3)
                     .transition(.move(edge: .leading))
             }
@@ -403,7 +420,12 @@ struct FinderWindow: View {
                     }
                 }
             }
-            .padding(.vertical, 10)
+            // Hueco para el semáforo. iPadOS dibuja los botones de la ventana
+            // FLOTANDO sobre el contenido, en esta misma esquina, y no publica
+            // dónde: no hay safe area que consultar. Sin este margen el primer
+            // encabezado —"Nubes"— quedaba justo debajo de ellos.
+            .padding(.top, 40)
+            .padding(.bottom, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.hidden)
