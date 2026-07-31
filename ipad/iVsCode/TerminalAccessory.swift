@@ -486,6 +486,23 @@ final class MacTerminalView: TerminalView {
         }
     }
 
+    /// Qué cuenta como "desplazar" y qué no.
+    ///
+    /// El reparto que se busca es el de un terminal de escritorio:
+    ///   · un dedo, o clic sostenido del trackpad → seleccionar
+    ///   · dos dedos, o desplazamiento del trackpad → desplazar
+    ///
+    /// `minimumNumberOfTouches` ya lo impone para los dedos, pero conviene
+    /// dejarlo explícito por el caso del trackpad: un desplazamiento indirecto
+    /// NO trae dedos —llega como evento de scroll, con `numberOfTouches` a
+    /// cero—, mientras que un clic arrastrado sí cuenta como uno. Esa es
+    /// justamente la línea que separa desplazar de seleccionar con el trackpad,
+    /// y la que hace que ambos convivan sin pisarse.
+    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+        guard g === scrollPan else { return super.gestureRecognizerShouldBegin(g) }
+        return g.numberOfTouches == 0 || g.numberOfTouches == 2
+    }
+
     deinit { glide?.invalidate() }
 
     @objc private func fontBigger() { onFontSizeDelta?(1) }
@@ -516,8 +533,12 @@ extension MacTerminalView: UIGestureRecognizerDelegate {
     ///
     /// Sin esto, cuál gana depende de cuál reconozca primero — una carrera que
     /// se resuelve distinto según cómo apoyes los dedos, que es la peor clase
-    /// de comportamiento: intermitente. Obligando a los demás a esperar a que
-    /// este falle, dos dedos siempre desplazan.
+    /// de comportamiento: intermitente. Dos dedos rara vez tocan a la vez, y al
+    /// moverse el primero el gesto de selección ya se había quedado el toque.
+    ///
+    /// Obligando a los demás a esperar a que este falle, dos dedos siempre
+    /// desplazan. Y con uno solo este falla enseguida —no puede empezar sin dos
+    /// toques—, así que la selección arranca sin retraso apreciable.
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
         g === scrollPan && other is UIPanGestureRecognizer
