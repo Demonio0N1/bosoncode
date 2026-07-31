@@ -275,6 +275,7 @@ final class MacTerminalView: TerminalView {
     @objc private func handleScroll(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
         case .began:
+            cancelCompetingPans()
             stopGlide()                       // tocar corta la inercia anterior
             scrollAccum = 0
             trackedVelocity = 0
@@ -296,6 +297,29 @@ final class MacTerminalView: TerminalView {
         default:
             stopGlide()
             scrollAccum = 0
+        }
+    }
+
+    /// Corta cualquier arrastre de selección que ya hubiera empezado.
+    ///
+    /// Dos dedos rara vez tocan a la vez: con el primero, el gesto de selección
+    /// de SwiftTerm ya se ha quedado el toque, y al llegar el segundo el
+    /// desplazamiento no podía entrar.
+    ///
+    /// Antes esto se resolvía obligando a los demás a esperar a que el de
+    /// scroll fallara, y ahí estaba el error: un gesto que exige DOS dedos no
+    /// falla mientras solo haya uno —se queda esperando a ver si llega el
+    /// segundo—, así que el de selección quedaba bloqueado todo el arrastre. Por
+    /// eso dejó de poder seleccionarse nada.
+    ///
+    /// Apagar y encender el reconocedor lo cancela en el acto. Así el reparto
+    /// se decide por lo que de verdad ocurre: con un dedo selecciona, y en
+    /// cuanto entra el segundo manda el desplazamiento.
+    private func cancelCompetingPans() {
+        for g in gestureRecognizers ?? []
+        where g !== scrollPan && g is UIPanGestureRecognizer {
+            g.isEnabled = false
+            g.isEnabled = true
         }
     }
 
@@ -529,18 +553,4 @@ extension MacTerminalView: UIGestureRecognizerDelegate {
         !(other is UIPanGestureRecognizer)
     }
 
-    /// Y entre los arrastres, manda el de desplazar.
-    ///
-    /// Sin esto, cuál gana depende de cuál reconozca primero — una carrera que
-    /// se resuelve distinto según cómo apoyes los dedos, que es la peor clase
-    /// de comportamiento: intermitente. Dos dedos rara vez tocan a la vez, y al
-    /// moverse el primero el gesto de selección ya se había quedado el toque.
-    ///
-    /// Obligando a los demás a esperar a que este falle, dos dedos siempre
-    /// desplazan. Y con uno solo este falla enseguida —no puede empezar sin dos
-    /// toques—, así que la selección arranca sin retraso apreciable.
-    func gestureRecognizer(_ g: UIGestureRecognizer,
-                           shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-        g === scrollPan && other is UIPanGestureRecognizer
-    }
 }
