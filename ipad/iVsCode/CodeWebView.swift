@@ -18,6 +18,8 @@ final class WebContainerView: UIView {
     /// de máquina o recargar dejaba dos observadores más vivos cada vez, todos
     /// despertando en cada cambio de ventana.
     var sceneObservers: [NSObjectProtocol] = []
+    /// Vigila que la PÁGINA no se desplace (ver `pinPageScroll`)
+    private var offsetObservation: NSKeyValueObservation?
 
     /// Vigilante: la página puede quedarse con un viewport viejo sin que cambie
     /// el marco (pasa al activar otra ventana de la app). Se compara lo que la
@@ -47,6 +49,29 @@ final class WebContainerView: UIView {
         active ? startWatchdog() : stopWatchdog()
     }
 
+    /// El desplazamiento de la PÁGINA se mantiene siempre en el origen.
+    ///
+    /// VS Code maqueta con `overflow: hidden` y gestiona su propio scroll, así
+    /// que la página nunca debería moverse. Si se mueve es porque quedó más
+    /// alta que el visor, y lo que asoma por debajo del editor es fondo vacío:
+    /// la banda negra.
+    ///
+    /// `bounces = false` ya evitaba el rebote elástico, pero eso es otra cosa:
+    /// impide estirar más allá del límite, no que la página se desplace de
+    /// verdad cuando de veras mide de más. Por eso seguía apareciendo la banda.
+    ///
+    /// Y como un desplazamiento es señal fiable de que la maquetación se
+    /// descuadró, se aprovecha para corregirla en el momento, en lugar de
+    /// esperar a que el vigilante lo note en su siguiente repaso.
+    func pinPageScroll(_ scrollView: UIScrollView) {
+        offsetObservation = scrollView.observe(\.contentOffset) { [weak self] view, _ in
+            // en el caso sano esto no se cumple nunca: la página no se mueve
+            guard view.contentOffset != .zero else { return }
+            view.setContentOffset(.zero, animated: false)
+            self?.forceViewportRefresh()
+        }
+    }
+
     private func checkViewport() {
         guard let webView, window != nil, bounds.height > 100 else { return }
         // Se compara la altura que VS Code está USANDO para maquetar (su
@@ -74,7 +99,7 @@ final class WebContainerView: UIView {
         }
     }
 
-    private func forceViewportRefresh() {
+    fileprivate func forceViewportRefresh() {
         guard let webView, let bottom = bottomConstraint else { return }
         bottom.constant = -1
         layoutIfNeeded()
@@ -88,6 +113,7 @@ final class WebContainerView: UIView {
 
     deinit {
         stopWatchdog()
+        offsetObservation?.invalidate()
         sceneObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
@@ -394,6 +420,7 @@ struct CodeWebView: UIViewRepresentable {
         ])
         container.bottomConstraint = bottom
         container.webView = webView
+        container.pinPageScroll(webView.scrollView)
         container.setWatchdogActive(isVisible)
         // al volver a primer plano (p. ej. tras abrir la ventana-terminal) la
         // página también debe recalcular su tamaño

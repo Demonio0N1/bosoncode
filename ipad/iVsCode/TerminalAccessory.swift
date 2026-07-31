@@ -164,6 +164,9 @@ final class MacTerminalView: TerminalView {
 
     private var scrollPan: UIPanGestureRecognizer?
     private var scrollAccum: CGFloat = 0
+    /// Deceleración tras levantar el dedo (ver `startGlide`)
+    private var glide: CADisplayLink?
+    private var glideVelocity: CGFloat = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -175,14 +178,26 @@ final class MacTerminalView: TerminalView {
         setupScroll()
     }
 
-    /// Scroll de historial con trackpad y dos dedos: SwiftTerm no traduce el
-    /// gesto, así que se envían eventos de rueda al programa remoto (tmux con
-    /// el ratón activo los convierte en desplazamiento del historial).
+    /// Desplazamiento del historial con el dedo, el trackpad o la rueda.
+    ///
+    /// SwiftTerm no traduce el gesto a rueda, así que se hace aquí: con tmux
+    /// delante —que es siempre, porque serve.sh abre las sesiones dentro de
+    /// tmux— el emulador NO tiene historial propio que desplazar. tmux usa la
+    /// pantalla alternativa, de modo que el búfer local mide exactamente una
+    /// pantalla y el UIScrollView de SwiftTerm no tiene recorrido. El historial
+    /// vive dentro de tmux y solo se alcanza por su modo copia, que se activa
+    /// con la RUEDA.
+    ///
+    /// Antes esto pedía DOS dedos, para dejarle uno a la selección. Pero en
+    /// iPadOS un dedo desplaza en todas partes, así que con uno no ocurría nada
+    /// y parecía que el terminal no se podía desplazar. Ahora basta con uno; la
+    /// selección sigue disponible manteniendo pulsado, que es como se hace en
+    /// el resto del sistema.
     private func setupScroll() {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleScroll(_:)))
         pan.allowedScrollTypesMask = .all      // rueda y trackpad
+        pan.minimumNumberOfTouches = 1
         pan.maximumNumberOfTouches = 2
-        pan.minimumNumberOfTouches = 2         // un dedo sigue seleccionando
         pan.delegate = self
         addGestureRecognizer(pan)
         scrollPan = pan
@@ -191,20 +206,63 @@ final class MacTerminalView: TerminalView {
     @objc private func handleScroll(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
         case .began:
+            stopGlide()                       // tocar corta la inercia anterior
             scrollAccum = 0
         case .changed:
             let dy = gesture.translation(in: self).y
             gesture.setTranslation(.zero, in: self)
             scrollAccum += dy
-            let lineHeight: CGFloat = 22
-            while abs(scrollAccum) >= lineHeight {
-                let up = scrollAccum > 0
-                scrollAccum += up ? -lineHeight : lineHeight
-                sendWheel(up: up)
-            }
+            emitWheelLines()
+        case .ended:
+            startGlide(velocity: gesture.velocity(in: self).y)
         default:
+            stopGlide()
             scrollAccum = 0
         }
+    }
+
+    /// Convierte lo acumulado en líneas de rueda. El alto de línea sale de la
+    /// tipografía en uso: con un número fijo, cambiar el tamaño de letra
+    /// desajustaba cuánto se movía cada gesto.
+    private func emitWheelLines() {
+        let lineHeight = max(8, font.lineHeight)
+        while abs(scrollAccum) >= lineHeight {
+            let up = scrollAccum > 0
+            scrollAccum += up ? -lineHeight : lineHeight
+            sendWheel(up: up)
+        }
+    }
+
+    /// Deceleración propia al levantar el dedo.
+    ///
+    /// La inercia del sistema la aporta UIScrollView, y aquí no se mueve
+    /// ninguno: el desplazamiento lo hace tmux al otro lado del cable. Por eso
+    /// el contenido se paraba en seco. Esto prolonga el gesto con la velocidad
+    /// que traía y la va apagando fotograma a fotograma.
+    private func startGlide(velocity: CGFloat) {
+        stopGlide()
+        // por debajo de este umbral el gesto fue una colocación, no un impulso
+        guard abs(velocity) > 150 else { scrollAccum = 0; return }
+        glideVelocity = velocity
+        let link = CADisplayLink(target: self, selector: #selector(stepGlide(_:)))
+        link.add(to: .main, forMode: .common)
+        glide = link
+    }
+
+    @objc private func stepGlide(_ link: CADisplayLink) {
+        // el decaimiento se ata al tiempo real, no al fotograma: así frena
+        // igual a 60 Hz que a los 120 de un iPad Pro
+        glideVelocity *= pow(0.9, CGFloat(link.duration) * 60)
+        guard abs(glideVelocity) > 50 else { stopGlide(); return }
+        scrollAccum += glideVelocity * CGFloat(link.duration)
+        emitWheelLines()
+    }
+
+    private func stopGlide() {
+        glide?.invalidate()
+        glide = nil
+        glideVelocity = 0
+        scrollAccum = 0
     }
 
     /// Si el programa remoto lee el ratón (tmux, vim, htop…) se le manda la
@@ -263,6 +321,8 @@ final class MacTerminalView: TerminalView {
         }
         super.pressesBegan(presses, with: event)
     }
+
+    deinit { glide?.invalidate() }
 
     @objc private func fontBigger() { onFontSizeDelta?(1) }
     @objc private func fontSmaller() { onFontSizeDelta?(-1) }
