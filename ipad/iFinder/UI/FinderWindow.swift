@@ -21,7 +21,6 @@ struct FinderWindow: View {
     @State private var visibility: NavigationSplitViewVisibility = .all
     @State private var showFolderPicker = false
     @State private var pickerStart: URL?
-    @State private var selectedSidebar: String?
     /// Panel lateral visible en ventana estrecha (ahí no es una columna fija)
     @State private var showCompactSidebar = false
     /// Foco del teclado en el área de archivos (lo necesitan las flechas)
@@ -241,6 +240,7 @@ struct FinderWindow: View {
             if visibility != .detailOnly {
                 sidebar
                     .frame(width: sidebarWidth)
+                    .background(.ultraThinMaterial)
                     .transition(.move(edge: .leading))
             }
             NavigationStack {
@@ -313,9 +313,7 @@ struct FinderWindow: View {
 
                 // `ultraThin` y no `regular`: la barra se ha visto siempre
                 // translúcida, dejando entrever lo que hay detrás, y con el
-                // material grueso parecía otra pantalla encima. La lista ya
-                // tiene su fondo oculto (`macSidebarStyle`), así que lo que se
-                // ve a través es este material y nada más.
+                // material grueso parecía otra pantalla encima.
                 sidebar
                     .frame(width: sidebarPanelWidth(in: geo.size.width))
                     .background(.ultraThinMaterial)
@@ -336,100 +334,115 @@ struct FinderWindow: View {
         }
     }
 
+    /// Barra lateral: `ScrollView` + `VStack`, no una `List`.
+    ///
+    /// `List` impone lo que aquí sobra —separadores, recuadro por sección,
+    /// márgenes propios— y esconderlo pieza a pieza no basta: siempre queda
+    /// alguna línea, como la que asomaba entre secciones. Un VStack no dibuja
+    /// nada que no se le pida, así que el problema desaparece de raíz en vez de
+    /// taparse.
+    ///
+    /// Lo que se pierde de `List` no se usaba: la selección la lleva
+    /// `isCurrent`, atada a la carpeta abierta, y las filas son botones.
     private var sidebar: some View {
-        List(selection: $selectedSidebar) {
-            // Nubes montadas: Drive, OneDrive de cada universidad, Dropbox…
-            if !local.mounts.isEmpty {
-                Section {
-                    ForEach(local.mounts) { mount in
-                        mountRow(mount)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                // Nubes montadas: Drive, OneDrive de cada universidad, Dropbox…
+                if !local.mounts.isEmpty {
+                    sidebarSection("Nubes") {
+                        ForEach(local.mounts) { mountRow($0) }
                     }
-                } header: {
-                    Text("Nubes").macSidebarSectionHeader()
                 }
-            }
 
-            Section {
-                ForEach(local.plainFolders) { folder in
-                    mountRow(folder)
-                }
-                Button {
-                    Task { await openLocal(documentsURL) }
-                } label: {
-                    SidebarRow(title: "Archivos de ZeroSpin", systemImage: "iphone",
-                               isSelected: isCurrent(documentsURL))
-                }
-                .buttonStyle(.plain)
-                .macSidebarRowInsets()
-            } header: {
-                Text("Favoritos").macSidebarSectionHeader()
-            }
-
-            Section {
-                ForEach(SystemLocation.allCases) { location in
-                    Button {
-                        open(location)
-                    } label: {
-                        SidebarRow(title: location.title,
-                                   systemImage: location.icon,
-                                   dimmed: !isReachable(location),
-                                   isSelected: isCurrent(location.url))
+                sidebarSection("Favoritos") {
+                    ForEach(local.plainFolders) { mountRow($0) }
+                    sidebarButton(title: "Archivos de ZeroSpin",
+                                  systemImage: "iphone",
+                                  isSelected: isCurrent(documentsURL)) {
+                        Task { await openLocal(documentsURL) }
                     }
-                    .buttonStyle(.plain)
-                    .macSidebarRowInsets()
                 }
-                Button {
-                    pickerStart = nil
-                    showFolderPicker = true
-                } label: {
-                    SidebarRow(title: "Añadir carpeta…", systemImage: "plus.circle", tint: .cyan)
-                }
-                .buttonStyle(.plain)
-                .macSidebarRowInsets()
-                Button {
-                    showMountHelp = true
-                } label: {
-                    SidebarRow(title: "Montar nube…", systemImage: "externaldrive.badge.plus",
-                               tint: .cyan)
-                }
-                .buttonStyle(.plain)
-                .macSidebarRowInsets()
-                Button {
-                    showTrash = true
-                } label: {
-                    SidebarRow(title: model.trashCount > 0 ? "Papelera (\(model.trashCount))" : "Papelera",
-                               systemImage: model.trashCount > 0 ? "trash.fill" : "trash",
-                               tint: .secondary)
-                }
-                .buttonStyle(.plain)
-                .macSidebarRowInsets()
-            } header: {
-                Text("Ubicaciones").macSidebarSectionHeader()
-            }
 
-            if !servers.servers.isEmpty {
-                Section {
-                    ForEach(servers.servers) { server in
-                        SidebarRow(title: server.name,
-                                   systemImage: server.dockerMachineName.isEmpty
-                                       ? "desktopcomputer" : "shippingbox.fill",
-                                   dimmed: true)
-                            .macSidebarRowInsets()
+                sidebarSection("Ubicaciones") {
+                    ForEach(SystemLocation.allCases) { location in
+                        sidebarButton(title: location.title,
+                                      systemImage: location.icon,
+                                      dimmed: !isReachable(location),
+                                      isSelected: isCurrent(location.url)) {
+                            open(location)
+                        }
                     }
-                } header: {
-                    Text("Computadoras").macSidebarSectionHeader()
+                    sidebarButton(title: "Añadir carpeta…",
+                                  systemImage: "plus.circle", tint: .cyan) {
+                        pickerStart = nil
+                        showFolderPicker = true
+                    }
+                    sidebarButton(title: "Montar nube…",
+                                  systemImage: "externaldrive.badge.plus", tint: .cyan) {
+                        showMountHelp = true
+                    }
+                    sidebarButton(title: model.trashCount > 0
+                                      ? "Papelera (\(model.trashCount))" : "Papelera",
+                                  systemImage: model.trashCount > 0 ? "trash.fill" : "trash",
+                                  tint: .secondary) {
+                        showTrash = true
+                    }
+                }
+
+                if !servers.servers.isEmpty {
+                    sidebarSection("Computadoras") {
+                        ForEach(servers.servers) { server in
+                            SidebarRow(title: server.name,
+                                       systemImage: server.dockerMachineName.isEmpty
+                                           ? "desktopcomputer" : "shippingbox.fill",
+                                       dimmed: true)
+                                .padding(.horizontal, 10)
+                        }
+                    }
                 }
             }
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .macSidebarStyle(width: sidebarWidth)
-        .navigationTitle("ZeroSpin")
-        // sin esto iPadOS reserva una barra de título alta que rompe la
-        // proporción de la ventana
-        .navigationBarTitleDisplayMode(.inline)
+        .scrollIndicators(.hidden)
     }
 
-    /// Presenta algo DESPUÉS de que el selector termine de cerrarse.
+    /// Encabezado discreto y sus filas. Sustituye a `Section`, que era quien
+    /// traía el recuadro y las líneas.
+    @ViewBuilder
+    private func sidebarSection<Content: View>(
+        _ title: String, @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 18)
+                .padding(.top, 14)
+                .padding(.bottom, 2)
+            content()
+        }
+    }
+
+    /// Fila pulsable de la barra.
     ///
+    /// El margen exterior de 10 pt es lo que hace que la burbuja flote: la fila
+    /// dibuja su fondo redondeado dentro de ese margen, así que nunca llega a
+    /// tocar los bordes de la barra.
+    private func sidebarButton(title: String,
+                               systemImage: String,
+                               tint: Color = .accentColor,
+                               dimmed: Bool = false,
+                               isSelected: Bool = false,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            SidebarRow(title: title, systemImage: systemImage,
+                       tint: tint, dimmed: dimmed, isSelected: isSelected)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+    }
+
     /// Sin este respiro, iPadOS descarta la presentación sin avisar: hay dos
     /// intentos de presentar a la vez y gana el que ya estaba.
     private func present(_ action: @escaping () -> Void) {
@@ -519,7 +532,7 @@ struct FinderWindow: View {
                        isSelected: isCurrent(local.resolvedURL(for: folder)))
         }
         .buttonStyle(.plain)
-        .macSidebarRowInsets()
+        .padding(.horizontal, 10)
         .contextMenu {
             Button { renamingMount = folder; mountName = folder.name } label: {
                 Label("Renombrar", systemImage: "pencil")
