@@ -241,10 +241,7 @@ struct FinderWindow: View {
         HStack(spacing: 0) {
             if visibility != .detailOnly {
                 sidebar
-                    // Suelo de 240: con el texto al tamaño del sistema, por
-                    // debajo se recortan nombres como "Archivos de ZeroSpin".
-                    // El ancho guardado venía de cuando la letra era de 13 pt.
-                    .frame(width: max(240, sidebarWidth))
+                    .frame(width: sidebarWidth)
                     .background(.ultraThinMaterial)
                     .transition(.move(edge: .leading))
             }
@@ -264,8 +261,8 @@ struct FinderWindow: View {
     /// pantalla. Se le deja siempre un margen por el que se ve —y se toca— lo
     /// que hay detrás.
     private func sidebarPanelWidth(in available: CGFloat) -> CGFloat {
-        guard available > 1 else { return 300 }
-        return min(300, available * 0.85)
+        guard available > 1 else { return 270 }
+        return min(270, available * 0.82)
     }
 
     /// Muestra u oculta la barra. Sustituye al botón que ponía
@@ -351,7 +348,7 @@ struct FinderWindow: View {
     /// `isCurrent`, atada a la carpeta abierta, y las filas son botones.
     private var sidebar: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 // Nubes montadas: Drive, OneDrive de cada universidad, Dropbox…
                 if !local.mounts.isEmpty {
                     sidebarSection("Nubes") {
@@ -412,44 +409,23 @@ struct FinderWindow: View {
         .scrollIndicators(.hidden)
     }
 
-    /// Encabezado de sección y sus filas, plegable como en la app Archivos.
+    /// Encabezado de sección y sus filas.
     ///
-    /// El encabezado va al tamaño de texto normal, no en versalitas diminutas:
-    /// en Archivos "Favoritos" y "Ubicaciones" se leen tan bien como las filas,
-    /// y son además el mando para plegar la sección. Un encabezado de 11 pt en
-    /// gris, que es lo que había, ni se veía.
-    ///
-    /// Todo el encabezado es el botón —no solo el chevron—, que es un blanco
-    /// mucho más fácil de acertar con el dedo.
+    /// Sustituye a `Section` de `List`, que era quien traía el recuadro y las
+    /// líneas. El encabezado vive en su propia vista para poder saber si tiene
+    /// el puntero encima y enseñar el chevron solo entonces.
     @ViewBuilder
     private func sidebarSection<Content: View>(
         _ title: String, @ViewBuilder content: () -> Content
     ) -> some View {
         let collapsed = collapsedSections.contains(title)
-        VStack(alignment: .leading, spacing: 3) {
-            Button {
+        VStack(alignment: .leading, spacing: 2) {
+            SidebarSectionHeader(title: title, collapsed: collapsed) {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     if collapsed { collapsedSections.remove(title) }
                     else { collapsedSections.insert(title) }
                 }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(title)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(collapsed ? -90 : 0))
-                }
-                .padding(.horizontal, 22)
-                .padding(.top, 18)
-                .padding(.bottom, 2)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-
             if !collapsed { content() }
         }
     }
@@ -581,7 +557,7 @@ struct FinderWindow: View {
             // divisor, pero sí respeta el ancho ideal que se le dé: moviendo
             // esta asa se cambia ese valor y la barra sigue al dedo.
             if horizontalSizeClass == .regular, visibility != .detailOnly {
-                ResizableDivider(width: $sidebarWidth, range: 240...460, resetTo: 280)
+                ResizableDivider(width: $sidebarWidth, range: 150...420, resetTo: 220)
             }
             VStack(spacing: 0) {
                 toolbar
