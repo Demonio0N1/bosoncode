@@ -286,13 +286,18 @@ struct FinderWindow: View {
     /// El borde tenue delimita el panel cuando él y el fondo son oscuros, que
     /// es cuando un material translúcido se confunde con lo que hay detrás.
     ///
-    /// El radio no es un número al gusto: para que dos esquinas anidadas se
-    /// vean paralelas, la de dentro debe valer la de fuera menos la separación
-    /// entre ambas. La ventana de iPadOS redondea a unos 28 y el panel va a 8
-    /// de ella, así que le tocan 20. Con menos —12, que es lo que tenía— la
-    /// esquina del panel se cerraba antes que la de la ventana y desentonaba.
+    /// El radio va calibrado a ojo contra la ventana, porque iPadOS **no
+    /// publica el suyo**: no hay API pública que lo devuelva, ni para la
+    /// ventana de Stage Manager ni para la pantalla. Con 12 la esquina se
+    /// cerraba antes que la de la ventana; con 20 se abría más que ella.
+    ///
+    /// Es el único número de todo esto que no sale de una regla, así que vive
+    /// aparte y con nombre: si hay que moverlo, se mueve aquí.
+    private static let panelCornerRadius: CGFloat = 16
+
     private var sidebarSurface: some View {
-        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: Self.panelCornerRadius,
+                                     style: .continuous)
         return shape
             .fill(.ultraThinMaterial)
             .overlay(shape.strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5))
