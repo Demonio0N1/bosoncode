@@ -252,6 +252,17 @@ struct FinderWindow: View {
         }
     }
 
+    /// Ancho del panel en ventana estrecha.
+    ///
+    /// Nunca puede quedarse con la ventana entera: si tapa todo, deja de leerse
+    /// como un panel encima del contenido y parece que la app cambió de
+    /// pantalla. Se le deja siempre un margen por el que se ve —y se toca— lo
+    /// que hay detrás.
+    private func sidebarPanelWidth(in available: CGFloat) -> CGFloat {
+        guard available > 1 else { return 270 }
+        return min(270, available * 0.82)
+    }
+
     /// Muestra u oculta la barra. Sustituye al botón que ponía
     /// `NavigationSplitView`, que se fue con él.
     private var sidebarToggle: some View {
@@ -282,7 +293,8 @@ struct FinderWindow: View {
     /// barra pasa a ser un panel que se retira al elegir algo, que es lo que
     /// hacen Archivos y el Finder en una ventana estrecha.
     private var compactLayout: some View {
-        ZStack(alignment: .leading) {
+        GeometryReader { geo in
+          ZStack(alignment: .leading) {
             NavigationStack {
                 content
                     .toolbar {
@@ -292,18 +304,30 @@ struct FinderWindow: View {
 
             if showCompactSidebar {
                 // velo: tocar fuera cierra, como cualquier panel de iPadOS
-                Color.black.opacity(0.35)
+                Color.black.opacity(0.25)
                     .ignoresSafeArea()
                     .onTapGesture {
                         withAnimation(.easeOut(duration: 0.22)) { showCompactSidebar = false }
                     }
                     .transition(.opacity)
 
+                // `ultraThin` y no `regular`: la barra se ha visto siempre
+                // translúcida, dejando entrever lo que hay detrás, y con el
+                // material grueso parecía otra pantalla encima. La lista ya
+                // tiene su fondo oculto (`macSidebarStyle`), así que lo que se
+                // ve a través es este material y nada más.
                 sidebar
-                    .frame(width: 270)
-                    .background(.regularMaterial)
+                    .frame(width: sidebarPanelWidth(in: geo.size.width))
+                    .background(.ultraThinMaterial)
+                    // el borde separa el panel del contenido cuando los dos son
+                    // oscuros; sin él, translúcido se confunde con el fondo
+                    .overlay(alignment: .trailing) {
+                        Divider().ignoresSafeArea()
+                    }
+                    .shadow(color: .black.opacity(0.28), radius: 14, x: 3)
                     .transition(.move(edge: .leading))
             }
+          }
         }
         // Elegir una ubicación la retira sola: en una ventana estrecha el panel
         // tapa justo lo que acabas de abrir.
