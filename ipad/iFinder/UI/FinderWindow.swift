@@ -286,14 +286,17 @@ struct FinderWindow: View {
     /// El borde tenue delimita el panel cuando él y el fondo son oscuros, que
     /// es cuando un material translúcido se confunde con lo que hay detrás.
     ///
-    /// El radio va calibrado a ojo contra la ventana, porque iPadOS **no
-    /// publica el suyo**: no hay API pública que lo devuelva, ni para la
-    /// ventana de Stage Manager ni para la pantalla. Con 12 la esquina se
-    /// cerraba antes que la de la ventana; con 20 se abría más que ella.
+    /// Radio de la esquina del panel, igualado al de la ventana.
     ///
-    /// Es el único número de todo esto que no sale de una regla, así que vive
-    /// aparte y con nombre: si hay que moverlo, se mueve aquí.
-    private static let panelCornerRadius: CGFloat = 16
+    /// Va calibrado a ojo porque iPadOS **no publica el suyo**: no hay API que
+    /// lo devuelva, ni para la ventana de Stage Manager ni para la pantalla.
+    /// Medido sobre una captura, la esquina de la ventana es ~1,35 veces la que
+    /// tenía el panel con 16, de donde salen estos 22.
+    ///
+    /// Es el único número del panel que no se deduce de una regla —el margen,
+    /// el área segura y las dos capas de burbuja sí—, así que vive aparte y con
+    /// nombre: si hay que moverlo, se mueve aquí y en ningún otro sitio.
+    private static let panelCornerRadius: CGFloat = 22
 
     private var sidebarSurface: some View {
         let shape = RoundedRectangle(cornerRadius: Self.panelCornerRadius,
