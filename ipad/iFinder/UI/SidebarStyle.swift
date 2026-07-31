@@ -60,8 +60,11 @@ struct SidebarRow: View {
     }
 
     /// El resalte redondeado. En reposo no dibuja nada: la barra queda lisa.
+    ///
+    /// Sube a 9 acompañando al panel: dentro de un contenedor muy redondeado,
+    /// una pastilla de esquinas cerradas se ve dura por contraste.
     private var bubble: some View {
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
             .fill(bubbleFill)
     }
 
