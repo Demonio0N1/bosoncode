@@ -345,12 +345,13 @@ struct ColumnsBrowserView: View {
     @State private var hovered: String?
 
     var body: some View {
-        ScrollViewReader { proxy in
+        GeometryReader { geo in
+          ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 HStack(spacing: 0) {
                     ForEach(Array(model.levels.enumerated()), id: \.element.id) { index, level in
                         column(level, index: index)
-                            .frame(width: columnWidth)
+                            .frame(width: width(in: geo.size.width))
                             .id(level.id)
                         Divider()
                     }
@@ -361,7 +362,23 @@ struct ColumnsBrowserView: View {
                     withAnimation { proxy.scrollTo(last.id, anchor: .trailing) }
                 }
             }
+            // al estrechar la ventana, la columna activa debe seguir a la vista
+            .onChange(of: geo.size.width) { _, _ in
+                if let last = model.levels.last { proxy.scrollTo(last.id, anchor: .trailing) }
+            }
+          }
         }
+    }
+
+    /// Ancho real de cada columna.
+    ///
+    /// El ancho elegido por el usuario manda, pero nunca puede pasarse del de
+    /// la ventana: una columna de 340 pt en una ventana de 320 quedaría cortada
+    /// y no se vería entera por mucho que se deslizara. Ajustándola, en
+    /// estrecho se ve una columna completa y se pasa de una a otra de lado.
+    private func width(in available: CGFloat) -> CGFloat {
+        guard available > 1 else { return columnWidth }
+        return min(columnWidth, available)
     }
 
     private func column(_ level: DirectoryLevel, index: Int) -> some View {

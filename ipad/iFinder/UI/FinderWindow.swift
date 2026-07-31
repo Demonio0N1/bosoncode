@@ -460,7 +460,12 @@ struct FinderWindow: View {
                 toolbar
                 Divider()
                 Group {
-                    switch (horizontalSizeClass == .compact ? .list : model.viewMode) {
+                    // Se respeta SIEMPRE la vista elegida, también en ventana
+                    // estrecha. Antes se forzaba la lista, así que tocar
+                    // "columnas" en la barra no hacía nada: el selector seguía
+                    // marcándola y la pantalla no cambiaba. Las columnas se
+                    // deslizan de lado, que es justo lo que sirve en estrecho.
+                    switch model.viewMode {
                     case .icons:
                         if let level = model.levels.indices.last { IconsView(model: model, level: level) }
                     case .list:
