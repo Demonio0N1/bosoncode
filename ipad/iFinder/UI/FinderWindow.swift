@@ -248,6 +248,12 @@ struct FinderWindow: View {
                     // el panel quedaba flotando por arriba, abajo e izquierda
                     // pero pegado al contenido por la derecha.
                     .padding(8)
+                    // …y los ocho puntos deben contarse desde el borde de la
+                    // VENTANA. Sin esto se cuentan desde el área segura, que en
+                    // un iPad existe arriba y abajo pero no a los lados: el
+                    // hueco de arriba y el de abajo salían siendo 8 más el
+                    // margen del sistema, y solo el de la izquierda medía 8.
+                    .ignoresSafeArea(.container, edges: .vertical)
                     .transition(.move(edge: .leading))
             }
             NavigationStack {
@@ -347,6 +353,7 @@ struct FinderWindow: View {
                     .frame(width: sidebarPanelWidth(in: geo.size.width))
                     .background(sidebarSurface)
                     .padding(8)
+                    .ignoresSafeArea(.container, edges: .vertical)
                     .shadow(color: .black.opacity(0.28), radius: 14, x: 3)
                     .transition(.move(edge: .leading))
             }
