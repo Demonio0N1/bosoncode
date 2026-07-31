@@ -15,6 +15,8 @@ import SwiftUI
 ///      que cubra también la zona que sobra cuando hay pocos archivos.
 struct FolderBackground: View {
     @ObservedObject var model: BrowserViewModel
+    /// Observado para que el menú refleje si hay fondo puesto ahora mismo
+    @ObservedObject private var wallpaper = Wallpaper.shared
     /// Altura del área visible, para llenar la carpeta aunque esté casi vacía.
     let minHeight: CGFloat
 
@@ -48,6 +50,32 @@ extension View {
             }
             Button { Task { await model.reload() } } label: {
                 Label("Actualizar", systemImage: "arrow.clockwise")
+            }
+            // El fondo se pone desde una imagen, así que quitarlo tiene que
+            // vivir en otro sitio: aquí, en el menú de la ventana, que es a
+            // quien pertenece el ajuste. Solo aparece si hay fondo puesto.
+            if Wallpaper.shared.image != nil {
+                Divider()
+                Menu {
+                    ForEach([0.15, 0.35, 0.6, 1.0], id: \.self) { level in
+                        Button {
+                            Wallpaper.shared.opacity = level
+                        } label: {
+                            if Wallpaper.shared.opacity == level {
+                                Label("\(Int(level * 100)) %", systemImage: "checkmark")
+                            } else {
+                                Text("\(Int(level * 100)) %")
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Intensidad del fondo", systemImage: "slider.horizontal.below.rectangle")
+                }
+                Button(role: .destructive) {
+                    Wallpaper.shared.clear()
+                } label: {
+                    Label("Quitar fondo de ZeroSpin", systemImage: "photo.badge.exclamationmark")
+                }
             }
         }
     }
