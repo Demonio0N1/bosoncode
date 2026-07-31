@@ -22,6 +22,8 @@ struct FinderWindow: View {
     @State private var showFolderPicker = false
     @State private var pickerStart: URL?
     @State private var selectedSidebar: String?
+    /// Panel lateral visible en ventana estrecha (ahí no es una columna fija)
+    @State private var showCompactSidebar = false
     /// Foco del teclado en el área de archivos (lo necesitan las flechas)
     @FocusState private var contentFocused: Bool
     /// Montaje que se está renombrando y ayuda para montar una nube
@@ -49,14 +51,20 @@ struct FinderWindow: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $visibility) {
-            sidebar
-        } detail: {
-            content
+        Group {
+            if horizontalSizeClass == .compact {
+                compactLayout
+            } else {
+                NavigationSplitView(columnVisibility: $visibility) {
+                    sidebar
+                } detail: {
+                    content
+                }
+                // El ancho de la barra lateral lo controla el usuario y se
+                // recuerda: iPadOS solo respeta el rango si se le da explícito.
+                .navigationSplitViewStyle(.balanced)
+            }
         }
-        // El ancho de la barra lateral lo controla el usuario y se recuerda:
-        // iPadOS solo respeta el rango si se le da explícitamente.
-        .navigationSplitViewStyle(.balanced)
         .newFileAlert(model)
         // Renombrar el montaje: dos cuentas del mismo servicio solo se
         // distinguen por el nombre que les ponga el usuario.
@@ -204,6 +212,58 @@ struct FinderWindow: View {
     }
 
     // MARK: - Barra lateral
+
+    /// Ventana estrecha: la barra lateral entra y sale, no se queda.
+    ///
+    /// Aquí NO se usa `NavigationSplitView`. Al colapsar en ancho compacto, la
+    /// raíz de su pila pasa a ser la barra lateral, y lo único que la aparta
+    /// para enseñar el detalle es un `NavigationLink`. Estas filas son botones
+    /// —cambian la carpeta abierta sin navegar—, así que la barra se quedaba
+    /// ocupando la ventana entera: tocabas una ubicación, el contenido cambiaba
+    /// detrás sin que se viera, y la app parecía muerta.
+    ///
+    /// Convertir las filas en `NavigationLink` no serviría: varias no navegan a
+    /// ninguna parte (abren el selector, la papelera, la ayuda de montaje). La
+    /// barra pasa a ser un panel que se retira al elegir algo, que es lo que
+    /// hacen Archivos y el Finder en una ventana estrecha.
+    private var compactLayout: some View {
+        ZStack(alignment: .leading) {
+            NavigationStack {
+                content
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.22)) {
+                                    showCompactSidebar = true
+                                }
+                            } label: {
+                                Image(systemName: "sidebar.leading")
+                            }
+                        }
+                    }
+            }
+
+            if showCompactSidebar {
+                // velo: tocar fuera cierra, como cualquier panel de iPadOS
+                Color.black.opacity(0.35)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation(.easeOut(duration: 0.22)) { showCompactSidebar = false }
+                    }
+                    .transition(.opacity)
+
+                sidebar
+                    .frame(width: 270)
+                    .background(.regularMaterial)
+                    .transition(.move(edge: .leading))
+            }
+        }
+        // Elegir una ubicación la retira sola: en una ventana estrecha el panel
+        // tapa justo lo que acabas de abrir.
+        .onChange(of: model.currentURL) { _, _ in
+            withAnimation(.easeOut(duration: 0.22)) { showCompactSidebar = false }
+        }
+    }
 
     private var sidebar: some View {
         List(selection: $selectedSidebar) {
