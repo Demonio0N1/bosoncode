@@ -112,6 +112,10 @@ final class PTYConnection: NSObject, TerminalViewDelegate {
                     return
                 }
                 self.view?.feed(byteArray: ArraySlice([UInt8](data)))
+                // Confirma al indicador de desplazamiento que la pantalla se
+                // movió de verdad. Sin esta señal, al llegar al principio del
+                // historial la barrita seguía avanzando contra el tope.
+                (self.view as? MacTerminalView)?.didReceiveOutput()
             }
             if isDone || error != nil {
                 self.scheduleReconnect(from: connection)

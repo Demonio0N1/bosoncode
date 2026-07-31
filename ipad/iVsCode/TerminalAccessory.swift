@@ -173,6 +173,8 @@ final class MacTerminalView: TerminalView {
     /// Indicador de desplazamiento y cuántas líneas llevamos hacia atrás
     private let scrollThumb = UIView()
     private var linesBack = 0
+    /// Líneas de rueda enviadas cuya respuesta todavía no ha llegado
+    private var unconfirmedLines = 0
     private var thumbFade: DispatchWorkItem?
 
     override init(frame: CGRect) {
@@ -311,10 +313,30 @@ final class MacTerminalView: TerminalView {
             let up = scrollAccum > 0
             scrollAccum += up ? -lineHeight : lineHeight
             sendWheel(up: up)
-            linesBack = max(0, linesBack + (up ? 1 : -1))
+            // NO se da por movido todavía: ver `didReceiveOutput`
+            unconfirmedLines += up ? 1 : -1
             moved = true
         }
-        if moved { flashScrollThumb() }
+        // fuera de tmux el desplazamiento es local y se sabe al instante
+        if moved, getTerminal().mouseMode == .off { flashScrollThumb() }
+    }
+
+    /// El host respondió: lo enviado sí movió la pantalla.
+    ///
+    /// Aquí está la corrección del indicador. Antes se contaba cada línea de
+    /// rueda ENVIADA, y al llegar al principio del historial tmux deja de
+    /// responder pero las líneas se seguían enviando: el contador crecía y la
+    /// barrita seguía deslizándose contra un tope que ya se había alcanzado.
+    ///
+    /// Contando solo lo que el host confirma con datos de vuelta, al llegar al
+    /// límite deja de llegar respuesta y la barrita se para sola — sin
+    /// necesidad de saber cuánto historial tiene tmux, que desde aquí no se
+    /// puede averiguar.
+    func didReceiveOutput() {
+        guard unconfirmedLines != 0 else { return }
+        linesBack = max(0, linesBack + unconfirmedLines)
+        unconfirmedLines = 0
+        flashScrollThumb()
     }
 
     /// Deceleración propia al levantar el dedo.
@@ -348,6 +370,9 @@ final class MacTerminalView: TerminalView {
         glideVelocity = 0
         trackedVelocity = 0
         scrollAccum = 0
+        // lo que no llegó a confirmarse no cuenta: si el host no respondió, no
+        // se movió nada
+        unconfirmedLines = 0
     }
 
     /// Si el programa remoto lee el ratón (tmux, vim, htop…) se le manda la
