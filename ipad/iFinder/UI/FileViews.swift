@@ -204,10 +204,23 @@ struct DetailListView: View {
     /// nombre no se sacrifica nunca.
     private struct VisibleColumns {
         let date: Bool, size: Bool, kind: Bool
+
+        /// Ancho que se le reserva al nombre ANTES de conceder ninguna otra
+        /// columna. Un nombre real —"Servicios_Suplementarios_2026.pdf"—
+        /// necesita este espacio para leerse entero; por debajo, las demás
+        /// columnas quitan más de lo que aportan.
+        static let nameBudget: CGFloat = 300
+
+        /// Las columnas se conceden por orden y solo si sobra sitio DESPUÉS de
+        /// pagar el nombre, así que nunca aparece Tamaño sin Fecha ni queda un
+        /// hueco raro en medio.
         init(width: CGFloat) {
-            kind = width >= 700
-            size = width >= 560
-            date = width >= 430
+            var free = width - 28 - Self.nameBudget   // 28 = margen horizontal
+            date = free >= 182                        // 170 + 12 de separación
+            if date { free -= 182 }
+            size = date && free >= 102                // 90 + 12
+            if size { free -= 102 }
+            kind = size && free >= 142                // 130 + 12
         }
     }
 
