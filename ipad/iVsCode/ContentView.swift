@@ -333,6 +333,14 @@ struct ContentView: View {
             withAnimation { showLauncher = false }
             reloadToken = UUID()          // recarga con ?file=
         }
+        // Esta ventana le dice al menú del sistema qué hacer con ⌃⌥T. Se
+        // publica SIEMPRE, también sin equipo activo: si el valor fuera nil, el
+        // menú quedaría sin acción y el atajo se perdería en el aire.
+        .focusedSceneValue(\.boson, BosonActions {
+            if let server = session.active, !showLauncher {
+                openTerminalWindow(for: server)
+            }
+        })
         // ⌃⌥T a nivel de VENTANA, no del editor.
         //
         // Antes vivía como UIKeyCommand dentro del WKWebView, que solo los

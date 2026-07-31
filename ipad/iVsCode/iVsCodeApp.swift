@@ -19,6 +19,10 @@ struct BosonCodeApp: App {
                 .persistentSystemOverlays(.hidden)   // oculta el indicador de Home
                 .defersSystemGestures(on: .all)      // el primer swipe de borde va a la app
         }
+        // Atajos a nivel de aplicación: responden aunque ninguna vista tenga
+        // todavía el foco del teclado, que es justo el hueco que quedaba tras
+        // conectar a una máquina.
+        .commands { BosonCommands() }
 
         // Ventana independiente: una ventana MÁS de iPadOS (aparece por separado
         // en el conmutador de apps), no un panel dentro de la ventana principal.

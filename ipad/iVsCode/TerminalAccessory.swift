@@ -353,6 +353,21 @@ final class MacTerminalView: TerminalView {
         super.pressesBegan(presses, with: event)
     }
 
+    /// El terminal pide el foco en cuanto entra en una ventana.
+    ///
+    /// Está para escribir en él: exigir un toque previo antes de poder teclear
+    /// es un paso que no aporta nada. Se pide en el siguiente ciclo porque en
+    /// este momento la vista acaba de entrar en la jerarquía y aún no puede ser
+    /// primer respondedor.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, !isFirstResponder else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil else { return }
+            _ = self.becomeFirstResponder()
+        }
+    }
+
     deinit { glide?.invalidate() }
 
     @objc private func fontBigger() { onFontSizeDelta?(1) }

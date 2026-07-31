@@ -546,7 +546,22 @@ struct CodeWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             let onLoginPage = webView.url?.path.contains("/login") == true
             onLoading?(onLoginPage)
-            if !onLoginPage { installDragOut(in: webView) }
+            if !onLoginPage {
+                installDragOut(in: webView)
+                // El editor toma el foco del teclado en cuanto está listo.
+                //
+                // Los UIKeyCommand solo se consultan en la cadena de
+                // respondedores, y nada más conectar esa cadena no llegaba al
+                // WebView: no era primer respondedor hasta que tocabas la
+                // pantalla. Por eso ⌃⌥T no hacía nada al entrar en una máquina
+                // y sí funcionaba después del primer toque.
+                //
+                // Tomarlo NO abre el teclado en pantalla: eso solo ocurre si la
+                // página enfoca un campo de texto.
+                if webView.window != nil, !webView.isFirstResponder {
+                    webView.becomeFirstResponder()
+                }
+            }
             // refuerzo del auto-login: si seguimos en /login con clave conocida,
             // reintenta (el user script pudo no ejecutarse en cargas raras)
             guard let password, !password.isEmpty, onLoginPage else { return }
