@@ -242,6 +242,11 @@ struct FinderWindow: View {
             if visibility != .detailOnly {
                 sidebar
                     .frame(width: sidebarWidth)
+                    // El fondo redondeado no recorta nada por sí solo: dibuja
+                    // DETRÁS. Sin esto, una fila que llega al borde inferior se
+                    // pintaba por encima de la esquina curva y se salía del
+                    // panel — que es lo que le pasaba a "Papelera".
+                    .clipShape(panelShape)
                     .background(sidebarSurface)
                     // Margen IGUAL por los cuatro lados. Antes eran tres:
                     // `.leading` + `.vertical` dejaba el lado derecho a cero, y
@@ -298,12 +303,17 @@ struct FinderWindow: View {
     /// nombre: si hay que moverlo, se mueve aquí y en ningún otro sitio.
     private static let panelCornerRadius: CGFloat = 22
 
+    /// Trazado del panel. Lo comparten el fondo y el recorte del contenido: si
+    /// cada uno llevara el suyo, cambiar el radio en un sitio y olvidarlo en el
+    /// otro dejaría filas asomando por la esquina.
+    private var panelShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: Self.panelCornerRadius, style: .continuous)
+    }
+
     private var sidebarSurface: some View {
-        let shape = RoundedRectangle(cornerRadius: Self.panelCornerRadius,
-                                     style: .continuous)
-        return shape
+        panelShape
             .fill(.ultraThinMaterial)
-            .overlay(shape.strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5))
+            .overlay(panelShape.strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5))
     }
 
     /// Muestra u oculta la barra. Sustituye al botón que ponía
@@ -359,6 +369,7 @@ struct FinderWindow: View {
                 // material grueso parecía otra pantalla encima.
                 sidebar
                     .frame(width: sidebarPanelWidth(in: geo.size.width))
+                    .clipShape(panelShape)
                     .background(sidebarSurface)
                     .padding(8)
                     .ignoresSafeArea(.container, edges: .vertical)
@@ -446,7 +457,9 @@ struct FinderWindow: View {
             // dónde: no hay safe area que consultar. Sin este margen el primer
             // encabezado —"Nubes"— quedaba justo debajo de ellos.
             .padding(.top, 40)
-            .padding(.bottom, 10)
+            // La curva de la esquina se come la banda inferior: con poco aire,
+            // la última fila quedaba cortada por la mitad al llegar al final.
+            .padding(.bottom, 22)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.hidden)
