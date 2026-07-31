@@ -243,8 +243,11 @@ struct FinderWindow: View {
                 sidebar
                     .frame(width: sidebarWidth)
                     .background(sidebarSurface)
-                    .padding(.leading, 8)
-                    .padding(.vertical, 8)
+                    // Margen IGUAL por los cuatro lados. Antes eran tres:
+                    // `.leading` + `.vertical` dejaba el lado derecho a cero, y
+                    // el panel quedaba flotando por arriba, abajo e izquierda
+                    // pero pegado al contenido por la derecha.
+                    .padding(8)
                     .transition(.move(edge: .leading))
             }
             NavigationStack {
@@ -343,8 +346,7 @@ struct FinderWindow: View {
                 sidebar
                     .frame(width: sidebarPanelWidth(in: geo.size.width))
                     .background(sidebarSurface)
-                    .padding(.leading, 8)
-                    .padding(.vertical, 8)
+                    .padding(8)
                     .shadow(color: .black.opacity(0.28), radius: 14, x: 3)
                     .transition(.move(edge: .leading))
             }
