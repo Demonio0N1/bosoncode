@@ -170,6 +170,10 @@ final class MacTerminalView: TerminalView {
     /// Velocidad estimada a mano, en puntos por segundo (ver `.ended`)
     private var trackedVelocity: CGFloat = 0
     private var lastSampleTime: CFTimeInterval = 0
+    /// Indicador de desplazamiento y cuántas líneas llevamos hacia atrás
+    private let scrollThumb = UIView()
+    private var linesBack = 0
+    private var thumbFade: DispatchWorkItem?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -191,19 +195,65 @@ final class MacTerminalView: TerminalView {
     /// vive dentro de tmux y solo se alcanza por su modo copia, que se activa
     /// con la RUEDA.
     ///
-    /// Antes esto pedía DOS dedos, para dejarle uno a la selección. Pero en
-    /// iPadOS un dedo desplaza en todas partes, así que con uno no ocurría nada
-    /// y parecía que el terminal no se podía desplazar. Ahora basta con uno; la
-    /// selección sigue disponible manteniendo pulsado, que es como se hace en
-    /// el resto del sistema.
+    /// Hacen falta DOS dedos: uno solo queda para la selección y para lo que el
+    /// programa remoto haga con el ratón. Es también lo que hace Terminal en
+    /// macOS con el trackpad, y evita desplazar sin querer mientras se marca
+    /// texto.
     private func setupScroll() {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleScroll(_:)))
         pan.allowedScrollTypesMask = .all      // rueda y trackpad
-        pan.minimumNumberOfTouches = 1
+        pan.minimumNumberOfTouches = 2
         pan.maximumNumberOfTouches = 2
         pan.delegate = self
         addGestureRecognizer(pan)
         scrollPan = pan
+        buildScrollThumb()
+    }
+
+    /// Barra fina en el borde derecho, como la de cualquier vista de iOS:
+    /// aparece al desplazar y se desvanece al parar.
+    private func buildScrollThumb() {
+        scrollThumb.backgroundColor = UIColor.label.withAlphaComponent(0.35)
+        scrollThumb.layer.cornerRadius = 1.5
+        scrollThumb.alpha = 0
+        scrollThumb.isUserInteractionEnabled = false
+        addSubview(scrollThumb)
+    }
+
+    /// Coloca y enseña el indicador.
+    ///
+    /// La posición sale del desplazamiento real del emulador cuando lo hay.
+    /// Con tmux delante no lo hay —el historial es suyo, no del emulador—, así
+    /// que ahí se usa cuánto llevas retrocedido: sirve para ver que avanzas y
+    /// en qué dirección, aunque no sea una fracción del total, que nadie de
+    /// este lado conoce. tmux sigue enseñando su [n/m] exacto en modo copia.
+    private func flashScrollThumb() {
+        guard bounds.height > 40 else { return }
+        let inTmux = getTerminal().mouseMode != .off
+        let travel: CGFloat
+        let thumbHeight: CGFloat
+        if inTmux {
+            // 0 = al día; 1 = bien atrás. 200 líneas como recorrido de
+            // referencia: suficiente para que el gesto se note enseguida.
+            travel = min(1, CGFloat(linesBack) / 200)
+            thumbHeight = 44
+        } else {
+            travel = 1 - CGFloat(scrollPosition)
+            thumbHeight = max(30, bounds.height * CGFloat(scrollThumbsize))
+        }
+        let usable = bounds.height - thumbHeight - 8
+        let y = 4 + usable * (1 - travel)
+        scrollThumb.frame = CGRect(x: bounds.width - 6, y: contentOffset.y + y,
+                                   width: 3, height: thumbHeight)
+        bringSubviewToFront(scrollThumb)
+
+        thumbFade?.cancel()
+        scrollThumb.alpha = 1
+        let fade = DispatchWorkItem { [weak self] in
+            UIView.animate(withDuration: 0.35) { self?.scrollThumb.alpha = 0 }
+        }
+        thumbFade = fade
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: fade)
     }
 
     @objc private func handleScroll(_ gesture: UIPanGestureRecognizer) {
@@ -256,11 +306,15 @@ final class MacTerminalView: TerminalView {
     /// desajustaba cuánto se movía cada gesto.
     private func emitWheelLines() {
         let lineHeight = max(8, font.lineHeight)
+        var moved = false
         while abs(scrollAccum) >= lineHeight {
             let up = scrollAccum > 0
             scrollAccum += up ? -lineHeight : lineHeight
             sendWheel(up: up)
+            linesBack = max(0, linesBack + (up ? 1 : -1))
+            moved = true
         }
+        if moved { flashScrollThumb() }
     }
 
     /// Deceleración propia al levantar el dedo.
