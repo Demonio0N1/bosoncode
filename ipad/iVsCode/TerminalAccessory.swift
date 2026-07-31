@@ -176,6 +176,14 @@ final class MacTerminalView: TerminalView {
     /// Líneas de rueda enviadas cuya respuesta todavía no ha llegado
     private var unconfirmedLines = 0
     private var thumbFade: DispatchWorkItem?
+    /// Profundidad de historial descubierta hasta ahora, en líneas.
+    ///
+    /// No hay forma de preguntarle a tmux cuánto guarda, pero sí de observar
+    /// hasta dónde deja llegar: cada vez que confirma un desplazamiento, el
+    /// historial es al menos eso. Con ese dato el indicador ya puede ser
+    /// proporcional de verdad.
+    private var knownDepth = 0
+    private var topProbe: DispatchWorkItem?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -222,28 +230,34 @@ final class MacTerminalView: TerminalView {
         addSubview(scrollThumb)
     }
 
-    /// Coloca y enseña el indicador.
+    /// Coloca y enseña el indicador, proporcional al contenido real.
     ///
-    /// La posición sale del desplazamiento real del emulador cuando lo hay.
-    /// Con tmux delante no lo hay —el historial es suyo, no del emulador—, así
-    /// que ahí se usa cuánto llevas retrocedido: sirve para ver que avanzas y
-    /// en qué dirección, aunque no sea una fracción del total, que nadie de
-    /// este lado conoce. tmux sigue enseñando su [n/m] exacto en modo copia.
+    /// Fuera de tmux el emulador conoce su propio recorrido y se usa tal cual.
+    ///
+    /// Con tmux delante el historial es suyo y no se puede preguntar cuánto
+    /// guarda. Pero sí se puede APRENDER: cada desplazamiento que confirma
+    /// demuestra que hay al menos esa profundidad, y al llegar al tope deja de
+    /// confirmar. Así el total se descubre solo y el indicador acaba siendo tan
+    /// proporcional como el de cualquier vista — el alto del pulgar es la
+    /// pantalla frente a pantalla más historial.
+    ///
+    /// Mientras aún no se ha llegado al fondo, lo descubierto es una cota
+    /// inferior: el pulgar empieza grande y encoge conforme aparece historial,
+    /// que es lo honesto cuando el total todavía no se conoce.
     private func flashScrollThumb() {
         guard bounds.height > 40 else { return }
-        let inTmux = getTerminal().mouseMode != .off
         let travel: CGFloat
         let thumbHeight: CGFloat
-        if inTmux {
-            // 0 = al día; 1 = bien atrás. 200 líneas como recorrido de
-            // referencia: suficiente para que el gesto se note enseguida.
-            travel = min(1, CGFloat(linesBack) / 200)
-            thumbHeight = 44
+        if getTerminal().mouseMode != .off {
+            let visible = max(1, getTerminal().rows)
+            let total = visible + knownDepth
+            thumbHeight = max(24, bounds.height * CGFloat(visible) / CGFloat(total))
+            travel = knownDepth > 0 ? min(1, CGFloat(linesBack) / CGFloat(knownDepth)) : 0
         } else {
             travel = 1 - CGFloat(scrollPosition)
-            thumbHeight = max(30, bounds.height * CGFloat(scrollThumbsize))
+            thumbHeight = max(24, bounds.height * CGFloat(scrollThumbsize))
         }
-        let usable = bounds.height - thumbHeight - 8
+        let usable = max(0, bounds.height - thumbHeight - 8)
         let y = 4 + usable * (1 - travel)
         scrollThumb.frame = CGRect(x: bounds.width - 6, y: contentOffset.y + y,
                                    width: 3, height: thumbHeight)
@@ -317,8 +331,12 @@ final class MacTerminalView: TerminalView {
             unconfirmedLines += up ? 1 : -1
             moved = true
         }
-        // fuera de tmux el desplazamiento es local y se sabe al instante
-        if moved, getTerminal().mouseMode == .off { flashScrollThumb() }
+        guard moved else { return }
+        if getTerminal().mouseMode == .off {
+            flashScrollThumb()      // local: se sabe al instante
+        } else {
+            scheduleTopProbe()      // remoto: hay que esperar confirmación
+        }
     }
 
     /// El host respondió: lo enviado sí movió la pantalla.
@@ -334,9 +352,29 @@ final class MacTerminalView: TerminalView {
     /// puede averiguar.
     func didReceiveOutput() {
         guard unconfirmedLines != 0 else { return }
+        topProbe?.cancel()
         linesBack = max(0, linesBack + unconfirmedLines)
         unconfirmedLines = 0
+        // el historial es al menos hasta donde nos han dejado llegar
+        knownDepth = max(knownDepth, linesBack)
         flashScrollThumb()
+    }
+
+    /// Comprueba si hemos tocado el principio del historial.
+    ///
+    /// Si lo enviado sigue sin confirmarse pasado un momento, tmux no se movió:
+    /// estamos en el tope. Se descarta lo pendiente para que el indicador no
+    /// avance, y lo alcanzado queda como profundidad conocida.
+    private func scheduleTopProbe() {
+        topProbe?.cancel()
+        let probe = DispatchWorkItem { [weak self] in
+            guard let self, self.unconfirmedLines > 0 else { return }
+            self.unconfirmedLines = 0
+            self.knownDepth = max(self.knownDepth, self.linesBack)
+            self.flashScrollThumb()
+        }
+        topProbe = probe
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: probe)
     }
 
     /// Deceleración propia al levantar el dedo.
@@ -373,6 +411,7 @@ final class MacTerminalView: TerminalView {
         // lo que no llegó a confirmarse no cuenta: si el host no respondió, no
         // se movió nada
         unconfirmedLines = 0
+        topProbe?.cancel()
     }
 
     /// Si el programa remoto lee el ratón (tmux, vim, htop…) se le manda la
@@ -457,8 +496,30 @@ final class MacTerminalView: TerminalView {
 }
 
 extension MacTerminalView: UIGestureRecognizerDelegate {
+    /// Desplazar y seleccionar son excluyentes.
+    ///
+    /// Aquí estaba el texto que se marcaba solo: este delegado devolvía `true`
+    /// a todo, así que el gesto de scroll y los de SwiftTerm —el de selección y
+    /// el que reenvía el ratón al programa remoto— corrían A LA VEZ. Con dos
+    /// dedos se mandaba la rueda y, en paralelo, una pulsación arrastrada que
+    /// tmux interpreta como "selecciona".
+    ///
+    /// Con otro gesto de arrastre, no. Con toques y pulsaciones largas sí:
+    /// esos no compiten con desplazar y son los que dan la selección
+    /// deliberada.
     func gestureRecognizer(_ g: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        true
+        !(other is UIPanGestureRecognizer)
+    }
+
+    /// Y entre los arrastres, manda el de desplazar.
+    ///
+    /// Sin esto, cuál gana depende de cuál reconozca primero — una carrera que
+    /// se resuelve distinto según cómo apoyes los dedos, que es la peor clase
+    /// de comportamiento: intermitente. Obligando a los demás a esperar a que
+    /// este falle, dos dedos siempre desplazan.
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+        g === scrollPan && other is UIPanGestureRecognizer
     }
 }
