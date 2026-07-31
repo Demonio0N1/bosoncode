@@ -68,6 +68,8 @@ final class BrowserViewModel: ObservableObject {
         if busyCount == 0 { busyWatchdog?.cancel(); busyWatchdog = nil }
     }
     @Published var error: String?
+    /// Carpeta que falló por permiso: la alerta ofrece volver a concederla.
+    @Published var regrantTarget: URL?
     @Published var renaming: FileItem?
     @Published var renameText = ""
     @Published var inspecting: FileItem?
@@ -237,12 +239,37 @@ final class BrowserViewModel: ObservableObject {
         await openDoubleClick(item, at: level)
     }
 
+    /// ¿Queda algún nivel al que subir?
+    ///
+    /// Dentro de lo ya abierto, siempre. Por encima de la raíz que concedió el
+    /// usuario, no: ahí el sistema deniega el permiso y la app se quedaba en
+    /// una carpeta que no podía listar, sin forma evidente de volver — que es
+    /// lo que pasaba pulsando "atrás" varias veces seguidas.
+    var canGoUp: Bool {
+        if levels.count > 1 { return true }
+        guard let current = currentURL else { return false }
+        let parent = current.deletingLastPathComponent()
+        guard parent.path != current.path else { return false }
+        return Self.isGranted(parent)
+    }
+
+    /// ¿Tenemos permiso para listar esta ruta?
+    ///
+    /// Vale el contenedor propio de la app —siempre accesible— y cualquier
+    /// descendiente de una raíz que el usuario haya concedido con el selector.
+    static func isGranted(_ url: URL) -> Bool {
+        let documents = FileManager.default.urls(for: .documentDirectory,
+                                                 in: .userDomainMask)[0]
+        if url.path == documents.path || url.path.hasPrefix(documents.path + "/") {
+            return true
+        }
+        return CloudFileHandler.root(containing: url) != nil
+    }
+
     func goUp() async {
         guard levels.count > 1 else {
-            if let parent = currentURL?.deletingLastPathComponent(),
-               parent.path != currentURL?.path {
-                await open(parent)
-            }
+            guard canGoUp, let parent = currentURL?.deletingLastPathComponent() else { return }
+            await open(parent)
             return
         }
         levels.removeLast()
@@ -284,6 +311,10 @@ final class BrowserViewModel: ObservableObject {
             }
             watch(url)
         } catch {
+            // Sin permiso no basta con decirlo: hay que ofrecer la salida. Se
+            // guarda la carpeta para que la alerta pueda proponer elegirla de
+            // nuevo en el selector, que es lo único que devuelve el acceso.
+            if !Self.isGranted(url) { self.regrantTarget = url }
             self.error = "No pude abrir \(url.lastPathComponent): \(error.localizedDescription)"
         }
     }

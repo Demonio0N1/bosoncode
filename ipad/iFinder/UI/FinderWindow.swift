@@ -197,7 +197,26 @@ struct FinderWindow: View {
         }
         .alert("Error", isPresented: Binding(get: { model.error != nil },
                                              set: { if !$0 { model.error = nil } })) {
-            Button("Entendido", role: .cancel) { model.error = nil }
+            // Cuando el fallo es de permiso, decirlo no basta: sin esto la
+            // única salida era reiniciar la app. El selector es lo ÚNICO que
+            // devuelve el acceso a una carpeta de fuera del contenedor.
+            if let target = model.regrantTarget {
+                Button("Elegir esta carpeta…") {
+                    pickerStart = target
+                    model.error = nil
+                    model.regrantTarget = nil
+                    present { showFolderPicker = true }
+                }
+                Button("Volver al inicio") {
+                    model.error = nil
+                    model.regrantTarget = nil
+                    Task { await openLocal(documentsURL) }
+                }
+            }
+            Button("Entendido", role: .cancel) {
+                model.error = nil
+                model.regrantTarget = nil
+            }
         } message: {
             Text(model.error ?? "")
         }
@@ -557,8 +576,10 @@ struct FinderWindow: View {
 
     private var toolbar: some View {
         HStack(spacing: 14) {
+            // Se apaga al llegar al tope de lo concedido: un botón que lleva a
+            // una carpeta sin permiso es peor que un botón apagado.
             Button { Task { await model.goUp() } } label: { Image(systemName: "chevron.left") }
-                .disabled(model.levels.isEmpty)
+                .disabled(!model.canGoUp)
             Button { Task { await model.reload() } } label: { Image(systemName: "arrow.clockwise") }
 
             Picker("Vista", selection: $model.viewMode) {
