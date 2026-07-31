@@ -167,6 +167,9 @@ final class MacTerminalView: TerminalView {
     /// Deceleración tras levantar el dedo (ver `startGlide`)
     private var glide: CADisplayLink?
     private var glideVelocity: CGFloat = 0
+    /// Velocidad estimada a mano, en puntos por segundo (ver `.ended`)
+    private var trackedVelocity: CGFloat = 0
+    private var lastSampleTime: CFTimeInterval = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -208,17 +211,44 @@ final class MacTerminalView: TerminalView {
         case .began:
             stopGlide()                       // tocar corta la inercia anterior
             scrollAccum = 0
+            trackedVelocity = 0
+            lastSampleTime = CACurrentMediaTime()
         case .changed:
             let dy = gesture.translation(in: self).y
             gesture.setTranslation(.zero, in: self)
             scrollAccum += dy
+            sampleVelocity(dy)
             emitWheelLines()
         case .ended:
-            startGlide(velocity: gesture.velocity(in: self).y)
+            // `velocity(in:)` sirve para el dedo, pero en un desplazamiento
+            // INDIRECTO —el trackpad— llega en cero: el sistema no rastrea
+            // velocidad ahí, solo entrega deltas. Por eso el trackpad no
+            // arrancaba la inercia y el dedo sí. Se usa la medida propia como
+            // respaldo, que vale para los dos.
+            let reported = gesture.velocity(in: self).y
+            startGlide(velocity: abs(reported) > 1 ? reported : trackedVelocity)
         default:
             stopGlide()
             scrollAccum = 0
         }
+    }
+
+    /// Estima la velocidad con los deltas que van llegando.
+    ///
+    /// Media móvil y no el último delta a secas: un fotograma con un salto raro
+    /// —o uno diminuto justo antes de soltar— no debe decidir por sí solo cuánta
+    /// inercia lleva el gesto.
+    ///
+    /// Una pausa larga entre deltas significa que el gesto se detuvo aunque los
+    /// dedos sigan puestos: ahí la velocidad se descarta, para que soltar tras
+    /// pararse no lance la vista.
+    private func sampleVelocity(_ dy: CGFloat) {
+        let now = CACurrentMediaTime()
+        let dt = now - lastSampleTime
+        lastSampleTime = now
+        guard dt > 0, dt < 0.1 else { trackedVelocity = 0; return }
+        let instant = dy / CGFloat(dt)
+        trackedVelocity = trackedVelocity * 0.7 + instant * 0.3
     }
 
     /// Convierte lo acumulado en líneas de rueda. El alto de línea sale de la
@@ -262,6 +292,7 @@ final class MacTerminalView: TerminalView {
         glide?.invalidate()
         glide = nil
         glideVelocity = 0
+        trackedVelocity = 0
         scrollAccum = 0
     }
 
