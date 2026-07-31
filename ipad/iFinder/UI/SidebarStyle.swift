@@ -1,19 +1,21 @@
 import SwiftUI
 
-/// Fila de barra lateral con la tipografía, el espaciado y —sobre todo— la
-/// **selección en burbuja** del Finder de macOS.
+/// Fila de la barra lateral, con las proporciones de la app Archivos del iPad.
 ///
-/// iPadOS dimensiona sus listas para el dedo: 17 pt, filas de 44 pt, un
-/// separador entre cada dos y un recuadro agrupando cada sección. El Finder no
-/// tiene nada de eso: fondo continuo, sin una sola línea, y la fila activa
-/// marcada con un rectángulo redondeado que **no toca los bordes**, de modo que
-/// se lee como una pastilla flotando sobre la barra.
+/// Antes esto imitaba al Finder de escritorio: 13 pt y filas de 26. En un iPad
+/// eso se lee apretado y, sobre todo, no se parece a lo que el usuario tiene al
+/// lado para comparar. Archivos usa el tamaño de texto normal del sistema,
+/// iconos grandes y filas holgadas, y esas son las proporciones de aquí.
 ///
-/// Esa separación es la clave del efecto: el resalte lo dibuja la propia fila
-/// con su margen, no la lista de lado a lado. Por eso el fondo del sistema se
-/// anula (`listRowBackground(.clear)`) en vez de intentar teñirlo.
+/// La fila activa se marca de dos maneras a la vez, como en Archivos: el fondo
+/// redondeado —que no toca los bordes, de ahí el efecto de pastilla flotante— y
+/// el texto en el color de acento. El color es lo que de verdad se ve de un
+/// vistazo; el fondo solo delimita.
 struct SidebarRow: View {
     let title: String
+    /// Segunda línea, más pequeña y gris. Archivos la usa para la cuenta de
+    /// cada servicio, que es lo único que distingue dos OneDrive.
+    var subtitle: String? = nil
     let systemImage: String
     var tint: Color = .accentColor
     var dimmed: Bool = false
@@ -26,20 +28,30 @@ struct SidebarRow: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 12) {
             Image(systemName: systemImage)
-                .font(.system(size: 13))
+                .font(.system(size: 19))
+                .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(iconColor)
-                .frame(width: 18, alignment: .center)   // columna fija = textos alineados
-            Text(title)
-                .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                .lineLimit(1)                            // nunca en dos líneas
-                .truncationMode(.middle)
-                .foregroundStyle(textColor)
+                .frame(width: 28, alignment: .center)   // columna fija = textos alineados
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.body)
+                    .lineLimit(1)                        // nunca en dos líneas
+                    .truncationMode(.middle)
+                    .foregroundStyle(textColor)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 5)
-        .padding(.horizontal, 8)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
         .background(bubble)
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -47,26 +59,26 @@ struct SidebarRow: View {
         }
     }
 
-    /// El resalte redondeado. Nada cuando la fila ni está activa ni tiene el
-    /// puntero encima: en el Finder la barra en reposo es completamente lisa.
-    @ViewBuilder
+    /// El resalte redondeado. En reposo no dibuja nada: la barra queda lisa.
     private var bubble: some View {
-        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
-        if isSelected {
-            // Gris neutro y no el color de acento: en el Finder la pastilla es
-            // discreta y quien lleva el color es el icono. Teñir el fondo
-            // entero convierte una fila en un botón y compite con el contenido.
-            shape.fill(Color.primary.opacity(scheme == .dark ? 0.16 : 0.10))
-        } else if isHovered {
-            shape.fill(Color.primary.opacity(scheme == .dark ? 0.07 : 0.05))
-        }
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(bubbleFill)
+    }
+
+    private var bubbleFill: Color {
+        if isSelected { return .primary.opacity(scheme == .dark ? 0.14 : 0.09) }
+        if isHovered { return .primary.opacity(scheme == .dark ? 0.07 : 0.05) }
+        return .clear
     }
 
     private var iconColor: Color {
         dimmed ? .secondary : tint
     }
 
+    /// El texto de la fila activa toma el color de acento, como en Archivos.
+    /// Es la señal que se capta sin mirar: el fondo gris solo la enmarca.
     private var textColor: Color {
-        dimmed ? .secondary : .primary
+        if dimmed { return .secondary }
+        return isSelected ? .accentColor : .primary
     }
 }
