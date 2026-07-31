@@ -194,9 +194,28 @@ struct DetailListView: View {
     let level: Int
     @State private var hovered: String?
 
+    /// Qué columnas caben en el ancho que hay.
+    ///
+    /// Fecha, Tamaño y Tipo tienen ancho FIJO y suman unos 420 pt; el nombre es
+    /// el único flexible, así que era él quien absorbía todo el encogimiento y
+    /// acababa en "…" mientras las otras tres seguían enteras — justo al revés
+    /// de lo que sirve para reconocer un archivo. Ahora se van retirando de
+    /// derecha a izquierda, como hace el Finder al estrechar una ventana, y el
+    /// nombre no se sacrifica nunca.
+    private struct VisibleColumns {
+        let date: Bool, size: Bool, kind: Bool
+        init(width: CGFloat) {
+            kind = width >= 700
+            size = width >= 560
+            date = width >= 430
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        GeometryReader { outer in
+          let columns = VisibleColumns(width: outer.size.width)
+          VStack(spacing: 0) {
+            header(columns)
             Divider()
             GeometryReader { geo in
               ScrollViewReader { proxy in
@@ -205,7 +224,7 @@ struct DetailListView: View {
                         FolderBackground(model: model, minHeight: geo.size.height)
                         LazyVStack(spacing: 0) {
                             ForEach(items) { item in
-                                row(item).id(item.id)
+                                row(item, columns).id(item.id)
                             }
                         }
                     }
@@ -218,15 +237,22 @@ struct DetailListView: View {
                 }
               }
             }
+          }
         }
     }
 
-    private var header: some View {
+    private func header(_ columns: VisibleColumns) -> some View {
         HStack(spacing: 12) {
             columnTitle("Nombre", .name).frame(maxWidth: .infinity, alignment: .leading)
-            columnTitle("Fecha", .date).frame(width: 170, alignment: .leading)
-            columnTitle("Tamaño", .size).frame(width: 90, alignment: .trailing)
-            columnTitle("Tipo", .kind).frame(width: 130, alignment: .leading)
+            if columns.date {
+                columnTitle("Fecha", .date).frame(width: 170, alignment: .leading)
+            }
+            if columns.size {
+                columnTitle("Tamaño", .size).frame(width: 90, alignment: .trailing)
+            }
+            if columns.kind {
+                columnTitle("Tipo", .kind).frame(width: 130, alignment: .leading)
+            }
         }
         .font(.caption.weight(.medium))
         .foregroundStyle(.secondary)
@@ -239,7 +265,8 @@ struct DetailListView: View {
             model.applySort(key)
         } label: {
             HStack(spacing: 3) {
-                Text(title)
+                // sin esto, "Nombre" se partía en dos líneas ("Nom / bre")
+                Text(title).lineLimit(1).fixedSize()
                 if model.sortKey == key {
                     Image(systemName: "chevron.down").font(.system(size: 8))
                 }
@@ -248,7 +275,7 @@ struct DetailListView: View {
         .buttonStyle(.plain)
     }
 
-    private func row(_ item: FileItem) -> some View {
+    private func row(_ item: FileItem, _ columns: VisibleColumns) -> some View {
         HStack(spacing: 12) {
             HStack(spacing: 8) {
                 ThumbnailView(item: item, size: CGSize(width: 22, height: 22))
@@ -260,9 +287,15 @@ struct DetailListView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text(item.dateLabel).frame(width: 170, alignment: .leading)
-            Text(item.sizeLabel).frame(width: 90, alignment: .trailing)
-            Text(item.kindLabel).lineLimit(1).frame(width: 130, alignment: .leading)
+            if columns.date {
+                Text(item.dateLabel).lineLimit(1).frame(width: 170, alignment: .leading)
+            }
+            if columns.size {
+                Text(item.sizeLabel).lineLimit(1).frame(width: 90, alignment: .trailing)
+            }
+            if columns.kind {
+                Text(item.kindLabel).lineLimit(1).frame(width: 130, alignment: .leading)
+            }
         }
         .font(.callout)
         .foregroundStyle(selected(item) ? .white : .primary)
