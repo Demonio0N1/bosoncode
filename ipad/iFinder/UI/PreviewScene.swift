@@ -19,13 +19,22 @@ struct PreviewWindowView: View {
     /// aunque la ventana principal seleccione otro archivo.
     let url: URL?
     @State private var editing = false
+    /// Copia que Quick Look ya dejó legible. Es la que se comparte.
+    ///
+    /// Compartir la URL original era el fallo: la hoja de compartir corre en
+    /// OTRO proceso y no hereda nuestro ámbito de seguridad, así que con un
+    /// archivo de una nube o de una carpeta concedida recibía una ruta que no
+    /// puede leer. El visor ya prepara una copia dentro del contenedor —lo hace
+    /// por el mismo motivo—, así que se reutiliza en vez de repetir el trabajo.
+    @State private var shareable: URL?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Group {
                 if let url {
-                    SafeQuickLookView(url: url) { dismiss() }
+                    SafeQuickLookView(url: url, onClose: { dismiss() },
+                                      onReady: { shareable = $0 })
                 } else {
                     ContentUnavailableView("Sin archivo",
                                            systemImage: "doc",
@@ -43,20 +52,18 @@ struct PreviewWindowView: View {
                             }
                         }
                     }
-                    // Salida hacia la app del formato. La hoja de compartir ya
-                    // llevaba dentro las apps que abren el archivo, pero bajo un
-                    // icono que no promete eso: quien busca "abrir en Word" no
-                    // mira en "compartir".
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            Task { await openElsewhere(url) }
-                        } label: {
-                            Image(systemName: "arrow.up.forward.app")
+                    // Un solo botón. El de "abrir en otra app" hacía lo mismo:
+                    // la hoja de compartir del sistema YA lista las apps que
+                    // abren el archivo, así que eran dos caminos al mismo sitio.
+                    //
+                    // Aparece cuando hay copia legible: sin ella, compartir
+                    // entregaría una ruta que el otro proceso no puede abrir.
+                    if let shareable {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            ShareLink(item: shareable) {
+                                Image(systemName: "square.and.arrow.up")
+                            }
                         }
-                        .help("Abrir en otra app")
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
                     }
                 }
             }
@@ -95,23 +102,6 @@ struct PreviewWindowView: View {
         }
         .onDisappear { if let url { PreviewStateManager.shared.closed(url) } }
     }
-
-    /// Entrega el archivo a otra app desde la propia vista previa.
-    ///
-    /// Se le pasa una COPIA en el contenedor y no la ruta original: la app
-    /// destino es otro proceso y no hereda nuestro permiso, así que con la ruta
-    /// de una nube o de una carpeta concedida no podría leer nada.
-    private func openElsewhere(_ url: URL) async {
-        do {
-            let data = try await CloudFileHandler.shared.read(url)
-            let copy = FileManager.default.temporaryDirectory
-                .appendingPathComponent(url.lastPathComponent)
-            try data.write(to: copy, options: .atomic)
-            SystemOpen.shared.openInApp(copy)
-        } catch {
-            SystemOpen.shared.openInApp(url)   // último intento con el original
-        }
-    }
 }
 
 // MARK: - Quick Look a prueba de sandbox
@@ -126,6 +116,8 @@ struct PreviewWindowView: View {
 struct SafeQuickLookView: View {
     let url: URL
     var onClose: () -> Void = {}
+    /// Avisa de la copia realmente legible, para que la ventana comparta ESA
+    var onReady: (URL) -> Void = { _ in }
 
     @State private var ready: URL?
     @State private var failure: String?
@@ -194,6 +186,7 @@ struct SafeQuickLookView: View {
             // si la copia falla pero el archivo es legible tal cual, se usa
             if FileManager.default.isReadableFile(atPath: url.path) {
                 ready = url
+                onReady(url)
             } else {
                 failure = error.localizedDescription
             }
