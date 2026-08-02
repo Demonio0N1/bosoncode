@@ -18,6 +18,20 @@ struct FileContextMenu: ViewModifier {
             Button { model.quickLook(item) } label: {
                 Label("Vista rápida (espacio)", systemImage: "eye")
             }
+            // "Abrir con…" ES la lista de apps del sistema.
+            //
+            // La quité pensando que era un menú genérico de más, y me equivoqué:
+            // `presentOpenInMenu` no inventa nada, enseña exactamente lo que
+            // LaunchServices sabe —Word, Acrobat…— con sus iconos y con la
+            // predeterminada primero. Es el mismo contenido que el submenú de
+            // Archivos; lo único que cambia es que sale como popover en vez de
+            // como submenú, porque enumerar esas apps para construir el submenú
+            // a mano sí exige API privada.
+            if !item.isDirectory {
+                Button { Task { await model.openInDefaultApp(item) } } label: {
+                    Label("Abrir con…", systemImage: "arrow.up.forward.app")
+                }
+            }
             if CodeHighlighter.isCode(item.url), !item.isDirectory {
                 Button { model.editing = item } label: {
                     Label("Editar", systemImage: "pencil.and.outline")

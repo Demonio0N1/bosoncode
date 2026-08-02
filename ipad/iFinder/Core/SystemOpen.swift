@@ -28,8 +28,11 @@ final class SystemOpen: NSObject, UIDocumentInteractionControllerDelegate {
 
     // MARK: - Doble clic: entregar el archivo a su app
 
-    /// Abre el archivo en la app que lo maneja, sin que la app Archivos
-    /// aparezca en ningún momento.
+    /// Enseña la lista de apps capaces de abrir el archivo.
+    ///
+    /// Es la lista real de LaunchServices —con iconos y con la predeterminada
+    /// primero—, no una construida a mano: enumerar esas apps desde código
+    /// exigiría API privada, pero pedirle al sistema que las MUESTRE es público.
     ///
     /// - Returns: `false` si ninguna app declara ese tipo (entonces se ofrece
     ///   la hoja de compartir como salida).
@@ -60,7 +63,11 @@ final class SystemOpen: NSObject, UIDocumentInteractionControllerDelegate {
         interaction.delegate = self
         controller = interaction
 
-        // el iPad exige un origen para el popover
+        // El iPad exige un origen para el popover, y hay que dárselo en la
+        // VENTANA correcta: con varias escenas abiertas, anclarlo a otra hacía
+        // que la lista saliera flotando sobre una ventana distinta de aquella
+        // donde se pulsó. `topViewController` ya elige la escena activa; el
+        // rectángulo se calcula sobre SU vista, no sobre una cualquiera.
         let rect = CGRect(x: anchor.view.bounds.midX - 1,
                           y: anchor.view.bounds.midY - 1,
                           width: 2, height: 2)
