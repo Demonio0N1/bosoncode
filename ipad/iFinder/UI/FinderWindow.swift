@@ -174,11 +174,12 @@ struct FinderWindow: View {
         } message: {
             Text("Ya está añadida. Puedes cambiarle el nombre — así distingues dos cuentas del mismo servicio.")
         }
-        // El editor de texto. `model.editing` se asignaba desde el menú pero no
-        // se presentaba en ningún sitio, así que "Editar" no hacía nada.
-        .sheet(item: Binding(get: { model.editing },
-                             set: { model.editing = $0 })) { item in
-            CodeEditorView(url: item.url)
+        // Editar abre una VENTANA propia, no una hoja: una hoja secuestra el
+        // explorador y no deja tener dos archivos abiertos a la vez.
+        .onChange(of: model.editing) { _, item in
+            guard let item else { return }
+            model.editing = nil
+            openWindow(id: EditorScene.id, value: item.url)
         }
         .sheet(item: Binding(get: { model.drawingOn },
                              set: { model.drawingOn = $0 })) { item in

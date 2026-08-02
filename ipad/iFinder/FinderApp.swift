@@ -26,5 +26,14 @@ struct iFinderApp: App {
         }
         .defaultSize(width: PreviewScene.defaultSize.width,
                      height: PreviewScene.defaultSize.height)
+
+        // Ventana de edición. Igual que la de vista previa, el archivo viaja
+        // como valor de escena: cada ventana edita el suyo y abrir un segundo
+        // archivo no reemplaza al primero.
+        WindowGroup("Editor", id: EditorScene.id, for: URL.self) { $url in
+            EditorWindowView(url: url)
+        }
+        .defaultSize(width: EditorScene.defaultSize.width,
+                     height: EditorScene.defaultSize.height)
     }
 }

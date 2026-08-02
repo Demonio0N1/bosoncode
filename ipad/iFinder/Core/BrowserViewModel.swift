@@ -73,7 +73,11 @@ final class BrowserViewModel: ObservableObject {
     @Published var renaming: FileItem?
     @Published var renameText = ""
     @Published var inspecting: FileItem?
-    /// Archivo abierto en el editor propio
+    /// Archivo que debe abrirse en una VENTANA de edición propia.
+    ///
+    /// El modelo no abre ventanas —no tiene acceso a `openWindow`, que es del
+    /// entorno de la vista—: publica la intención y la ventana la abre quien sí
+    /// puede. Es el mismo reparto que ya usa la vista previa.
     @Published var editing: FileItem?
     /// Imagen abierta en el editor de dibujo
     @Published var drawingOn: FileItem?
@@ -583,27 +587,36 @@ final class BrowserViewModel: ObservableObject {
         // que NO puede con un .ipynb —no conoce el tipo— y sin esta comprobación
         // el doble clic caía en la lista de apps en vez de abrir el visor.
         switch DocumentKind.of(item.url) {
-        case .notebook:
-            // El notebook se RENDERIZA: celdas, salidas y gráficas. Editarlo
-            // como JSON crudo no es lo que nadie quiere al abrirlo.
-            quickLook(item)
-        case .code:
-            // Texto plano, scripts y código abren directamente para EDITAR.
-            // Antes iban al visor de solo lectura y había que buscar el botón
-            // de editar: para un .sh o un .conf, mirar sin poder tocar es la
-            // mitad del trabajo.
+        case .notebook, .code:
+            // Los dos van a una ventana propia, y allí cada uno abre con lo
+            // suyo: el notebook renderizado —celdas, Markdown y salidas— y el
+            // script en el editor. Repartirlo en la ventana y no aquí evita que
+            // este enrutado tenga que conocer los visores.
             editing = item
-        case .office, .other:
-            // Word, Excel y PowerPoint se quedan DENTRO de la app. Quick Look
-            // sabe dibujarlos con fidelidad, y saltar a otra app rompe el hilo
-            // de lo que estabas haciendo.
+        case .office:
+            await openOffice(item)
+        case .other:
             if QLPreviewController.canPreview(item.url as NSURL) {
                 quickLook(item)
             } else {
-                // ni previsualizable ni editable aquí: es el único caso en que
-                // tiene sentido salir a otra app
                 await openInDefaultApp(item)
             }
+        }
+    }
+
+    /// Word, Excel y PowerPoint: primero su app, y si no está, el visor propio.
+    ///
+    /// En iPadOS no existe `NSWorkspace` ni forma de lanzar un archivo en "su
+    /// app por defecto": el sistema no guarda asociaciones tipo → app. Lo más
+    /// cercano es `UIDocumentInteractionController`, que ofrece las apps
+    /// capaces de abrirlo — y, justamente, **devuelve `false` cuando no hay
+    /// ninguna**. Ese valor es la señal exacta que hace falta para decidir el
+    /// respaldo, sin tener que adivinar qué hay instalado.
+    private func openOffice(_ item: FileItem) async {
+        await handOff(item) { [weak self] _, copy in
+            guard SystemOpen.shared.openInApp(copy) == false else { return }
+            // sin Word/Excel/PowerPoint instalados: se abre aquí dentro
+            Task { @MainActor in self?.previewRequest = item }
         }
     }
 
