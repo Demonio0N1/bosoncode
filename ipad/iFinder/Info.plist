@@ -21,6 +21,7 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>bosoncode</string>
+		<string>shortcuts</string>
 	</array>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>

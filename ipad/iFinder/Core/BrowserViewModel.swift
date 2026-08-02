@@ -81,6 +81,25 @@ final class BrowserViewModel: ObservableObject {
     @Published var editing: FileItem?
     /// Imagen abierta en el editor de dibujo
     @Published var drawingOn: FileItem?
+    /// Receta del atajo, cuando hay que explicarla
+    @Published var shortcutHelp: String?
+    /// Nombre del atajo que abre documentos de Office
+    @AppStorage("officeShortcutName") var officeShortcut = ShortcutBridge.defaultName
+
+    /// Manda el documento a Atajos para que lo abra en Word, Excel o
+    /// PowerPoint — el único camino que evita el menú de compartir.
+    func openWithShortcut(_ item: FileItem) async {
+        downloadingName = item.name          // puede estar en la nube
+        defer { downloadingName = nil }
+        do {
+            try await ShortcutBridge.open(item.url, shortcut: officeShortcut)
+        } catch {
+            // El fallo más probable no es este error, sino que el atajo no
+            // exista todavía: Atajos abre y avisa él. Por eso se ofrece la
+            // receta en lugar de un mensaje seco.
+            shortcutHelp = "\(error.localizedDescription)\n\n\(ShortcutBridge.recipe)"
+        }
+    }
 
     /// Deja la imagen como fondo de la ventana de archivos.
     func useAsWallpaper(_ item: FileItem) async {

@@ -188,6 +188,17 @@ struct FinderWindow: View {
                 Task { await model.reload() }
             }
         }
+        .alert("Abrir en Office con Atajos",
+               isPresented: Binding(get: { model.shortcutHelp != nil },
+                                    set: { if !$0 { model.shortcutHelp = nil } })) {
+            Button("Abrir Atajos") {
+                if let url = URL(string: "shortcuts://") { UIApplication.shared.open(url) }
+                model.shortcutHelp = nil
+            }
+            Button("Entendido", role: .cancel) { model.shortcutHelp = nil }
+        } message: {
+            Text(model.shortcutHelp ?? "")
+        }
         .sheet(isPresented: $showTrash) { TrashView(model: model) }
         .sheet(isPresented: Binding(get: { !onboarded }, set: { if !$0 { onboarded = true } })) {
             OnboardingView(onPick: { root in

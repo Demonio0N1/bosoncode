@@ -26,6 +26,13 @@ struct FileContextMenu: ViewModifier {
                     Label("Editar", systemImage: "pencil.and.outline")
                 }
             }
+            // Word, Excel y PowerPoint: se delega en Atajos, que sí puede
+            // lanzarlos sin pasar por el menú de compartir.
+            if case .office = DocumentKind.of(item.url) {
+                Button { Task { await model.openWithShortcut(item) } } label: {
+                    Label("Abrir en Office (Atajos)", systemImage: "wand.and.stars")
+                }
+            }
             // Acciones propias de una imagen. Solo aparecen si lo es: un menú
             // que ofrece "Editar imagen" sobre un PDF enseña a desconfiar de él.
             if item.isImage {
