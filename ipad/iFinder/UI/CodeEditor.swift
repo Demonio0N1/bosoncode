@@ -32,13 +32,16 @@ struct CodeEditorView: View {
                     ProgressView()
                 }
             }
-            .navigationTitle(url.lastPathComponent)
+            // El punto delante del nombre es la señal de "sin guardar", como en
+            // cualquier editor. Antes era una etiqueta suelta a la izquierda
+            // que competía por sitio con "Cerrar" y acababa recortada a
+            // "guar…" — y encima repetía lo que ya dice el botón Guardar al
+            // estar activo o no.
+            .navigationTitle(dirty ? "● \(url.lastPathComponent)" : url.lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Text(dirty ? "sin guardar" : "guardado")
-                        .font(.caption)
-                        .foregroundStyle(dirty ? .orange : .secondary)
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cerrar") { close() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if saving {
@@ -49,14 +52,24 @@ struct CodeEditorView: View {
                             .keyboardShortcut("s", modifiers: .command)
                     }
                 }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cerrar") { dismiss() }
-                }
             }
             .task { await load() }
-            // Guardar al salir: perder lo escrito por cerrar sin pensar sería
-            // el peor fallo posible en un editor.
-            .onDisappear { if dirty { save() } }
+        }
+    }
+
+    /// Cierra guardando lo que haya pendiente.
+    ///
+    /// El guardado iba en `onDisappear`, y ahí llega tarde: la vista ya se está
+    /// retirando y la escritura —que es asíncrona— podía quedarse a medias. Al
+    /// hacerlo aquí, el cierre espera a que el archivo esté en disco.
+    ///
+    /// Y perder lo escrito por cerrar sin pensar sería el peor fallo posible en
+    /// un editor, así que cerrar guarda; no pregunta.
+    private func close() {
+        guard dirty else { dismiss(); return }
+        Task {
+            await saveNow()
+            dismiss()
         }
     }
 
@@ -78,11 +91,15 @@ struct CodeEditorView: View {
     }
 
     private func save() {
+        Task { await saveNow() }
+    }
+
+    @MainActor
+    private func saveNow() async {
         let snapshot = text
         saving = true
-        Task {
-            defer { saving = false }
-            do {
+        defer { saving = false }
+        do {
                 // Se guarda por el mismo camino por el que se lee.
                 //
                 // Abrir aquí el ámbito del propio archivo no basta: un archivo
@@ -90,11 +107,10 @@ struct CodeEditorView: View {
                 // hereda de su raíz. Guardar un .sh de un OneDrive montado
                 // fallaba por eso, y encima en silencio. `CloudFileHandler`
                 // abre las dos cosas y coordina la escritura con el proveedor.
-                try await CloudFileHandler.shared.write(Data(snapshot.utf8), to: url)
-                original = snapshot
-            } catch {
-                failure = "No se pudo guardar: \(error.localizedDescription)"
-            }
+            try await CloudFileHandler.shared.write(Data(snapshot.utf8), to: url)
+            original = snapshot
+        } catch {
+            failure = "No se pudo guardar: \(error.localizedDescription)"
         }
     }
 }

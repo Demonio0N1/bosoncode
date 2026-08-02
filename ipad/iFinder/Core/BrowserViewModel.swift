@@ -604,20 +604,27 @@ final class BrowserViewModel: ObservableObject {
         }
     }
 
-    /// Word, Excel y PowerPoint: primero su app, y si no está, el visor propio.
+    /// Word, Excel y PowerPoint: se abren aquí dentro, sin preguntar nada.
     ///
-    /// En iPadOS no existe `NSWorkspace` ni forma de lanzar un archivo en "su
-    /// app por defecto": el sistema no guarda asociaciones tipo → app. Lo más
-    /// cercano es `UIDocumentInteractionController`, que ofrece las apps
-    /// capaces de abrirlo — y, justamente, **devuelve `false` cuando no hay
-    /// ninguna**. Ese valor es la señal exacta que hace falta para decidir el
-    /// respaldo, sin tener que adivinar qué hay instalado.
+    /// Lo deseable sería lanzarlos directamente en su app, como hace Archivos.
+    /// No se puede, y conviene que quede escrito para no volver a intentarlo:
+    ///
+    ///  · `NSWorkspace` es de macOS; en iPadOS no existe.
+    ///  · `UIApplication.open` con una URL `file://` devuelve `false`. iPadOS
+    ///    no guarda asociaciones tipo → app como macOS, así que no hay ninguna
+    ///    "app por defecto" que consultar.
+    ///  · `UIDocumentInteractionController` es lo único que entrega el archivo
+    ///    a otra app, y su forma de hacerlo ES el menú de apps. No hay variante
+    ///    silenciosa ni manera de saber qué apps lo aceptarían para saltárselo.
+    ///  · Archivos lo consigue porque es `UIDocumentBrowserViewController`, un
+    ///    componente del sistema con permisos que una app de terceros no tiene
+    ///    para archivos cualesquiera.
+    ///
+    /// Entre un diálogo que nadie pidió y abrir de una vez, se abre de una vez.
+    /// La vista previa lleva un botón para pasar a Word cuando haga falta
+    /// editar de verdad, así que la ruta sigue estando a un toque.
     private func openOffice(_ item: FileItem) async {
-        await handOff(item) { [weak self] _, copy in
-            guard SystemOpen.shared.openInApp(copy) == false else { return }
-            // sin Word/Excel/PowerPoint instalados: se abre aquí dentro
-            Task { @MainActor in self?.previewRequest = item }
-        }
+        previewRequest = item
     }
 
     /// Entrega el archivo a otra app (Word, Excel…). Muestra la lista de apps
