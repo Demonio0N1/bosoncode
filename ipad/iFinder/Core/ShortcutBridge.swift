@@ -97,3 +97,40 @@ enum ShortcutError: LocalizedError {
         }
     }
 }
+
+
+/// Lleva el archivo a la app Archivos y la abre ahí.
+///
+/// Archivos SÍ lanza un .docx en Word sin diálogos, y ninguna app de terceros
+/// puede: no es cuestión de usar el componente adecuado, sino de permisos que
+/// el sistema no cede. `UIDocumentBrowserViewController` —que parece la puerta—
+/// no lo es; su propia documentación dice que sirve para "abrirlos **en tu**
+/// aplicación", y su único callback de selección devuelve la URL a quien lo
+/// presenta. No lanza nada externo.
+///
+/// Lo que sí se puede es dejar el archivo donde Archivos lo ve —la carpeta de
+/// ZeroSpin ya aparece ahí— y abrir Archivos en ese punto. De ahí, un toque y
+/// Word. No es automático, pero es el comportamiento nativo de verdad, sin
+/// menús intermedios ni imitaciones.
+enum RevealInFiles {
+    static var isAvailable: Bool {
+        guard let url = URL(string: "shareddocuments:///") else { return false }
+        return UIApplication.shared.canOpenURL(url)
+    }
+
+    @MainActor
+    static func reveal(_ url: URL) async throws {
+        let data = try await CloudFileHandler.shared.read(url)
+        let folder = SystemLocation.documentsFolder
+        let staged = folder.appendingPathComponent(url.lastPathComponent)
+        // si ya está en la carpeta visible, no se duplica
+        if staged.standardizedFileURL != url.standardizedFileURL {
+            try data.write(to: staged, options: .atomic)
+        }
+        // `shareddocuments://` abre Archivos en una ruta concreta
+        guard let target = URL(string: "shareddocuments://" + staged.path) else {
+            throw ShortcutError.badName(staged.lastPathComponent)
+        }
+        await UIApplication.shared.open(target)
+    }
+}

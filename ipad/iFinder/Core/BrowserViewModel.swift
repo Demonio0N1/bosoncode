@@ -86,6 +86,22 @@ final class BrowserViewModel: ObservableObject {
     /// Nombre del atajo que abre documentos de Office
     @AppStorage("officeShortcutName") var officeShortcut = ShortcutBridge.defaultName
 
+    /// Deja el documento donde Archivos lo ve y abre Archivos ahí.
+    ///
+    /// Es el camino más corto al comportamiento que se busca: Archivos sí abre
+    /// un .docx en Word directamente, porque tiene permisos que ninguna app de
+    /// terceros recibe. Desde aquí se llega en dos toques en vez de uno, pero es
+    /// el de verdad y no una imitación.
+    func revealInFiles(_ item: FileItem) async {
+        downloadingName = item.name
+        defer { downloadingName = nil }
+        do {
+            try await RevealInFiles.reveal(item.url)
+        } catch {
+            self.error = Self.cloudFailure(item, error)
+        }
+    }
+
     /// Manda el documento a Atajos para que lo abra en Word, Excel o
     /// PowerPoint — el único camino que evita el menú de compartir.
     func openWithShortcut(_ item: FileItem) async {

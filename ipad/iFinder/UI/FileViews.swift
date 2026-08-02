@@ -29,6 +29,9 @@ struct FileContextMenu: ViewModifier {
             // Word, Excel y PowerPoint: se delega en Atajos, que sí puede
             // lanzarlos sin pasar por el menú de compartir.
             if case .office = DocumentKind.of(item.url) {
+                Button { Task { await model.revealInFiles(item) } } label: {
+                    Label("Abrir con Archivos → Word", systemImage: "folder.badge.gearshape")
+                }
                 Button { Task { await model.openWithShortcut(item) } } label: {
                     Label("Abrir en Office (Atajos)", systemImage: "wand.and.stars")
                 }
