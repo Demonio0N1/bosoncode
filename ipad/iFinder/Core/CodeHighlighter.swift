@@ -105,8 +105,12 @@ enum CodeHighlighter {
     static func isCode(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         if language(forExtension: ext) != nil { return true }
-        return ["txt", "log", "md", "markdown", "csv", "xml", "html", "css",
-                "gitignore", "env"].contains(ext)
+        // Sin extensión conocida pero claramente texto: datos sueltos, listas,
+        // configuraciones. Son justo los archivos que se editan al vuelo.
+        return ["txt", "log", "md", "markdown", "csv", "tsv", "xml", "html", "css",
+                "gitignore", "env", "dat", "list", "properties", "cnf", "conf",
+                "in", "out", "tex", "bib", "srt", "gitconfig", "editorconfig",
+                "dockerfile", "makefile", "gradle", "plist"].contains(ext)
     }
 
     // MARK: - Análisis

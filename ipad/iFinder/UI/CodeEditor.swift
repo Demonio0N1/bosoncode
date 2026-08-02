@@ -82,12 +82,15 @@ struct CodeEditorView: View {
         saving = true
         Task {
             defer { saving = false }
-            // El ámbito de seguridad se abre para escribir igual que para leer;
-            // sin él, un archivo de un proveedor externo falla en silencio.
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
-                try Data(snapshot.utf8).write(to: url, options: .atomic)
+                // Se guarda por el mismo camino por el que se lee.
+                //
+                // Abrir aquí el ámbito del propio archivo no basta: un archivo
+                // DENTRO de una carpeta concedida no tiene ámbito propio, lo
+                // hereda de su raíz. Guardar un .sh de un OneDrive montado
+                // fallaba por eso, y encima en silencio. `CloudFileHandler`
+                // abre las dos cosas y coordina la escritura con el proveedor.
+                try await CloudFileHandler.shared.write(Data(snapshot.utf8), to: url)
                 original = snapshot
             } catch {
                 failure = "No se pudo guardar: \(error.localizedDescription)"

@@ -583,18 +583,25 @@ final class BrowserViewModel: ObservableObject {
         // que NO puede con un .ipynb —no conoce el tipo— y sin esta comprobación
         // el doble clic caía en la lista de apps en vez de abrir el visor.
         switch DocumentKind.of(item.url) {
-        case .notebook, .code:
+        case .notebook:
+            // El notebook se RENDERIZA: celdas, salidas y gráficas. Editarlo
+            // como JSON crudo no es lo que nadie quiere al abrirlo.
             quickLook(item)
-        case .office:
-            // Word, Excel, Pages… se entregan a su app. Quick Look SÍ sabe
-            // dibujarlos, y ese era el problema: al poder previsualizarlos, el
-            // doble clic se quedaba en el visor propio y no había forma
-            // evidente de llegar a Word.
-            await openInDefaultApp(item)
-        case .other:
+        case .code:
+            // Texto plano, scripts y código abren directamente para EDITAR.
+            // Antes iban al visor de solo lectura y había que buscar el botón
+            // de editar: para un .sh o un .conf, mirar sin poder tocar es la
+            // mitad del trabajo.
+            editing = item
+        case .office, .other:
+            // Word, Excel y PowerPoint se quedan DENTRO de la app. Quick Look
+            // sabe dibujarlos con fidelidad, y saltar a otra app rompe el hilo
+            // de lo que estabas haciendo.
             if QLPreviewController.canPreview(item.url as NSURL) {
                 quickLook(item)
             } else {
+                // ni previsualizable ni editable aquí: es el único caso en que
+                // tiene sentido salir a otra app
                 await openInDefaultApp(item)
             }
         }
