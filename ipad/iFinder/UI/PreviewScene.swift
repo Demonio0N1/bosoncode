@@ -60,9 +60,8 @@ struct PreviewWindowView: View {
                     // entregaría una ruta que el otro proceso no puede abrir.
                     if let shareable {
                         ToolbarItem(placement: .topBarTrailing) {
-                            ShareLink(item: shareable) {
-                                Image(systemName: "square.and.arrow.up")
-                            }
+                            DocumentActionsButton(url: shareable)
+                                .frame(width: 30, height: 30)
                         }
                     }
                 }
@@ -182,6 +181,7 @@ struct SafeQuickLookView: View {
                 .appendingPathComponent("preview-\(UUID().uuidString.prefix(6))-\(url.lastPathComponent)")
             try data.write(to: copy, options: .atomic)
             ready = copy
+            onReady(copy)
         } catch {
             // si la copia falla pero el archivo es legible tal cual, se usa
             if FileManager.default.isReadableFile(atPath: url.path) {
@@ -391,5 +391,61 @@ private extension UIKeyCommand {
         ]
         commands.forEach { $0.wantsPriorityOverSystemBehavior = true }
         return commands
+    }
+}
+
+
+/// Botón único de acciones del documento.
+///
+/// No usa `ShareLink`. Con una URL, `ShareLink` la comparte como un ENLACE
+/// genérico: el sistema no deduce el tipo del archivo —de ahí el "File · 156 KB"
+/// en la cabecera— y las apps que sí sabrían abrirlo, como Word, no se ofrecen.
+///
+/// `UIDocumentInteractionController` sí declara el tipo a partir del archivo, y
+/// por eso su menú pone delante la app que lo abre. Es lo que hacía el botón de
+/// la flecha, y es el comportamiento que se quiere conservar ahora que hay uno
+/// solo. Su menú incluye además copiar, imprimir y guardar en Archivos, así que
+/// no se pierde nada de la hoja de compartir.
+///
+/// Va en UIKit y no en SwiftUI por el anclaje: en iPadOS el menú es un popover
+/// y necesita una vista de origen. Siendo el propio botón esa vista, el menú
+/// sale pegado a él — antes se anclaba a una vista cualquiera de la jerarquía y
+/// aparecía flotando en mitad de la pantalla.
+struct DocumentActionsButton: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .system)
+        button.setImage(UIImage(systemName: "square.and.arrow.up"), for: .normal)
+        button.addTarget(context.coordinator, action: #selector(Coordinator.tapped(_:)),
+                         for: .touchUpInside)
+        return button
+    }
+
+    func updateUIView(_ uiView: UIButton, context: Context) {
+        context.coordinator.url = url
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
+
+    final class Coordinator: NSObject, UIDocumentInteractionControllerDelegate {
+        var url: URL
+        /// Se retiene mientras el menú está en pantalla; si no, desaparece.
+        private var interaction: UIDocumentInteractionController?
+
+        init(url: URL) { self.url = url }
+
+        @objc func tapped(_ sender: UIButton) {
+            let controller = UIDocumentInteractionController(url: url)
+            controller.delegate = self
+            interaction = controller
+            // el propio botón es el ancla: el menú sale de donde se tocó
+            controller.presentOptionsMenu(from: sender.bounds, in: sender, animated: true)
+        }
+
+        func documentInteractionControllerDidDismissOptionsMenu(
+            _ controller: UIDocumentInteractionController) {
+            interaction = nil
+        }
     }
 }
