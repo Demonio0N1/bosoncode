@@ -585,6 +585,12 @@ final class BrowserViewModel: ObservableObject {
         switch DocumentKind.of(item.url) {
         case .notebook, .code:
             quickLook(item)
+        case .office:
+            // Word, Excel, Pages… se entregan a su app. Quick Look SÍ sabe
+            // dibujarlos, y ese era el problema: al poder previsualizarlos, el
+            // doble clic se quedaba en el visor propio y no había forma
+            // evidente de llegar a Word.
+            await openInDefaultApp(item)
         case .other:
             if QLPreviewController.canPreview(item.url as NSURL) {
                 quickLook(item)

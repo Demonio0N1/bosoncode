@@ -43,6 +43,18 @@ struct PreviewWindowView: View {
                             }
                         }
                     }
+                    // Salida hacia la app del formato. La hoja de compartir ya
+                    // llevaba dentro las apps que abren el archivo, pero bajo un
+                    // icono que no promete eso: quien busca "abrir en Word" no
+                    // mira en "compartir".
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            Task { await openElsewhere(url) }
+                        } label: {
+                            Image(systemName: "arrow.up.forward.app")
+                        }
+                        .help("Abrir en otra app")
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
                     }
@@ -83,6 +95,23 @@ struct PreviewWindowView: View {
         }
         .onDisappear { if let url { PreviewStateManager.shared.closed(url) } }
     }
+
+    /// Entrega el archivo a otra app desde la propia vista previa.
+    ///
+    /// Se le pasa una COPIA en el contenedor y no la ruta original: la app
+    /// destino es otro proceso y no hereda nuestro permiso, así que con la ruta
+    /// de una nube o de una carpeta concedida no podría leer nada.
+    private func openElsewhere(_ url: URL) async {
+        do {
+            let data = try await CloudFileHandler.shared.read(url)
+            let copy = FileManager.default.temporaryDirectory
+                .appendingPathComponent(url.lastPathComponent)
+            try data.write(to: copy, options: .atomic)
+            SystemOpen.shared.openInApp(copy)
+        } catch {
+            SystemOpen.shared.openInApp(url)   // último intento con el original
+        }
+    }
 }
 
 // MARK: - Quick Look a prueba de sandbox
@@ -111,7 +140,7 @@ struct SafeQuickLookView: View {
                 case .notebook, .code:
                     DocumentViewer(url: ready)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .other:
+                case .office, .other:
                     QuickLookPreview(url: ready, onClose: onClose)
                         // el visor gestiona sus propios márgenes: debe ocupar todo
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

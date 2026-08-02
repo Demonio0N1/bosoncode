@@ -5,11 +5,27 @@ import WebKit
 enum DocumentKind {
     case notebook
     case code(String)      // extensión
+    /// Documento que se EDITA en la app de su formato: Word, Excel, Pages…
+    case office
     case other
+
+    /// Formatos que existen para editarse, no para mirarse.
+    ///
+    /// Quick Look sabe dibujarlos, y por eso el doble clic caía en el visor
+    /// propio: `canPreview` decía que sí. Pero de un .docx no se viene a ver una
+    /// estampa de solo lectura, se viene a escribir — así que estos van a su
+    /// app. La vista previa sigue a un espacio de distancia.
+    private static let officeExtensions: Set<String> = [
+        "doc", "docx", "rtf", "odt",
+        "xls", "xlsx", "csvx", "ods",
+        "ppt", "pptx", "odp",
+        "pages", "numbers", "key",
+    ]
 
     static func of(_ url: URL) -> DocumentKind {
         let ext = url.pathExtension.lowercased()
         if ext == "ipynb" { return .notebook }
+        if officeExtensions.contains(ext) { return .office }
         if CodeHighlighter.isCode(url) { return .code(ext) }
         return .other
     }
@@ -66,7 +82,7 @@ struct DocumentViewer: View {
                 html = NotebookRenderer.page(title: name,
                                              subtitle: "\(lines) líneas · \(language)\(note)",
                                              body: body)
-            case .other:
+            case .office, .other:
                 failure = "Formato no soportado por el visor propio."
             }
         } catch {
