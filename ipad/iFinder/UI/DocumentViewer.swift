@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 /// Qué sabe enseñar ZeroSpin por su cuenta, sin delegar en Quick Look.
@@ -9,23 +10,69 @@ enum DocumentKind {
     case office
     case other
 
-    /// Formatos que existen para editarse, no para mirarse.
+    /// Familia ofimática, para saber qué app le corresponde.
+    enum OfficeFamily {
+        case word, excel, powerPoint, appleIWork
+
+        var appName: String {
+            switch self {
+            case .word: return "Word"
+            case .excel: return "Excel"
+            case .powerPoint: return "PowerPoint"
+            case .appleIWork: return "Pages, Numbers o Keynote"
+            }
+        }
+    }
+
+    /// Tipos uniformes de cada familia.
     ///
-    /// Quick Look sabe dibujarlos, y por eso el doble clic caía en el visor
-    /// propio: `canPreview` decía que sí. Pero de un .docx no se viene a ver una
-    /// estampa de solo lectura, se viene a escribir — así que estos van a su
-    /// app. La vista previa sigue a un espacio de distancia.
-    private static let officeExtensions: Set<String> = [
-        "doc", "docx", "rtf", "odt",
-        "xls", "xlsx", "csvx", "ods",
-        "ppt", "pptx", "odp",
-        "pages", "numbers", "key",
+    /// Se pregunta por el UTType antes que por la extensión porque es más
+    /// fiable: un archivo que llega de un proveedor de nube puede traer un
+    /// nombre sin extensión útil y, en cambio, su tipo declarado correcto.
+    /// `conforms(to:)` acierta además con variantes —una plantilla .dotx
+    /// desciende del documento de Word— que una lista de extensiones no cubre
+    /// salvo que se enumeren todas a mano.
+    private static let officeTypes: [(OfficeFamily, [String])] = [
+        (.word, ["org.openxmlformats.wordprocessingml.document",
+                 "com.microsoft.word.doc",
+                 "org.oasis-open.opendocument.text"]),
+        (.excel, ["org.openxmlformats.spreadsheetml.sheet",
+                  "com.microsoft.excel.xls",
+                  "org.oasis-open.opendocument.spreadsheet"]),
+        (.powerPoint, ["org.openxmlformats.presentationml.presentation",
+                       "com.microsoft.powerpoint.ppt",
+                       "org.oasis-open.opendocument.presentation"]),
+        (.appleIWork, ["com.apple.iwork.pages.pages",
+                       "com.apple.iwork.numbers.numbers",
+                       "com.apple.iwork.keynote.key"]),
     ]
+
+    /// Respaldo por extensión, para cuando el tipo no viene declarado.
+    private static let officeExtensions: [String: OfficeFamily] = [
+        "doc": .word, "docx": .word, "dotx": .word, "rtf": .word, "odt": .word,
+        "xls": .excel, "xlsx": .excel, "xltx": .excel, "ods": .excel,
+        "ppt": .powerPoint, "pptx": .powerPoint, "potx": .powerPoint, "odp": .powerPoint,
+        "pages": .appleIWork, "numbers": .appleIWork, "key": .appleIWork,
+    ]
+
+    /// A qué familia pertenece, si es que a alguna.
+    static func officeFamily(of url: URL) -> OfficeFamily? {
+        if let declared = UTType(filenameExtension: url.pathExtension) {
+            for (family, identifiers) in officeTypes {
+                for identifier in identifiers {
+                    if let type = UTType(identifier), declared.conforms(to: type) {
+                        return family
+                    }
+                }
+            }
+        }
+        return officeExtensions[url.pathExtension.lowercased()]
+    }
 
     static func of(_ url: URL) -> DocumentKind {
         let ext = url.pathExtension.lowercased()
         if ext == "ipynb" { return .notebook }
-        if officeExtensions.contains(ext) { return .office }
+        if officeFamily(of: url) != nil { return .office }
         if CodeHighlighter.isCode(url) { return .code(ext) }
         return .other
     }

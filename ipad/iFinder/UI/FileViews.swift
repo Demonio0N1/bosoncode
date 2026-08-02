@@ -15,9 +15,6 @@ struct FileContextMenu: ViewModifier {
             Button { Task { await model.openDoubleClick(item, at: level) } } label: {
                 Label("Abrir", systemImage: "arrow.up.forward.app")
             }
-            Button { Task { await model.openInDefaultApp(item) } } label: {
-                Label("Abrir en otra app…", systemImage: "arrow.up.forward.square")
-            }
             Button { model.quickLook(item) } label: {
                 Label("Vista rápida (espacio)", systemImage: "eye")
             }
@@ -28,12 +25,13 @@ struct FileContextMenu: ViewModifier {
             }
             // Word, Excel y PowerPoint: se delega en Atajos, que sí puede
             // lanzarlos sin pasar por el menú de compartir.
-            if case .office = DocumentKind.of(item.url) {
+            // Una sola entrada para Office, y nombra la app que le toca: es
+            // más útil que un "abrir con…" genérico y no promete un listado de
+            // apps instaladas, que no hay forma pública de consultar.
+            if let family = DocumentKind.officeFamily(of: item.url) {
                 Button { Task { await model.revealInFiles(item) } } label: {
-                    Label("Abrir con Archivos → Word", systemImage: "folder.badge.gearshape")
-                }
-                Button { Task { await model.openWithShortcut(item) } } label: {
-                    Label("Abrir en Office (Atajos)", systemImage: "wand.and.stars")
+                    Label("Abrir en \(family.appName) (vía Archivos)",
+                          systemImage: "arrow.up.forward.app")
                 }
             }
             // Acciones propias de una imagen. Solo aparecen si lo es: un menú
