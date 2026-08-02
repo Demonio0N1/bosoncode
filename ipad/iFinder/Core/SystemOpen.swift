@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// Apertura de archivos en **otras apps** del iPad.
 ///
@@ -61,6 +62,13 @@ final class SystemOpen: NSObject, UIDocumentInteractionControllerDelegate {
 
         let interaction = UIDocumentInteractionController(url: url)
         interaction.delegate = self
+        // Se declara el tipo explícitamente además de por el nombre. El
+        // controlador lo deduce de la extensión, pero decírselo cubre los casos
+        // en que el archivo llega con un nombre pobre —de una nube, por
+        // ejemplo— y evita volver a una lista vacía por un detalle así.
+        if let type = UTType(filenameExtension: url.pathExtension) {
+            interaction.uti = type.identifier
+        }
         controller = interaction
 
         // El iPad exige un origen para el popover, y hay que dárselo en la

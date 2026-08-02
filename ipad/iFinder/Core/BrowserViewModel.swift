@@ -689,7 +689,15 @@ final class BrowserViewModel: ObservableObject {
             }
             let data = try await CloudFileHandler.shared.read(item.url)
             let copy = FileManager.default.temporaryDirectory
-                .appendingPathComponent(item.name)
+                // El nombre REAL del archivo, con su extensión.
+                //
+                // Aquí estaba el fallo: `item.name` es el nombre de PANTALLA
+                // —`localizedName`—, y el sistema oculta la extensión en él.
+                // La copia salía como "Doc2" en vez de "Doc2.docx", y sin
+                // extensión no hay tipo que deducir: ninguna app declaraba poder
+                // abrirla, así que "Abrir con…" salía vacío y la hoja de
+                // compartir decía "File" en lugar de "Documento de Word".
+                .appendingPathComponent(item.url.lastPathComponent)
             try data.write(to: copy, options: .atomic)
             deliver(item.url, copy)
         } catch {
