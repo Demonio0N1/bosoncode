@@ -6,12 +6,16 @@ caracteres— y App Store Connect los rechaza al pegar, no al guardar.
 """
 import re, sys, pathlib
 
+# Los mismos campos en los dos idiomas: Apple aplica el límite por
+# localización, así que cada versión se comprueba por separado.
 LIMITES = {"Nombre": 30, "Subtítulo": 30, "Texto promocional": 170,
-           "Descripción": 4000, "Palabras clave": 100}
+           "Descripción": 4000, "Palabras clave": 100,
+           "Name": 30, "Subtitle": 30, "Promotional text": 170,
+           "Description": 4000, "Keywords": 100}
 
 texto = pathlib.Path(__file__).with_name("app-store-listing.md").read_text(encoding="utf-8")
 fallos = 0
-for m in re.finditer(r"^## (\w+)", texto, re.M):
+for m in re.finditer(r"^## (.+)$", texto, re.M):
     app = m.group(1)
     trozo = texto[m.end():]
     siguiente = re.search(r"^## ", trozo, re.M)
