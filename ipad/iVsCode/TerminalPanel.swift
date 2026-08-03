@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftTerm
 import Network
+import UniformTypeIdentifiers
 
 /// Conexión al canal PTY del gestor (puerto 39600 del PC, solo tailnet).
 /// Protocolo: 1ª línea JSON {password, machine, cols, rows}\n; después bytes
@@ -426,37 +427,57 @@ struct FloatingTerminal: View {
         .onDisappear { session?.close() }
     }
 
-    /// Sube los archivos soltados desde Archivos/Fotos a la sesión actual.
+    /// Sube lo soltado al equipo y **escribe su ruta en el prompt**.
+    ///
+    /// Esa última parte es lo que lo hace útil de verdad: lo normal después de
+    /// arrastrar algo a un terminal es pasárselo a un comando, y teclear a mano
+    /// una ruta remota que acabas de crear es justo lo que uno no quiere hacer.
+    /// La ruta se envía como si la hubieras tecleado, así que queda editable —
+    /// puedes escribir el comando delante y pulsar intro.
+    ///
+    /// Se piden PROVEEDORES y no datos de `public.data`: Fotos no entrega
+    /// archivos, entrega la imagen, y pedir su representación de archivo deja
+    /// que el sistema la materialice —bajándola de iCloud si hace falta— con un
+    /// nombre y una extensión utilizables.
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        // Igual que en el editor: la subida la atiende el gestor del EQUIPO, y
-        // ese valida la contraseña del equipo. Con la del contenedor, soltar un
-        // archivo sobre la terminal de una máquina Docker se iba en 401.
+        // La subida la atiende el gestor del EQUIPO, que valida la contraseña
+        // del equipo. Con la del contenedor se iba en 401.
         guard let mgrURL = server.managerURL,
               let pw = ServerStore.shared.hostPassword(for: server) else { return false }
         let client = ManagerClient(baseURL: mgrURL, password: pw)
         let machine = server.dockerMachineName
-        for provider in providers {
-            provider.loadDataRepresentation(forTypeIdentifier: "public.data") { data, _ in
-                guard let data else { return }
-                let name = provider.suggestedName ?? "archivo"
-                Task {
-                    do {
-                        let dest = try await client.upload(data: data, filename: name,
-                                                           machine: machine, dest: "@cwd")
-                        await MainActor.run {
-                            dropMessage = "\(name) → \(dest)"
-                            session?.terminalView?.feed(
-                                byteArray: ArraySlice(Array("\r\n[recibido: \(name) en \(dest)]\r\n".utf8)))
-                        }
-                    } catch {
-                        await MainActor.run {
-                            dropMessage = "Error subiendo \(name): \(error.localizedDescription)"
-                        }
-                    }
+
+        Task {
+            let staged = await IncomingDrop.stage(providers)
+            guard !staged.isEmpty else {
+                dropMessage = "No pude leer lo que soltaste."
+                return
+            }
+            for url in staged {
+                let name = url.lastPathComponent
+                do {
+                    let data = try Data(contentsOf: url)
+                    let dest = try await client.upload(data: data, filename: name,
+                                                       machine: machine, dest: "@cwd")
+                    let remote = dest.hasSuffix("/") ? dest + name : dest + "/" + name
+                    dropMessage = "\(name) → \(dest)"
+                    insertIntoPrompt(remote)
+                } catch {
+                    dropMessage = "Error subiendo \(name): \(error.localizedDescription)"
                 }
             }
         }
         return true
+    }
+
+    /// Escribe la ruta en el prompt, como si se hubiera tecleado.
+    ///
+    /// Va entrecomillada porque una ruta con espacios el shell la partiría en
+    /// varios argumentos, y con un espacio detrás para poder seguir escribiendo
+    /// —o soltar otro archivo— sin que se peguen.
+    private func insertIntoPrompt(_ path: String) {
+        let quoted = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "' "
+        session?.terminalView?.send(txt: quoted)
     }
 
     private var panelContent: some View {
@@ -473,7 +494,7 @@ struct FloatingTerminal: View {
                               appearanceID: themeRaw + faceRaw) { newSize in
                     fontSize = Double(newSize)
                 }
-                .onDrop(of: ["public.data"], isTargeted: $dropTargeted) { providers in
+                .onDrop(of: [.item], isTargeted: $dropTargeted) { providers in
                     handleDrop(providers)
                 }
                 .overlay(alignment: .center) {
@@ -482,7 +503,8 @@ struct FloatingTerminal: View {
                             .strokeBorder(Color.cyan, style: StrokeStyle(lineWidth: 3, dash: [10]))
                             .background(Color.cyan.opacity(0.08))
                             .overlay(
-                                Label("Soltar para subir", systemImage: "arrow.down.doc")
+                                Label("Soltar: se sube y su ruta va al prompt",
+                                  systemImage: "arrow.down.doc")
                                     .font(.headline)
                                     .foregroundStyle(.cyan))
                             .padding(6)

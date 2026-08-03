@@ -41,6 +41,8 @@ targets:
       # comparte el cliente del gestor, el almacén de servidores y el Llavero
       - path: iVsCode/Server.swift
       - path: iVsCode/DockerMachines.swift
+      # recepción de arrastres: la usan el explorador y el terminal por igual
+      - path: iVsCode/IncomingDrop.swift
     settings:
       base:
         TARGETED_DEVICE_FAMILY: "2"
