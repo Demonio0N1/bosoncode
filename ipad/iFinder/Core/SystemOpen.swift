@@ -62,13 +62,17 @@ final class SystemOpen: NSObject, UIDocumentInteractionControllerDelegate {
 
         let interaction = UIDocumentInteractionController(url: url)
         interaction.delegate = self
-        // Se declara el tipo explícitamente además de por el nombre. El
-        // controlador lo deduce de la extensión, pero decírselo cubre los casos
-        // en que el archivo llega con un nombre pobre —de una nube, por
-        // ejemplo— y evita volver a una lista vacía por un detalle así.
-        if let type = UTType(filenameExtension: url.pathExtension) {
-            interaction.uti = type.identifier
-        }
+        // NO se fija `uti` a mano.
+        //
+        // Lo puse como red de seguridad y puede hacer lo contrario: fijarlo
+        // sustituye la deducción del sistema por un tipo exacto, y entonces
+        // solo aparecen las apps que declaran ESE tipo. Las que se ofrecen para
+        // un pariente suyo —Acrobat con un .docx, por ejemplo, que lo acepta
+        // para convertirlo— se quedan fuera.
+        //
+        // Dejándolo deducir del nombre, la lista es la misma que consulta
+        // Archivos. Y el nombre ya es correcto desde que la copia conserva su
+        // extensión, que era el fallo de fondo.
         controller = interaction
 
         // El iPad exige un origen para el popover, y hay que dárselo en la
