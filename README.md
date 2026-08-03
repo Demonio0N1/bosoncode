@@ -18,9 +18,57 @@ iPadOS that shares the same backend client.
 | **Full VS Code** | Extensions, Jupyter notebooks, integrated terminal |
 | **Your hardware** | Python, Julia, PyTorch and CUDA run on the host, not the tablet |
 | **Native terminal** | SwiftTerm over a PTY channel, in its own iPadOS window |
+| **Independent windows** | Each window holds a different machine; the list is shared, the selection is not |
 | **Zero-config discovery** | Hosts announce themselves over mDNS; the app finds them |
 | **Docker machines** | Create, start, stop and delete containers from the app |
+| **SSH** | Jump from a host to any machine it can reach |
 | **No open ports** | Tailscale only — the host is never exposed to the internet |
+
+### In the terminal
+
+- `⌃⌥T` opens a terminal in its own window, from the moment you enter a machine.
+- Each window gets its own tmux session, so shells are independent rather than
+  mirrored.
+- Two-finger scroll moves through tmux history, with momentum. One finger
+  selects.
+- **Drop a file on it** — from Files, Photos, anywhere — and it is uploaded to
+  the machine and its remote path is typed into the prompt, ready for a command.
+- Light/dark follows the iPad, and the palette and typeface are configurable.
+
+---
+
+## ZeroSpin
+
+A Finder-style file manager for iPadOS, in the same repository and sharing the
+same backend client. It reads the host list from BosonCode, so the machines you
+have already added are available to it.
+
+| | |
+|---|---|
+| **Finder layout** | Columns, list and icons; a floating sidebar with bubble selection |
+| **Windows, not sheets** | Previews, the text editor and notebooks each open as their own iPadOS window |
+| **Text and script editor** | Monospaced, syntax-highlighted, `⌘S`, saves in place |
+| **Notebook viewer** | `.ipynb` rendered with its cells, Markdown and outputs |
+| **Image editor** | Draw on an image with PencilKit and save it back |
+| **Cloud mounts** | OneDrive, Drive, Dropbox… granted once and kept |
+| **Drag and drop** | Both ways, including photos, which arrive as image data rather than files |
+| **Run in BosonCode** | Send a notebook or script to a machine and open it there |
+
+### What iPadOS does not allow
+
+Two limits worth stating, because they are asked about often and no amount of
+code gets around them:
+
+- **An app cannot set the system wallpaper.** ZeroSpin's "use as background"
+  changes its own window background. Only Settings and Photos can change the
+  device one.
+- **An app cannot launch a file in another app silently.** There is no
+  type → app association to consult, and `UIApplication.open` refuses `file://`
+  URLs. The Files app manages it through system privileges that third-party
+  apps do not receive — `UIDocumentBrowserViewController` does not grant them
+  either; its own documentation says it opens documents *in your* application.
+  "Open with…" shows the system's own list of capable apps, which is as close
+  as a third-party app gets.
 
 ---
 
@@ -195,6 +243,12 @@ bosoncode/
     └── iFinder/          # ZeroSpin (file manager)
 ```
 
+Both targets are built from one project. `Server.swift`, `DockerMachines.swift`
+and `IncomingDrop.swift` are compiled into both: the host list, the manager
+client and drag-and-drop handling are the same problem in either app. The two
+apps also share an App Group and a Keychain access group, which is how ZeroSpin
+sees the machines you added in BosonCode.
+
 The `ipad/iVsCode` and `ipad/iFinder` directory names predate the current app
 names and are kept so build paths stay stable.
 
@@ -214,6 +268,11 @@ This happens whenever `~/.ivscode` has been deleted or moved.
 **Notebooks do not open.** Almost always HTTPS or App-Bound Domains. Check that
 `tailscale serve status` shows the mapping and that `WKAppBoundDomains` matches
 your tailnet.
+
+**A machine is listed but will not open.** If it is a container that was
+created before the host password was regenerated, the two no longer match.
+*Machines → … → Repair password* rebuilds the container with the current one and
+keeps its disk.
 
 **inotify limit reached.** code-server watches a lot of files:
 
