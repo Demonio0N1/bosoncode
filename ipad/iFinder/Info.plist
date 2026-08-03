@@ -31,6 +31,8 @@
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>ZeroSpin se conecta a los equipos que ya has añadido en BosonCode para enviarles archivos y abrirlos allí.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UILaunchScreen</key>

@@ -41,7 +41,7 @@
 		<string>_ivscode._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>iVsCode busca computadoras en tu red que ejecuten serve.sh para conectarte a su VS Code.</string>
+	<string>BosonCode busca en tu red los equipos que ejecutan serve.sh, para que aparezcan solos en la lista y no tengas que escribir su dirección.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>MesloLGS-NF-Regular.ttf</string>
