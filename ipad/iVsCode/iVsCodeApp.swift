@@ -19,6 +19,8 @@ struct BosonCodeApp: App {
                 .persistentSystemOverlays(.hidden)   // oculta el indicador de Home
                 .defersSystemGestures(on: .all)      // el primer swipe de borde va a la app
         }
+        .defaultSize(width: MainWindowUnrestrictor.standardSize.width,
+                     height: MainWindowUnrestrictor.standardSize.height)
         // Atajos a nivel de aplicación: responden aunque ninguna vista tenga
         // todavía el foco del teclado, que es justo el hueco que quedaba tras
         // conectar a una máquina.
@@ -92,19 +94,12 @@ struct WindowSizer: UIViewRepresentable {
             if scene.session.userInfo == nil { scene.session.userInfo = [:] }
             scene.session.userInfo?["ivscodeRole"] = "terminal"
             guard let restrictions = scene.sizeRestrictions else { return }
-            // Truco para fijar el tamaño INICIAL: iPadOS solo lo respeta si
-            // mínimo y máximo coinciden. Se suelta enseguida — mientras dure,
-            // la ventana no se puede redimensionar.
-            restrictions.minimumSize = size
-            restrictions.maximumSize = size
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                // A partir de aquí, libertad total: mínimo pequeño de verdad,
-                // sin techo práctico y con pantalla completa permitida (sin
-                // esto último la ventana se niega a ocupar todo).
-                restrictions.minimumSize = CGSize(width: 240, height: 160)
-                restrictions.maximumSize = CGSize(width: 10000, height: 10000)
-                restrictions.allowsFullScreen = true
-            }
+            // Libertad total: mínimo pequeño de verdad, sin techo práctico y con
+            // pantalla completa permitida (sin esto último la ventana se niega a
+            // ocupar todo). El tamaño de partida lo pone `.defaultSize`.
+            restrictions.minimumSize = CGSize(width: 240, height: 160)
+            restrictions.maximumSize = CGSize(width: 10000, height: 10000)
+            restrictions.allowsFullScreen = true
         }
         return view
     }
@@ -135,14 +130,14 @@ struct MainWindowUnrestrictor: UIViewRepresentable {
                 // principal debe nacer siempre cómoda, así que la primera
                 // pasada la fija (mínimo == máximo, único modo de que iPadOS
                 // respete un tamaño) y la segunda suelta las restricciones.
-                if delay < 0.5 {
-                    restrictions.minimumSize = Self.standardSize
-                    restrictions.maximumSize = Self.standardSize
-                } else {
-                    restrictions.minimumSize = CGSize(width: 480, height: 400)
-                    restrictions.maximumSize = CGSize(width: 10000, height: 10000)
-                    restrictions.allowsFullScreen = true
-                }
+                // Solo se sueltan: forzar el tamaño hacía saltar la ventana
+                // al poco de aparecer, y si la habías ajustado en ese margen te
+                // la cambiaba debajo de la mano. El tamaño inicial lo declara
+                // ahora la escena con `.defaultSize`, que el sistema de
+                // ventanas actual sí respeta.
+                restrictions.minimumSize = CGSize(width: 480, height: 400)
+                restrictions.maximumSize = CGSize(width: 10000, height: 10000)
+                restrictions.allowsFullScreen = true
             }
         }
         return view
