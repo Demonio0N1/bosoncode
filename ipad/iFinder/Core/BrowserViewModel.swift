@@ -39,7 +39,15 @@ struct DirectoryLevel: Identifiable, Equatable {
 @MainActor
 final class BrowserViewModel: ObservableObject {
     @Published var levels: [DirectoryLevel] = []
-    @Published var viewMode: ViewMode = .columns
+    /// Vista elegida, recordada entre sesiones.
+    ///
+    /// Antes volvía a columnas en cada arranque. Es una preferencia, no un
+    /// estado pasajero: quien trabaja en iconos no quiere reelegirlo cada vez
+    /// que abre la app, igual que el Finder recuerda la suya.
+    @Published var viewMode: ViewMode = ViewMode(rawValue:
+        UserDefaults.standard.string(forKey: "finderViewMode") ?? "") ?? .columns {
+        didSet { UserDefaults.standard.set(viewMode.rawValue, forKey: "finderViewMode") }
+    }
     @Published var showHidden = false
     @Published var sortKey: SortKey = .name
     /// Operaciones en curso. Es un contador y no un booleano porque dos
