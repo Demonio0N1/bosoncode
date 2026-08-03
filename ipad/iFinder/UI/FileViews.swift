@@ -132,9 +132,15 @@ extension View {
                     .padding(6)
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
-            .dropDestination(for: URL.self) { urls, _ in
+            // Igual que en el fondo de la carpeta: por proveedores, para que
+            // también entren las fotos y no solo lo que traiga una URL.
+            .onDrop(of: [.item], isTargeted: nil) { providers in
                 guard item.isDirectory else { return false }
-                Task { await model.receive(urls, into: item.url, move: false) }
+                Task {
+                    let staged = await IncomingDrop.stage(providers)
+                    guard !staged.isEmpty else { return }
+                    await model.receive(staged, into: item.url, move: false)
+                }
                 return true
             }
     }

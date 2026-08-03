@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Fondo de la carpeta: capta el clic derecho en el **espacio vacío**.
 ///
@@ -34,11 +35,18 @@ struct FolderBackground: View {
             // traer algo de Fotos o de Archivos a la carpeta que estabas
             // mirando no tenía dónde soltarse: el hueco no era destino de nada.
             // Es el gesto natural y el que faltaba.
-            .dropDestination(for: URL.self) { urls, _ in
+            // `.onDrop` con proveedores y no `dropDestination(for: URL.self)`:
+            // ese solo ve lo que el origen entregue como URL, y Fotos entrega
+            // los DATOS de la imagen. Ver `IncomingDrop`.
+            .onDrop(of: [.item], isTargeted: $targeted) { providers in
                 guard let destination = model.currentURL else { return false }
-                Task { await model.receive(urls, into: destination, move: false) }
+                Task {
+                    let staged = await IncomingDrop.stage(providers)
+                    guard !staged.isEmpty else { return }
+                    await model.receive(staged, into: destination, move: false)
+                }
                 return true
-            } isTargeted: { targeted = $0 }
+            }
             .overlay {
                 if targeted {
                     RoundedRectangle(cornerRadius: 12)
