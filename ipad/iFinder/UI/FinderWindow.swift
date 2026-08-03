@@ -810,7 +810,7 @@ struct FinderWindow: View {
 
     private var statusBar: some View {
         HStack {
-            Text(model.currentURL?.path ?? "")
+            Text(friendlyPath(model.currentURL))
                 .lineLimit(1)
                 .truncationMode(.head)
             Spacer()
@@ -821,6 +821,45 @@ struct FinderWindow: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 14)
         .padding(.vertical, 5)
+    }
+
+    /// Ruta legible, como la de la barra del Finder.
+    ///
+    /// La ruta real de una app de iPadOS no le dice nada a nadie: empieza por
+    /// /var/mobile/Containers/Data/Application/ y un identificador de 36
+    /// caracteres. Ocupaba toda la barra sin informar de nada, y de paso
+    /// enseñaba las tripas del sistema de archivos.
+    ///
+    /// Se sustituye el prefijo del contenedor por el nombre con el que esa
+    /// ubicación aparece en la barra lateral, que es como el usuario la conoce,
+    /// y se separa con "›" en vez de con barras.
+    private func friendlyPath(_ url: URL?) -> String {
+        guard let url else { return "" }
+        let path = url.standardizedFileURL.path
+
+        var roots: [(String, String)] = [
+            (SystemLocation.documentsFolder.standardizedFileURL.path, "Archivos de ZeroSpin"),
+        ]
+        for location in SystemLocation.allCases {
+            if let root = location.url?.standardizedFileURL.path {
+                roots.append((root, location.title))
+            }
+        }
+        for mount in local.folders {
+            if let root = local.resolvedURL(for: mount)?.standardizedFileURL.path {
+                roots.append((root, mount.name))
+            }
+        }
+        // el prefijo más largo primero: una carpeta concedida puede estar
+        // DENTRO de otra ubicación, y gana la más específica
+        for (root, label) in roots.sorted(by: { $0.0.count > $1.0.count }) {
+            guard path == root || path.hasPrefix(root + "/") else { continue }
+            let rest = String(path.dropFirst(root.count))
+                .split(separator: "/").joined(separator: " › ")
+            return rest.isEmpty ? label : "\(label) › \(rest)"
+        }
+        // fuera de todo lo conocido: al menos sin el contenedor
+        return url.lastPathComponent
     }
 
     /// Atajos de Mac: ⌘C, ⌘X, ⌘V, ⌘D, ⌘⌫, ⌘N, ⌘I, espacio, ⌘↑
