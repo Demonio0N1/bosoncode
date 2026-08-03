@@ -20,11 +20,36 @@ struct FolderBackground: View {
     /// Altura del área visible, para llenar la carpeta aunque esté casi vacía.
     let minHeight: CGFloat
 
+    /// Algo se está arrastrando por encima ahora mismo.
+    @State private var targeted = false
+
     var body: some View {
         Color.clear
             .contentShape(Rectangle())          // sin esto el hueco no recibe el toque
             .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .top)
             .folderContextMenu(model)
+            // Soltar en la CARPETA ABIERTA, no sobre un icono.
+            //
+            // Antes solo se aceptaba encima de una carpeta concreta, así que
+            // traer algo de Fotos o de Archivos a la carpeta que estabas
+            // mirando no tenía dónde soltarse: el hueco no era destino de nada.
+            // Es el gesto natural y el que faltaba.
+            .dropDestination(for: URL.self) { urls, _ in
+                guard let destination = model.currentURL else { return false }
+                Task { await model.receive(urls, into: destination, move: false) }
+                return true
+            } isTargeted: { targeted = $0 }
+            .overlay {
+                if targeted {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(Color.accentColor,
+                                      style: StrokeStyle(lineWidth: 3, dash: [10]))
+                        .background(Color.accentColor.opacity(0.06))
+                        .padding(6)
+                        // el aviso no debe robarle la suelta a quien la espera
+                        .allowsHitTesting(false)
+                }
+            }
     }
 }
 

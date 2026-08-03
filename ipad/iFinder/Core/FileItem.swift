@@ -152,8 +152,34 @@ struct FileItem: Identifiable, Hashable, Sendable {
 extension FileItem: Transferable {
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: .item) { item in
-            SentTransferredFile(item.url)
+            // Se entrega una COPIA legible, no la ruta original.
+            //
+            // La app que recibe es otro proceso y no hereda nuestro ámbito de
+            // seguridad: con la ruta de una nube o de una carpeta concedida no
+            // podría abrir nada, y el arrastre acababa en un archivo vacío o en
+            // nada. Además, si el archivo aún no estaba descargado, aquí se
+            // materializa antes de soltarlo.
+            SentTransferredFile(try await ExportedCopy.make(for: item.url))
         }
         ProxyRepresentation(exporting: \.name)
+    }
+}
+
+
+/// Copia legible por cualquier proceso, para entregar en un arrastre.
+///
+/// Vive en el directorio temporal de la app, que no está protegido por ámbitos
+/// de seguridad: cualquiera que reciba la promesa del arrastre puede leerla.
+/// Conserva el nombre REAL —con su extensión— porque de ahí deduce el sistema
+/// el tipo, y sin tipo la app de destino no sabe si puede aceptarlo.
+enum ExportedCopy {
+    static func make(for url: URL) async throws -> URL {
+        let data = try await CloudFileHandler.shared.read(url)
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("arrastre", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let copy = folder.appendingPathComponent(url.lastPathComponent)
+        try data.write(to: copy, options: .atomic)
+        return copy
     }
 }
