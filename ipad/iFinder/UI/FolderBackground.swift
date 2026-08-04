@@ -76,7 +76,7 @@ extension View {
                 Label("Nueva carpeta", systemImage: "folder.badge.plus")
             }
             Divider()
-            Button { Task { await model.paste() } } label: {
+            Button { Task { await model.paste(into: nil) } } label: {
                 Label("Pegar", systemImage: "doc.on.clipboard")
             }
             .disabled(!model.canPaste)

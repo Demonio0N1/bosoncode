@@ -10,25 +10,23 @@ struct FileContextMenu: ViewModifier {
     let item: FileItem
     let level: Int
 
-    /// Ejecuta una acción del menú DEJANDO SELECCIONADO el elemento sobre el
-    /// que se abrió.
+    /// Sobre qué actúa una acción del menú.
     ///
-    /// Aquí estaba el fallo de Renombrar, Eliminar, Duplicar y Comprimir:
-    /// trabajan sobre `selectedItems`, y abrir un menú contextual NO selecciona
-    /// nada. La lista llegaba vacía y las funciones salían por su `guard` sin
-    /// hacer nada ni avisar — parecían botones muertos.
+    /// Sobre el elemento en el que se abrió, y sobre la selección entera solo
+    /// si ese elemento forma parte de ella. Es lo que hace el Finder.
     ///
-    /// Seleccionar primero es además lo que hace el Finder: pulsar con el botón
-    /// secundario sobre un archivo lo selecciona. Y si el elemento YA formaba
-    /// parte de una selección múltiple, `select` la respeta, así que "eliminar"
-    /// sobre uno de varios sigue borrándolos todos.
+    /// Antes esto seleccionaba el elemento antes de actuar, y con una CARPETA
+    /// era contraproducente: seleccionarla significa ENTRAR en ella, lo que
+    /// añade un nivel nuevo y vacío. Las operaciones acababan mirando ese nivel
+    /// y no encontraban nada — por eso renombrar, eliminar o copiar una carpeta
+    /// no hacían nada. Pasando el objetivo explícito, no hay que tocar la
+    /// navegación para operar.
+    private var targets: [FileItem] {
+        model.selectedItems.contains { $0.id == item.id } ? model.selectedItems : [item]
+    }
+
     private func act(_ body: @escaping () async -> Void) {
-        Task {
-            if !model.selectedItems.contains(where: { $0.id == item.id }) {
-                await model.select(item, at: level)
-            }
-            await body()
-        }
+        Task { await body() }
     }
 
     func body(content: Content) -> some View {
@@ -101,31 +99,32 @@ struct FileContextMenu: ViewModifier {
                 }
             }
             Divider()
-            Button { act { model.copySelection() } } label: {
+            Button { act { model.copy(targets) } } label: {
                 Label("Copiar", systemImage: "doc.on.doc")
             }
-            Button { act { model.cutSelection() } } label: {
+            Button { act { model.cut(targets) } } label: {
                 Label("Cortar", systemImage: "scissors")
             }
-            Button { Task { await model.paste() } } label: {
-                Label("Pegar", systemImage: "doc.on.clipboard")
+            Button { act { await model.paste(into: item.isDirectory ? item.url : nil) } } label: {
+                Label(item.isDirectory ? "Pegar en \(item.name)" : "Pegar",
+                      systemImage: "doc.on.clipboard")
             }
             .disabled(!model.canPaste)
-            Button { act { await model.duplicateSelection() } } label: {
+            Button { act { await model.duplicate(targets) } } label: {
                 Label("Duplicar", systemImage: "plus.square.on.square")
             }
             Divider()
             Button { act { model.beginRename(item) } } label: {
                 Label("Renombrar", systemImage: "pencil")
             }
-            Button { act { await model.compressSelection() } } label: {
+            Button { act { await model.compress(targets) } } label: {
                 Label("Comprimir", systemImage: "doc.zipper")
             }
             Button { model.showInfo(item) } label: {
                 Label("Obtener información", systemImage: "info.circle")
             }
             Divider()
-            Button(role: .destructive) { act { await model.deleteSelection() } } label: {
+            Button(role: .destructive) { act { await model.delete(targets) } } label: {
                 Label("Eliminar", systemImage: "trash")
             }
         }

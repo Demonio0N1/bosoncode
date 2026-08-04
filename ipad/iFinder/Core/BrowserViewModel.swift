@@ -203,9 +203,18 @@ final class BrowserViewModel: ObservableObject {
     var current: DirectoryLevel? { levels.last }
     var currentURL: URL? { levels.last?.url }
 
+    /// Lo seleccionado, esté en el nivel que esté.
+    ///
+    /// Antes miraba solo `levels.last`, y eso fallaba justo con las CARPETAS:
+    /// seleccionar una entra dentro, lo que añade un nivel nuevo y vacío. La
+    /// selección se quedaba en el nivel anterior mientras esto leía el último,
+    /// así que devolvía una lista vacía — y renombrar, eliminar, copiar o
+    /// comprimir una carpeta no hacían nada.
     var selectedItems: [FileItem] {
-        guard let level = levels.last else { return [] }
-        return level.items.filter { level.selection.contains($0.id) }
+        for level in levels.reversed() where !level.selection.isEmpty {
+            return level.items.filter { level.selection.contains($0.id) }
+        }
+        return []
     }
 
     var canPaste: Bool { !clipboard.isEmpty }
@@ -507,6 +516,58 @@ final class BrowserViewModel: ObservableObject {
     func duplicateSelection() async {
         let urls = selectedItems.map(\.url)
         await run { try await FileService.shared.duplicate(urls) }
+    }
+
+    // MARK: - Operaciones sobre un objetivo explícito
+    //
+    // El menú contextual las usa con lo que tiene delante. Las versiones
+    // "…Selection" siguen existiendo para los atajos de teclado, que sí actúan
+    // sobre la selección, y delegan aquí.
+
+    func delete(_ items: [FileItem]) async {
+        let urls = items.map(\.url)
+        guard !urls.isEmpty else { return }
+        await run { _ = try await Trash.shared.move(urls) }
+        trashCount = await (try? Trash.shared.contents().count) ?? 0
+    }
+
+    func copy(_ items: [FileItem]) {
+        clipboard = items.map(\.url)
+        clipboardIsCut = false
+    }
+
+    func cut(_ items: [FileItem]) {
+        clipboard = items.map(\.url)
+        clipboardIsCut = true
+    }
+
+    func duplicate(_ items: [FileItem]) async {
+        guard !items.isEmpty else { return }
+        await run { try await FileService.shared.duplicate(items.map(\.url)) }
+    }
+
+    func compress(_ items: [FileItem]) async {
+        guard !items.isEmpty else { return }
+        await run { _ = try await FileService.shared.compress(items.map(\.url)) }
+    }
+
+    /// Pega en la carpeta indicada; sin indicar ninguna, en la abierta.
+    ///
+    /// Pegar desde el menú de una CARPETA debe meter las cosas ahí dentro, que
+    /// es lo que uno espera al pulsar sobre ella — no en la carpeta que estabas
+    /// mirando.
+    func paste(into folder: URL?) async {
+        guard let destination = folder ?? currentURL, !clipboard.isEmpty else { return }
+        let sources = clipboard
+        let cut = clipboardIsCut
+        await run {
+            if cut {
+                try await FileService.shared.move(sources, to: destination)
+            } else {
+                try await FileService.shared.copy(sources, to: destination)
+            }
+        }
+        if cut { clipboard = [] }
     }
 
     /// Mueve lo seleccionado a la papelera de ZeroSpin (no borra de golpe).
