@@ -223,45 +223,26 @@ struct LauncherView: View {
                 .frame(maxWidth: .infinity)
             }
 
-            if canClose {
-                Button {
-                    onConnectActive()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 38, height: 38)
-                        .background(.primary.opacity(0.08), in: Circle())
-                }
-                .padding(20)
-            }
-        }
-        .overlay(alignment: .topLeading) {
-            // selector de modo claro / oscuro / automático
-            Menu {
-                ForEach(AppearanceMode.allCases, id: \.rawValue) { mode in
+            // Los controles de la ventana —el semáforo— los dibuja iPadOS en
+            // la esquina superior IZQUIERDA, encima del contenido de la app.
+            // El menú de tema estaba justo debajo y se tocaba sin querer.
+            //
+            // Los dos botones propios viven ahora juntos a la derecha, que es
+            // la esquina que sí nos pertenece. Van en un HStack para que
+            // guarden su separación en lugar de superponerse.
+            HStack(spacing: 10) {
+                appearanceMenu
+                if canClose {
                     Button {
-                        appearanceRaw = mode.rawValue
+                        onConnectActive()
                     } label: {
-                        if mode.rawValue == appearanceRaw {
-                            Label(mode.label, systemImage: "checkmark")
-                        } else {
-                            Label(mode.label, systemImage: mode.icon)
-                        }
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 38, height: 38)
+                            .background(.primary.opacity(0.08), in: Circle())
                     }
                 }
-                Divider()
-                Button {
-                    showTerminalSettings = true
-                } label: {
-                    Label("Aspecto del terminal…", systemImage: "paintpalette")
-                }
-            } label: {
-                Image(systemName: (AppearanceMode(rawValue: appearanceRaw) ?? .auto).icon)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 38, height: 38)
-                    .background(.primary.opacity(0.08), in: Circle())
             }
             .padding(20)
         }
@@ -309,6 +290,35 @@ struct LauncherView: View {
         }
         .sheet(item: $machinesTarget) { server in
             DockerMachinesView(server: server, store: store) { onConnect($0) }
+        }
+    }
+
+    /// Selector de modo claro / oscuro / automático.
+    private var appearanceMenu: some View {
+        Menu {
+            ForEach(AppearanceMode.allCases, id: \.rawValue) { mode in
+                Button {
+                    appearanceRaw = mode.rawValue
+                } label: {
+                    if mode.rawValue == appearanceRaw {
+                        Label(mode.label, systemImage: "checkmark")
+                    } else {
+                        Label(mode.label, systemImage: mode.icon)
+                    }
+                }
+            }
+            Divider()
+            Button {
+                showTerminalSettings = true
+            } label: {
+                Label("Aspecto del terminal…", systemImage: "paintpalette")
+            }
+        } label: {
+            Image(systemName: (AppearanceMode(rawValue: appearanceRaw) ?? .auto).icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 38, height: 38)
+                .background(.primary.opacity(0.08), in: Circle())
         }
     }
 

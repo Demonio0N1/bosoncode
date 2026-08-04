@@ -20,6 +20,8 @@ final class WebContainerView: UIView {
     var sceneObservers: [NSObjectProtocol] = []
     /// Vigila que la PÁGINA no se desplace (ver `pinPageScroll`)
     private var offsetObservation: NSKeyValueObservation?
+    /// Última corrección de maquetación, para no encadenarlas
+    private var lastForcedRefresh: CFTimeInterval = 0
 
     /// Vigilante: la página puede quedarse con un viewport viejo sin que cambie
     /// el marco (pasa al activar otra ventana de la app). Se compara lo que la
@@ -67,8 +69,24 @@ final class WebContainerView: UIView {
         offsetObservation = scrollView.observe(\.contentOffset) { [weak self] view, _ in
             // en el caso sano esto no se cumple nunca: la página no se mueve
             guard view.contentOffset != .zero else { return }
+            // Devolverla al origen es barato y se hace siempre.
             view.setContentOffset(.zero, animated: false)
-            self?.forceViewportRefresh()
+            // Recolocar la maquetación NO lo es, y aquí estaba el problema.
+            //
+            // Al redimensionar la ventana, el desplazamiento de la página
+            // cambia muchas veces seguidas, y cada cambio disparaba dos pasadas
+            // de maquetación síncronas sobre el WebView entero. Todas caen en
+            // el hilo principal, que es el que mueve la inercia del scroll: por
+            // eso el desplazamiento se quedaba seco justo después de cambiar el
+            // tamaño de la ventana.
+            //
+            // Con una corrección por segundo basta: lo que se persigue es un
+            // desajuste que persiste, no cada fotograma de un redimensionado.
+            guard let self else { return }
+            let now = CACurrentMediaTime()
+            guard now - self.lastForcedRefresh > 1 else { return }
+            self.lastForcedRefresh = now
+            self.forceViewportRefresh()
         }
     }
 
