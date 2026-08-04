@@ -628,17 +628,39 @@ final class BrowserViewModel: ObservableObject {
         await run { _ = try await FileService.shared.compress(urls) }
     }
 
+    /// Archivo que se está renombrando, aparte de `renaming`.
+    ///
+    /// `renaming` gobierna si la alerta está en pantalla, y SwiftUI lo pone a
+    /// nil al cerrarla. Eso ocurre ANTES de que corra la tarea del botón, así
+    /// que confirmar encontraba nil y salía sin renombrar nada: la alerta se
+    /// cerraba y no pasaba nada. Este otro no lo toca la presentación.
+    @Published private var renameTarget: FileItem?
+
     func beginRename(_ item: FileItem) {
         renaming = item
-        renameText = item.name
+        renameTarget = item
+        // El nombre REAL, con su extensión, y no el de pantalla.
+        //
+        // `item.name` es el nombre localizado, del que el sistema quita la
+        // extensión de los tipos que conoce: renombrar "Léeme.txt" partía de
+        // "Léeme" y, al confirmar, el archivo se quedaba sin .txt.
+        renameText = item.url.lastPathComponent
     }
 
     func commitRename() async {
-        guard let item = renaming else { return }
-        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let item = renameTarget else { return }
+        renameTarget = nil
         renaming = nil
-        guard !name.isEmpty, name != item.name else { return }
+        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // se compara con el nombre real, que es de donde partió el campo
+        guard !name.isEmpty, name != item.url.lastPathComponent else { return }
         await run { _ = try await FileService.shared.rename(item.url, to: name) }
+    }
+
+    /// Cancelar debe olvidar el objetivo; si no, quedaría vivo para la próxima.
+    func cancelRename() {
+        renameTarget = nil
+        renaming = nil
     }
 
     /// Recibe elementos arrastrados desde otra app o desde otra carpeta.

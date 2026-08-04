@@ -774,7 +774,7 @@ struct FinderWindow: View {
                                                  set: { if !$0 { model.renaming = nil } })) {
             TextField("Nombre", text: $model.renameText)
             Button("Renombrar") { Task { await model.commitRename() } }
-            Button("Cancelar", role: .cancel) { model.renaming = nil }
+            Button("Cancelar", role: .cancel) { model.cancelRename() }
         }
         // El área de archivos debe poder recibir foco para que le lleguen las
         // teclas; sin `.focusable()` las flechas no salen de la barra lateral.
