@@ -324,14 +324,30 @@ struct ContentView: View {
                   let comps = URLComponents(url: incoming, resolvingAgainstBaseURL: false)
             else { return }
             let items = comps.queryItems ?? []
-            if let raw = items.first(where: { $0.name == "server" })?.value,
-               let id = UUID(uuidString: raw),
-               store.servers.contains(where: { $0.id == id }) {
-                session.select(id)
+            let file = items.first(where: { $0.name == "file" })?.value
+
+            // El equipo tiene que ser EL de la petición, no el que estuviera
+            // activo. El archivo se subió a una máquina concreta; abrirlo en
+            // otra enseña un editor sin ese archivo, que es indistinguible de
+            // "no ha hecho nada" — y era la explicación más probable de que el
+            // notebook llegara pero no se viera.
+            guard let raw = items.first(where: { $0.name == "server" })?.value,
+                  let id = UUID(uuidString: raw),
+                  let destino = store.servers.first(where: { $0.id == id }) else {
+                showToast("No encuentro ese equipo en la lista de BosonCode.")
+                return
             }
-            pendingFile = items.first(where: { $0.name == "file" })?.value
+            session.select(id)
+            pendingFile = file
             withAnimation { showLauncher = false }
             reloadToken = UUID()          // recarga con ?file=
+
+            // Decir qué se está abriendo y dónde. Sin esto, si el archivo no
+            // aparece no hay forma de saber si llegó la petición, si se eligió
+            // otro equipo o si el editor simplemente no lo encontró.
+            if let file {
+                showToast("Abriendo \((file as NSString).lastPathComponent) en \(destino.name)…")
+            }
         }
         // Esta ventana le dice al menú del sistema qué hacer con ⌃⌥T. Se
         // publica SIEMPRE, también sin equipo activo: si el valor fuera nil, el
@@ -507,9 +523,22 @@ struct ContentView: View {
         // login y, tras autenticarse, vuelve a `/` perdiendo la consulta — el
         // archivo llegaba al equipo pero el editor abría vacío. La vía es
         // pasar por el login con `?to=`, que sí se respeta tras autenticar.
+        // Y no basta con `file`: el editor recuerda el espacio de trabajo de la
+        // última vez y, si ya tenía uno abierto, restaura ESE e ignora el
+        // archivo suelto. Por eso va también la carpeta que lo contiene — es lo
+        // mismo que hace code-server cuando redirige por su cuenta.
+        let folder = (file as NSString).deletingLastPathComponent
+        var destino = "/?file=" + file
+        if !folder.isEmpty, folder != "/" { destino += "&folder=" + folder }
+
         var login = URLComponents(url: base.appendingPathComponent("login"),
                                   resolvingAgainstBaseURL: false)
-        login?.queryItems = [URLQueryItem(name: "to", value: "/?file=" + file)]
+        // percentEncodedQuery y no queryItems: éste deja el `&` sin escapar, y
+        // entonces el servidor lee `folder` como parámetro SUYO en vez de como
+        // parte del destino — la carpeta se perdía justo al autenticar.
+        let escapado = destino.addingPercentEncoding(
+            withAllowedCharacters: CharacterSet.alphanumerics.union(.init(charactersIn: "-._~/"))) ?? destino
+        login?.percentEncodedQuery = "to=" + escapado
         return login?.url ?? base
     }
 
