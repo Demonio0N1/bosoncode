@@ -499,18 +499,13 @@ final class BrowserViewModel: ObservableObject {
         clipboardIsCut = true
     }
 
+    /// Pega en la carpeta abierta. Lo usan los atajos de teclado.
+    ///
+    /// Delega en la versión con destino: dos copias de la misma lógica acaban
+    /// separándose, y este es el tipo de código en el que eso no se nota hasta
+    /// que una de las dos deja de hacer lo que la otra sí.
     func paste() async {
-        guard let url = currentURL, !clipboard.isEmpty else { return }
-        let sources = clipboard
-        let cut = clipboardIsCut
-        await run {
-            if cut {
-                try await FileService.shared.move(sources, to: url)
-            } else {
-                try await FileService.shared.copy(sources, to: url)
-            }
-        }
-        if cut { clipboard = [] }
+        await paste(into: nil)
     }
 
     func duplicateSelection() async {
