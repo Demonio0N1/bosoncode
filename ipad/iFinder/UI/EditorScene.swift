@@ -24,14 +24,23 @@ struct EditorWindowView: View {
     var body: some View {
         Group {
             if let url {
+                // `#source` lo pone el explorador para pedir el código en vez
+                // de la página. Se quita antes de tocar el disco: es una marca
+                // de intención, no parte de la ruta.
+                let esFuente = url.fragment == "source"
+                let real = esFuente
+                    ? (URL(string: url.absoluteString.replacingOccurrences(of: "#source", with: "")) ?? url)
+                    : url
                 // Cada tipo abre con lo que de verdad le sirve. Un notebook
                 // como texto es una pared de JSON escapado; un .sh renderizado
                 // no se puede tocar.
-                switch DocumentKind.of(url) {
+                switch esFuente ? .code(real.pathExtension) : DocumentKind.of(real) {
                 case .notebook:
-                    NotebookWindowContent(url: url)
+                    NotebookWindowContent(url: real)
+                case .web:
+                    WebPageWindow(url: real)
                 default:
-                    CodeEditorView(url: url)
+                    CodeEditorView(url: real)
                 }
             } else {
                 ContentUnavailableView("Sin archivo", systemImage: "doc.text",

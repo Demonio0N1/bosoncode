@@ -131,7 +131,7 @@ struct SafeQuickLookView: View {
                 case .notebook, .code:
                     DocumentViewer(url: ready)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .office, .other:
+                case .office, .web, .other:
                     QuickLookPreview(url: ready, onClose: onClose)
                         // el visor gestiona sus propios márgenes: debe ocupar todo
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

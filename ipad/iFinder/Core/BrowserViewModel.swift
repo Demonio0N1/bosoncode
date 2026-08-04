@@ -107,6 +107,14 @@ final class BrowserViewModel: ObservableObject {
     /// entorno de la vista—: publica la intención y la ventana la abre quien sí
     /// puede. Es el mismo reparto que ya usa la vista previa.
     @Published var editing: FileItem?
+    /// Archivo cuya FUENTE hay que editar aunque su tipo tenga visor propio.
+    ///
+    /// Sin esto no habría forma de tocar el código de un .html: abrirlo lo
+    /// dibuja, que es lo correcto por omisión pero no siempre lo que se quiere.
+    @Published var editingSource: FileItem?
+
+    func editSource(_ item: FileItem) { editingSource = item }
+
     /// Imagen abierta en el editor de dibujo
     @Published var drawingOn: FileItem?
     /// Receta del atajo, cuando hay que explicarla
@@ -762,6 +770,10 @@ final class BrowserViewModel: ObservableObject {
         // que NO puede con un .ipynb —no conoce el tipo— y sin esta comprobación
         // el doble clic caía en la lista de apps en vez de abrir el visor.
         switch DocumentKind.of(item.url) {
+        case .web:
+            // Un .html se abre para VERLO. Editar su fuente sigue estando en el
+            // menú, pero no es lo que uno espera al pulsarlo dos veces.
+            editing = item
         case .notebook, .code:
             // Los dos van a una ventana propia, y allí cada uno abre con lo
             // suyo: el notebook renderizado —celdas, Markdown y salidas— y el

@@ -51,7 +51,16 @@ struct FileContextMenu: ViewModifier {
                     Label("Abrir con…", systemImage: "arrow.up.forward.app")
                 }
             }
-            if CodeHighlighter.isCode(item.url), !item.isDirectory {
+            // Una página web se ofrece de las dos maneras: verla dibujada, que
+            // es lo normal, y editar su fuente.
+            if case .web = DocumentKind.of(item.url) {
+                Button { model.editing = item } label: {
+                    Label("Ver como página web", systemImage: "globe")
+                }
+                Button { model.editSource(item) } label: {
+                    Label("Editar el código fuente", systemImage: "chevron.left.forwardslash.chevron.right")
+                }
+            } else if CodeHighlighter.isCode(item.url), !item.isDirectory {
                 Button { model.editing = item } label: {
                     Label("Editar", systemImage: "pencil.and.outline")
                 }

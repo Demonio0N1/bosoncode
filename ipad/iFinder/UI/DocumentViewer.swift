@@ -8,6 +8,8 @@ enum DocumentKind {
     case code(String)      // extensión
     /// Documento que se EDITA en la app de su formato: Word, Excel, Pages…
     case office
+    /// Página web local: se puede LEER renderizada además de editar su fuente.
+    case web
     case other
 
     /// Familia ofimática, para saber qué app le corresponde.
@@ -69,9 +71,13 @@ enum DocumentKind {
         return officeExtensions[url.pathExtension.lowercased()]
     }
 
+    /// Extensiones que se dibujan como página.
+    static let webExtensions: Set<String> = ["html", "htm", "xhtml", "svg", "mhtml"]
+
     static func of(_ url: URL) -> DocumentKind {
         let ext = url.pathExtension.lowercased()
         if ext == "ipynb" { return .notebook }
+        if webExtensions.contains(ext) { return .web }
         if officeFamily(of: url) != nil { return .office }
         if CodeHighlighter.isCode(url) { return .code(ext) }
         return .other
@@ -129,7 +135,7 @@ struct DocumentViewer: View {
                 html = NotebookRenderer.page(title: name,
                                              subtitle: "\(lines) líneas · \(language)\(note)",
                                              body: body)
-            case .office, .other:
+            case .office, .web, .other:
                 failure = "Formato no soportado por el visor propio."
             }
         } catch {

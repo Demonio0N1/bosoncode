@@ -150,6 +150,11 @@ struct FinderWindow: View {
                 present { model.error = error.localizedDescription }
             }
         }
+        .onChange(of: model.editingSource) { _, item in
+            guard let item else { return }
+            model.editingSource = nil
+            openWindow(id: EditorScene.id, value: sourceURL(item.url))
+        }
         .onChange(of: model.editing) { _, item in
             guard let item else { return }
             model.editing = nil
@@ -928,6 +933,16 @@ struct FinderWindow: View {
         .padding(.vertical, 5)
     }
 
+
+    /// Marca una URL para que la ventana de edición abra su FUENTE.
+    ///
+    /// El enrutado de esa ventana decide por extensión, así que un .html iría
+    /// siempre al visor. Añadiendo un fragmento —que no cambia el archivo al
+    /// que apunta— se distingue una intención de la otra sin inventar otra
+    /// escena solo para esto.
+    private func sourceURL(_ url: URL) -> URL {
+        URL(string: url.absoluteString + "#source") ?? url
+    }
 
     /// Ruta legible, como la de la barra del Finder.
     ///
