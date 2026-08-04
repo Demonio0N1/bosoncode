@@ -317,7 +317,15 @@ final class MacTerminalView: TerminalView {
     /// cuanto entra el segundo manda el desplazamiento.
     private func cancelCompetingPans() {
         for g in gestureRecognizers ?? []
-        where g !== scrollPan && g is UIPanGestureRecognizer {
+        // `panGestureRecognizer` es EL DE LA PROPIA VISTA: `TerminalView`
+        // hereda de UIScrollView, así que su gesto de desplazamiento está en
+        // esta lista y es un UIPanGestureRecognizer como los demás.
+        //
+        // Cancelarlo fue la regresión de la inercia: en cada gesto se apagaba
+        // el mecanismo que precisamente aporta la deceleración nativa, y el
+        // contenido se paraba en seco al soltar. Solo hay que cortar los de
+        // SELECCIÓN, no el que desplaza.
+        where g !== scrollPan && g !== panGestureRecognizer && g is UIPanGestureRecognizer {
             g.isEnabled = false
             g.isEnabled = true
         }

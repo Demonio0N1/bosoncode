@@ -10,6 +10,27 @@ struct FileContextMenu: ViewModifier {
     let item: FileItem
     let level: Int
 
+    /// Ejecuta una acción del menú DEJANDO SELECCIONADO el elemento sobre el
+    /// que se abrió.
+    ///
+    /// Aquí estaba el fallo de Renombrar, Eliminar, Duplicar y Comprimir:
+    /// trabajan sobre `selectedItems`, y abrir un menú contextual NO selecciona
+    /// nada. La lista llegaba vacía y las funciones salían por su `guard` sin
+    /// hacer nada ni avisar — parecían botones muertos.
+    ///
+    /// Seleccionar primero es además lo que hace el Finder: pulsar con el botón
+    /// secundario sobre un archivo lo selecciona. Y si el elemento YA formaba
+    /// parte de una selección múltiple, `select` la respeta, así que "eliminar"
+    /// sobre uno de varios sigue borrándolos todos.
+    private func act(_ body: @escaping () async -> Void) {
+        Task {
+            if !model.selectedItems.contains(where: { $0.id == item.id }) {
+                await model.select(item, at: level)
+            }
+            await body()
+        }
+    }
+
     func body(content: Content) -> some View {
         content.contextMenu {
             Button { Task { await model.openDoubleClick(item, at: level) } } label: {
@@ -80,31 +101,31 @@ struct FileContextMenu: ViewModifier {
                 }
             }
             Divider()
-            Button { model.copySelection() } label: {
+            Button { act { model.copySelection() } } label: {
                 Label("Copiar", systemImage: "doc.on.doc")
             }
-            Button { model.cutSelection() } label: {
+            Button { act { model.cutSelection() } } label: {
                 Label("Cortar", systemImage: "scissors")
             }
             Button { Task { await model.paste() } } label: {
                 Label("Pegar", systemImage: "doc.on.clipboard")
             }
             .disabled(!model.canPaste)
-            Button { Task { await model.duplicateSelection() } } label: {
+            Button { act { await model.duplicateSelection() } } label: {
                 Label("Duplicar", systemImage: "plus.square.on.square")
             }
             Divider()
-            Button { model.beginRename(item) } label: {
+            Button { act { model.beginRename(item) } } label: {
                 Label("Renombrar", systemImage: "pencil")
             }
-            Button { Task { await model.compressSelection() } } label: {
+            Button { act { await model.compressSelection() } } label: {
                 Label("Comprimir", systemImage: "doc.zipper")
             }
-            Button { model.inspecting = item } label: {
+            Button { model.showInfo(item) } label: {
                 Label("Obtener información", systemImage: "info.circle")
             }
             Divider()
-            Button(role: .destructive) { Task { await model.deleteSelection() } } label: {
+            Button(role: .destructive) { act { await model.deleteSelection() } } label: {
                 Label("Eliminar", systemImage: "trash")
             }
         }

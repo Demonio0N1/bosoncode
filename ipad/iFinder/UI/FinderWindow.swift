@@ -59,21 +59,7 @@ struct FinderWindow: View {
                 regularLayout
             }
         }
-        .newFileAlert(model)
         // Renombrar el montaje: dos cuentas del mismo servicio solo se
-        // distinguen por el nombre que les ponga el usuario.
-        .alert("Nombre en la barra lateral",
-               isPresented: Binding(get: { renamingMount != nil },
-                                    set: { if !$0 { renamingMount = nil } })) {
-            TextField("Ej.: OneDrive – Yachay Tech", text: $mountName)
-            Button("Guardar") {
-                if let mount = renamingMount { local.rename(mount, to: mountName) }
-                renamingMount = nil
-            }
-            Button("Cancelar", role: .cancel) { renamingMount = nil }
-        }
-        // Guía para montar: el selector no puede abrirse ya dentro de Drive,
-        // así que se explica el camino antes de mostrarlo.
         .alert("Montar una nube", isPresented: $showMountHelp) {
             Button("Abrir selector") {
                 pickerStart = nil
@@ -161,21 +147,11 @@ struct FinderWindow: View {
                 present { model.error = error.localizedDescription }
             }
         }
-        .alert("Nombre de la ubicación",
-               isPresented: Binding(get: { pendingMount != nil },
-                                    set: { if !$0 { pendingMount = nil } })) {
-            TextField("Ej.: Google Drive", text: $pendingName)
-            Button("Guardar") {
-                // se renombra ESTE montaje, no "el último de la lista"
-                if let mount = pendingMount { local.rename(mount, to: pendingName) }
-                pendingMount = nil
-            }
-            Button("Dejar así", role: .cancel) { pendingMount = nil }
-        } message: {
-            Text("Ya está añadida. Puedes cambiarle el nombre — así distingues dos cuentas del mismo servicio.")
+        .onChange(of: model.infoRequest) { _, item in
+            guard item != nil, !needsInfoSheet else { return }
+            showInspector = true
+            model.infoRequest = nil
         }
-        // Editar abre una VENTANA propia, no una hoja: una hoja secuestra el
-        // explorador y no deja tener dos archivos abiertos a la vez.
         .onChange(of: model.editing) { _, item in
             guard let item else { return }
             model.editing = nil
@@ -199,6 +175,23 @@ struct FinderWindow: View {
         } message: {
             Text(model.shortcutHelp ?? "")
         }
+        // Información como HOJA cuando no cabe como columna: ventana estrecha,
+        // o inspector apagado. Así "Obtener información" siempre enseña algo.
+        .sheet(item: Binding(get: { needsInfoSheet ? model.infoRequest : nil },
+                             set: { if $0 == nil { model.infoRequest = nil } })) { item in
+            NavigationStack {
+                InspectorPanel(model: model, item: item,
+                               onPreview: { openPreview($0) })
+                    .navigationTitle(item.name)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cerrar") { model.infoRequest = nil }
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
+        }
         .sheet(isPresented: $showTrash) { TrashView(model: model) }
         .sheet(isPresented: Binding(get: { !onboarded }, set: { if !$0 { onboarded = true } })) {
             OnboardingView(onPick: { root in
@@ -207,12 +200,6 @@ struct FinderWindow: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showFolderPicker = true }
             }, onSkip: { onboarded = true })
             .presentationDetents([.medium, .large])
-        }
-        .alert("Renombrar", isPresented: Binding(get: { model.renaming != nil },
-                                                 set: { if !$0 { model.renaming = nil } })) {
-            TextField("Nombre", text: $model.renameText)
-            Button("Renombrar") { Task { await model.commitRename() } }
-            Button("Cancelar", role: .cancel) { model.renaming = nil }
         }
         .alert("Error", isPresented: Binding(get: { model.error != nil },
                                              set: { if !$0 { model.error = nil } })) {
@@ -488,6 +475,32 @@ struct FinderWindow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.hidden)
+        // Estas dos alertas viven en la BARRA LATERAL y no en la raíz de la
+        // ventana. SwiftUI presenta una alerta por vista: apiladas en el mismo
+        // sitio, las de más abajo se ignoran sin avisar. Además es su lugar
+        // natural: las dos nombran montajes de esta barra.
+        .alert("Nombre en la barra lateral",
+               isPresented: Binding(get: { renamingMount != nil },
+                                    set: { if !$0 { renamingMount = nil } })) {
+            TextField("Ej.: OneDrive – Yachay Tech", text: $mountName)
+            Button("Guardar") {
+                if let mount = renamingMount { local.rename(mount, to: mountName) }
+                renamingMount = nil
+            }
+            Button("Cancelar", role: .cancel) { renamingMount = nil }
+        }
+        .alert("Nombre de la ubicación",
+               isPresented: Binding(get: { pendingMount != nil },
+                                    set: { if !$0 { pendingMount = nil } })) {
+            TextField("Ej.: Google Drive", text: $pendingName)
+            Button("Guardar") {
+                if let mount = pendingMount { local.rename(mount, to: pendingName) }
+                pendingMount = nil
+            }
+            Button("Dejar así", role: .cancel) { pendingMount = nil }
+        } message: {
+            Text("Ya está añadida. Puedes cambiarle el nombre — así distingues dos cuentas del mismo servicio.")
+        }
     }
 
     /// Encabezado de sección y sus filas.
@@ -667,6 +680,13 @@ struct FinderWindow: View {
             }
             // el panel aparece solo con algo seleccionado: al deseleccionar
             // desaparece por completo y el contenido recupera el ancho
+            // El inspector es una COLUMNA solo cuando hay sitio para ella.
+            //
+            // Antes desaparecía de golpe al estrechar la ventana, y con él la
+            // vista previa del archivo: la condición de ancho regular lo
+            // borraba sin ofrecer nada a cambio. Ahora, en estrecho, la misma
+            // información se presenta como hoja (ver `infoRequest`), así que se
+            // adapta en lugar de esfumarse.
             if showInspector,
                horizontalSizeClass == .regular,
                let selected = model.inspecting ?? model.selectedItems.first {
@@ -680,6 +700,17 @@ struct FinderWindow: View {
         }
         .navigationTitle(model.currentURL?.lastPathComponent ?? "ZeroSpin")
         .navigationBarTitleDisplayMode(.inline)
+        // Renombrar vive AQUÍ y no en la raíz de la ventana, y el motivo es una
+        // limitación que no avisa: SwiftUI presenta UNA alerta por vista. En la
+        // raíz había seis apiladas, así que las últimas se ignoraban en
+        // silencio — por eso "Renombrar" no hacía nada. Repartirlas entre
+        // vistas distintas es lo que las devuelve a la vida.
+        .alert("Renombrar", isPresented: Binding(get: { model.renaming != nil },
+                                                 set: { if !$0 { model.renaming = nil } })) {
+            TextField("Nombre", text: $model.renameText)
+            Button("Renombrar") { Task { await model.commitRename() } }
+            Button("Cancelar", role: .cancel) { model.renaming = nil }
+        }
         // El área de archivos debe poder recibir foco para que le lleguen las
         // teclas; sin `.focusable()` las flechas no salen de la barra lateral.
         .focusable()
@@ -821,6 +852,14 @@ struct FinderWindow: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 14)
         .padding(.vertical, 5)
+    }
+
+    /// ¿Hace falta la hoja, o basta con el panel lateral?
+    ///
+    /// Con sitio de sobra se enciende el inspector y se ve ahí, que es menos
+    /// intrusivo. La hoja queda para cuando el panel no cabe.
+    private var needsInfoSheet: Bool {
+        horizontalSizeClass != .regular
     }
 
     /// Ruta legible, como la de la barra del Finder.

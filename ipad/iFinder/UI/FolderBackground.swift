@@ -29,6 +29,10 @@ struct FolderBackground: View {
             .contentShape(Rectangle())          // sin esto el hueco no recibe el toque
             .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .top)
             .folderContextMenu(model)
+            // La alerta de "archivo nuevo" se reparte aquí por lo mismo que la
+            // de renombrar: una por vista. Y este es su sitio natural, porque
+            // es el fondo de la carpeta quien ofrece crearlo.
+            .newFileAlert(model)
             // Soltar en la CARPETA ABIERTA, no sobre un icono.
             //
             // Antes solo se aceptaba encima de una carpeta concreta, así que

@@ -81,6 +81,19 @@ final class BrowserViewModel: ObservableObject {
     @Published var renaming: FileItem?
     @Published var renameText = ""
     @Published var inspecting: FileItem?
+    /// El usuario pidió ver la información: hay que enseñarla aunque el panel
+    /// estuviera oculto o la ventana sea estrecha.
+    @Published var infoRequest: FileItem?
+
+    /// "Obtener información" del menú.
+    ///
+    /// No basta con apuntar `inspecting`: el panel solo se dibuja si el
+    /// inspector está encendido Y la ventana es ancha. Con cualquiera de las
+    /// dos condiciones en contra, tocar la opción no producía nada visible.
+    func showInfo(_ item: FileItem) {
+        inspecting = item
+        infoRequest = item
+    }
     /// Archivo que debe abrirse en una VENTANA de edición propia.
     ///
     /// El modelo no abre ventanas —no tiene acceso a `openWindow`, que es del
