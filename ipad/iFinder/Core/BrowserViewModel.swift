@@ -358,9 +358,43 @@ final class BrowserViewModel: ObservableObject {
         levels[levels.count - 1].selection = []
     }
 
+    /// Refresca TODAS las columnas abiertas, no solo la última.
+    ///
+    /// Aquí estaba el "no funciona" de duplicar, comprimir y renombrar: sí
+    /// funcionaban —el archivo aparecía en el disco— pero el resultado cae
+    /// junto al elemento, o sea en su carpeta PADRE, y esta recarga solo miraba
+    /// la carpeta abierta. Al operar sobre una carpeta desde dentro de ella,
+    /// que es lo natural en la vista de columnas, el cambio ocurría en una
+    /// columna que nadie volvía a leer. Parecía que el botón no hacía nada.
     func reload() async {
-        guard let url = currentURL else { return }
-        await load(url, appending: false)
+        guard !levels.isEmpty else { return }
+        for index in levels.indices {
+            let url = levels[index].url
+            let items = await listing(of: url)
+            guard let items, levels.indices.contains(index) else { continue }
+            levels[index].items = sort(items)
+            // lo que ya no existe deja de estar seleccionado
+            let vivos = Set(levels[index].items.map(\.id))
+            levels[index].selection.formIntersection(vivos)
+        }
+        if let index = levels.indices.last, let name = pendingSelection,
+           let creado = levels[index].items.first(where: { $0.name == name }) {
+            levels[index].selection = [creado.id]
+            inspecting = creado
+            pendingSelection = nil
+        }
+        if let url = currentURL { watch(url) }
+    }
+
+    /// Lista una carpeta por el camino que le corresponda, o nil si falla.
+    private func listing(of url: URL) async -> [FileItem]? {
+        do {
+            return isExternal(url)
+                ? try await CloudFileHandler.shared.list(url, showHidden: showHidden)
+                : try await FileService.shared.list(url, showHidden: showHidden)
+        } catch {
+            return nil        // una columna que ya no se puede leer se deja como está
+        }
     }
 
     /// Las carpetas del sandbox se listan directo; las de proveedores externos

@@ -25,6 +25,9 @@ struct FinderWindow: View {
     @State private var showCompactSidebar = false
     /// Secciones plegadas de la barra lateral, por título
     @State private var collapsedSections: Set<String> = []
+    /// Ancho de la ventana, publicado por la disposición para que las
+    /// decisiones de "¿cabe?" se tomen todas con el mismo dato.
+    @State private var windowWidth: CGFloat = 1024
     /// Foco del teclado en el área de archivos (lo necesitan las flechas)
     @FocusState private var contentFocused: Bool
     /// Montaje que se está renombrando y ayuda para montar una nube
@@ -249,35 +252,91 @@ struct FinderWindow: View {
     /// Un HStack no tiene esa duda: la barra ocupa su sitio y el contenido el
     /// suyo. De paso, el asa de redimensionar —que vive al principio de
     /// `content`— queda justo entre las dos, que es donde se espera.
+    /// Qué cabe en el ancho que hay.
+    ///
+    /// La barra lateral y el inspector tienen ancho FIJO —236 y 260 pt— y las
+    /// columnas son lo flexible. Cuando la ventana no da para los tres, lo
+    /// flexible se encoge hasta cero y a partir de ahí los fijos se desbordan y
+    /// se montan unos sobre otros: por eso la barra tapaba los archivos y sus
+    /// nombres salían cortados por la izquierda.
+    ///
+    /// Se decide por ancho REAL y no por `horizontalSizeClass`: una ventana de
+    /// Stage Manager puede seguir siendo "regular" y no tener sitio para nada.
+    struct Fits {
+        let sidebar: Bool
+        let inspector: Bool
+
+        init(width: CGFloat, wantsSidebar: Bool, wantsInspector: Bool) {
+            // A las columnas se les reserva un mínimo ANTES de conceder nada:
+            // son el contenido, y quedarse sin ellas no es una opción.
+            var libre = width - 320
+
+            // El INSPECTOR va primero, y el orden importa. Es lo que el usuario
+            // acaba de pedir al tocar un archivo, así que verlo desaparecer al
+            // estrechar la ventana se siente como un fallo. La barra lateral, en
+            // cambio, se recupera con su botón: puede ceder sin que se pierda
+            // nada. Antes era al revés y el panel caía primero.
+            let cabeInspector = wantsInspector && libre >= 260
+            if cabeInspector { libre -= 260 }
+            inspector = cabeInspector
+
+            sidebar = wantsSidebar && libre >= 236
+        }
+    }
+
     private var regularLayout: some View {
-        HStack(spacing: 0) {
-            if visibility != .detailOnly {
-                sidebar
-                    .frame(width: sidebarWidth)
-                    // El fondo redondeado no recorta nada por sí solo: dibuja
-                    // DETRÁS. Sin esto, una fila que llega al borde inferior se
-                    // pintaba por encima de la esquina curva y se salía del
-                    // panel — que es lo que le pasaba a "Papelera".
-                    .clipShape(panelShape)
-                    .background(sidebarSurface)
-                    // Margen IGUAL por los cuatro lados. Antes eran tres:
-                    // `.leading` + `.vertical` dejaba el lado derecho a cero, y
-                    // el panel quedaba flotando por arriba, abajo e izquierda
-                    // pero pegado al contenido por la derecha.
-                    .padding(8)
-                    // …y los ocho puntos deben contarse desde el borde de la
-                    // VENTANA. Sin esto se cuentan desde el área segura, que en
-                    // un iPad existe arriba y abajo pero no a los lados: el
-                    // hueco de arriba y el de abajo salían siendo 8 más el
-                    // margen del sistema, y solo el de la izquierda medía 8.
-                    .ignoresSafeArea(.container, edges: .vertical)
-                    .transition(.move(edge: .leading))
+        GeometryReader { geo in
+            let fits = Fits(width: geo.size.width,
+                            wantsSidebar: visibility != .detailOnly,
+                            wantsInspector: showInspector)
+            HStack(spacing: 0) {
+                if fits.sidebar {
+                    sidebar
+                        .frame(width: sidebarWidth)
+                        // El fondo redondeado no recorta: dibuja detrás. Sin
+                        // esto, la última fila se salía por la esquina curva.
+                        .clipShape(panelShape)
+                        .background(sidebarSurface)
+                        // Margen igual por los cuatro lados, medido desde el
+                        // borde de la VENTANA: sin ignorar el área segura, el de
+                        // arriba y abajo sumaría el margen del sistema.
+                        .padding(8)
+                        .ignoresSafeArea(.container, edges: .vertical)
+                        .transition(.move(edge: .leading))
+                }
+                NavigationStack {
+                    content(showsInspector: fits.inspector)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarLeading) { sidebarToggle }
+                        }
+                }
             }
-            NavigationStack {
-                content
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) { sidebarToggle }
+            // Cuando la barra no cabe como columna sigue estando: se pide con su
+            // botón y sale como panel encima. Antes, sencillamente, se montaba
+            // sobre los archivos sin que nadie lo hubiera pedido.
+            .onChange(of: geo.size.width, initial: true) { _, w in
+                if windowWidth != w { windowWidth = w }
+            }
+            .overlay(alignment: .leading) {
+                if !fits.sidebar && showCompactSidebar {
+                    ZStack(alignment: .leading) {
+                        Color.black.opacity(0.25)
+                            .ignoresSafeArea()
+                            .onTapGesture {
+                                withAnimation(.easeOut(duration: 0.22)) {
+                                    showCompactSidebar = false
+                                }
+                            }
+                        sidebar
+                            .frame(width: sidebarPanelWidth(in: geo.size.width))
+                            .clipShape(panelShape)
+                            .background(sidebarSurface)
+                            .padding(8)
+                            .ignoresSafeArea(.container, edges: .vertical)
+                            .shadow(color: .black.opacity(0.28), radius: 14, x: 3)
                     }
+                    .transition(.opacity)
+                }
             }
         }
     }
@@ -361,7 +420,7 @@ struct FinderWindow: View {
         GeometryReader { geo in
           ZStack(alignment: .leading) {
             NavigationStack {
-                content
+                content(showsInspector: false)   // en estrecho, siempre hoja
                     .toolbar {
                         ToolbarItem(placement: .navigationBarLeading) { sidebarToggle }
                     }
@@ -645,12 +704,15 @@ struct FinderWindow: View {
 
     // MARK: - Contenido
 
-    private var content: some View {
+    /// - Parameter showsInspector: si hay sitio para el panel de información
+    ///   como columna. Lo decide quien conoce el ancho de la ventana, no esta
+    ///   vista: aquí solo se obedece.
+    private func content(showsInspector: Bool) -> some View {
         HStack(spacing: 0) {
             // Asa de la barra lateral. NavigationSplitView no deja arrastrar su
             // divisor, pero sí respeta el ancho ideal que se le dé: moviendo
             // esta asa se cambia ese valor y la barra sigue al dedo.
-            if horizontalSizeClass == .regular, visibility != .detailOnly {
+            if showsInspector || horizontalSizeClass == .regular {
                 ResizableDivider(width: $sidebarWidth, range: 150...420, resetTo: 220)
             }
             VStack(spacing: 0) {
@@ -687,8 +749,11 @@ struct FinderWindow: View {
             // borraba sin ofrecer nada a cambio. Ahora, en estrecho, la misma
             // información se presenta como hoja (ver `infoRequest`), así que se
             // adapta en lugar de esfumarse.
-            if showInspector,
-               horizontalSizeClass == .regular,
+            // La condición de ancho ya la resolvió quien llama: aquí basta con
+            // que haya algo que enseñar. Antes se comprobaba `horizontalSizeClass`
+            // y el panel desaparecía de golpe al estrechar; ahora, cuando no
+            // cabe como columna, la misma información sale como hoja.
+            if showsInspector,
                let selected = model.inspecting ?? model.selectedItems.first {
                 ResizableDivider(width: $inspectorWidth, range: 200...520,
                                  growsLeading: true, resetTo: 260)
@@ -859,7 +924,8 @@ struct FinderWindow: View {
     /// Con sitio de sobra se enciende el inspector y se ve ahí, que es menos
     /// intrusivo. La hoja queda para cuando el panel no cabe.
     private var needsInfoSheet: Bool {
-        horizontalSizeClass != .regular
+        !Fits(width: windowWidth, wantsSidebar: visibility != .detailOnly,
+              wantsInspector: showInspector).inspector
     }
 
     /// Ruta legible, como la de la barra del Finder.
