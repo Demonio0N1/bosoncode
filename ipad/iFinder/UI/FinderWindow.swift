@@ -150,11 +150,6 @@ struct FinderWindow: View {
                 present { model.error = error.localizedDescription }
             }
         }
-        .onChange(of: model.infoRequest) { _, item in
-            guard item != nil, !needsInfoSheet else { return }
-            showInspector = true
-            model.infoRequest = nil
-        }
         .onChange(of: model.editing) { _, item in
             guard let item else { return }
             model.editing = nil
@@ -180,7 +175,7 @@ struct FinderWindow: View {
         }
         // Información como HOJA cuando no cabe como columna: ventana estrecha,
         // o inspector apagado. Así "Obtener información" siempre enseña algo.
-        .sheet(item: Binding(get: { needsInfoSheet ? model.infoRequest : nil },
+        .sheet(item: Binding(get: { model.infoRequest },
                              set: { if $0 == nil { model.infoRequest = nil } })) { item in
             NavigationStack {
                 InspectorPanel(model: model, item: item,
@@ -389,13 +384,27 @@ struct FinderWindow: View {
 
     /// Muestra u oculta la barra. Sustituye al botón que ponía
     /// `NavigationSplitView`, que se fue con él.
+    /// ¿Cabe la barra como columna con el ancho actual?
+    ///
+    /// Una sola fuente para esta pregunta. La disposición pasó a decidirse por
+    /// ancho, pero el botón seguía preguntando por `horizontalSizeClass`: a los
+    /// anchos en que la ventana es "regular" pero no hay sitio, conmutaba
+    /// `visibility` —que no puede enseñar nada— mientras el panel flotante
+    /// esperaba `showCompactSidebar`, que ese camino nunca tocaba. Por eso el
+    /// botón no hacía nada justo en esos tamaños y sí en los demás.
+    private var sidebarFitsAsColumn: Bool {
+        horizontalSizeClass == .regular
+            && Fits(width: windowWidth, wantsSidebar: true,
+                    wantsInspector: showInspector).sidebar
+    }
+
     private var sidebarToggle: some View {
         Button {
             withAnimation(.easeOut(duration: 0.22)) {
-                if horizontalSizeClass == .compact {
-                    showCompactSidebar.toggle()
-                } else {
+                if sidebarFitsAsColumn {
                     visibility = visibility == .detailOnly ? .all : .detailOnly
+                } else {
+                    showCompactSidebar.toggle()
                 }
             }
         } label: {
@@ -919,14 +928,6 @@ struct FinderWindow: View {
         .padding(.vertical, 5)
     }
 
-    /// ¿Hace falta la hoja, o basta con el panel lateral?
-    ///
-    /// Con sitio de sobra se enciende el inspector y se ve ahí, que es menos
-    /// intrusivo. La hoja queda para cuando el panel no cabe.
-    private var needsInfoSheet: Bool {
-        !Fits(width: windowWidth, wantsSidebar: visibility != .detailOnly,
-              wantsInspector: showInspector).inspector
-    }
 
     /// Ruta legible, como la de la barra del Finder.
     ///

@@ -87,9 +87,16 @@ final class BrowserViewModel: ObservableObject {
 
     /// "Obtener información" del menú.
     ///
-    /// No basta con apuntar `inspecting`: el panel solo se dibuja si el
-    /// inspector está encendido Y la ventana es ancha. Con cualquiera de las
-    /// dos condiciones en contra, tocar la opción no producía nada visible.
+    /// Abre SIEMPRE la ficha, en cualquier tamaño de ventana.
+    ///
+    /// Antes intentaba ser listo: encender el panel lateral si cabía y recurrir
+    /// a la hoja solo si no. El problema es que cuando el panel ya estaba a la
+    /// vista mostrando ese mismo archivo, no había nada que cambiar — y desde
+    /// fuera eso es indistinguible de un botón roto.
+    ///
+    /// Una opción de menú debe hacer algo observable siempre que se toca. Se
+    /// prefiere una conducta predecible, aunque a veces sea redundante con el
+    /// panel, a una que depende de un estado que no se ve.
     func showInfo(_ item: FileItem) {
         inspecting = item
         infoRequest = item
