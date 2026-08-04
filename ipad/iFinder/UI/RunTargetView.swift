@@ -6,8 +6,15 @@ import SwiftUI
 /// activo" rara vez es el que quieres — y el que tiene GPU no siempre es el que
 /// estabas mirando.
 struct RunTargetView: View {
-    let item: FileItem
-    @ObservedObject var model: BrowserViewModel
+    let name: String
+    /// Qué hacer con la máquina elegida.
+    ///
+    /// Recibe una acción en vez del modelo del explorador para que la ventana
+    /// del notebook —que es otra escena y no lo tiene— pueda usar el mismo
+    /// selector. Duplicarlo habría significado dos listas de equipos que
+    /// acabarían divergiendo.
+    let onPick: (Server) -> Void
+
     @Environment(\.dismiss) private var dismiss
 
     private var destinations: [Server] { RunInBosonCode.destinations }
@@ -38,7 +45,7 @@ struct RunTargetView: View {
                     }
                 }
             }
-            .navigationTitle("Ejecutar \(item.name)")
+            .navigationTitle("Ejecutar \(name)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -56,7 +63,7 @@ struct RunTargetView: View {
                      indented: Bool = false) -> some View {
         Button {
             dismiss()
-            Task { await model.runInBosonCode(item, on: server) }
+            onPick(server)
         } label: {
             HStack(spacing: 10) {
                 if indented { Spacer().frame(width: 14) }

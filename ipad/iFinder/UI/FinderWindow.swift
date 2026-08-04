@@ -195,6 +195,15 @@ struct FinderWindow: View {
             }
             .presentationDetents([.medium, .large])
         }
+        // "Ejecutar en BosonCode…" ponía `runTarget` pero nadie presentaba la
+        // hoja, así que la opción no hacía nada — el mismo descuido que tenía
+        // el editor de texto.
+        .sheet(item: Binding(get: { model.runTarget },
+                             set: { model.runTarget = $0 })) { item in
+            RunTargetView(name: item.name) { server in
+                Task { await model.runInBosonCode(item, on: server) }
+            }
+        }
         .sheet(isPresented: $showTrash) { TrashView(model: model) }
         .sheet(isPresented: Binding(get: { !onboarded }, set: { if !$0 { onboarded = true } })) {
             OnboardingView(onPick: { root in

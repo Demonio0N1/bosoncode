@@ -10,12 +10,15 @@ enum RunInBosonCode {
 
     enum Failure: LocalizedError {
         case noServer
+        case unreachable(String)
         case cannotOpenApp
 
         var errorDescription: String? {
             switch self {
             case .noServer:
                 return "No hay ningún equipo conectado. Abre BosonCode, conéctate a tu PC y vuelve a intentarlo."
+            case .unreachable(let name):
+                return "\(name) no está disponible ahora mismo. Comprueba que esté encendido y que su contraseña siga guardada en BosonCode."
             case .cannotOpenApp:
                 return "No pude abrir BosonCode. ¿Está instalada?"
             }
@@ -34,11 +37,18 @@ enum RunInBosonCode {
     @discardableResult
     static func run(_ url: URL, on target: Server? = nil) async throws -> String {
         let store = ServerStore.shared
-        let candidates = [target, store.active].compactMap { $0 } + store.servers
+        // Si se ELIGIÓ un equipo, es ese o ninguno.
+        //
+        // Antes el elegido era solo el primer candidato de una lista con
+        // respaldos: si no tenía gestor o no había contraseña guardada, el
+        // archivo acababa en otra máquina sin decirlo. Elegir destino y que el
+        // archivo aparezca en otro sitio es peor que un error claro.
+        let candidates = target.map { [$0] }
+            ?? ([store.active].compactMap { $0 } + store.servers)
         guard let server = candidates.first(where: { $0.managerURL != nil }),
               let managerURL = server.managerURL,
               let password = store.hostPassword(for: server) else {
-            throw Failure.noServer
+            throw target == nil ? Failure.noServer : Failure.unreachable(target!.name)
         }
         let client = ManagerClient(baseURL: managerURL, password: password)
 

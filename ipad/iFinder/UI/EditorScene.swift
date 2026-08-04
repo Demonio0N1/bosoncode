@@ -67,6 +67,10 @@ struct NotebookWindowContent: View {
     @Environment(\.dismiss) private var dismiss
     @State private var sending = false
     @State private var message: String?
+    /// Elegir equipo antes de subir. Con varias máquinas, "la primera que
+    /// responda" casi nunca es la que se quiere — y la que tiene GPU rara vez
+    /// es la que estabas mirando.
+    @State private var choosing = false
 
     var body: some View {
         NavigationStack {
@@ -82,11 +86,16 @@ struct NotebookWindowContent: View {
                             ProgressView()
                         } else {
                             Button {
-                                Task { await run() }
+                                choosing = true
                             } label: {
                                 Label("Ejecutar", systemImage: "play.circle")
                             }
                         }
+                    }
+                }
+                .sheet(isPresented: $choosing) {
+                    RunTargetView(name: url.lastPathComponent) { server in
+                        Task { await run(on: server) }
                     }
                 }
                 .alert("Ejecutar en BosonCode",
@@ -100,13 +109,13 @@ struct NotebookWindowContent: View {
     }
 
     /// El iPad no puede ejecutar el notebook —no hay kernel ni JIT—, así que
-    /// "ejecutar" significa subirlo al equipo y abrirlo allí.
-    private func run() async {
+    /// "ejecutar" significa subirlo al equipo elegido y abrirlo allí.
+    private func run(on server: Server) async {
         sending = true
         defer { sending = false }
         do {
-            let path = try await RunInBosonCode.run(url)
-            message = "Subido a \(path). Se abrirá en BosonCode."
+            let path = try await RunInBosonCode.run(url, on: server)
+            message = "Subido a \(server.name):\n\(path)\n\nSe abrirá en BosonCode."
         } catch {
             message = error.localizedDescription
         }
