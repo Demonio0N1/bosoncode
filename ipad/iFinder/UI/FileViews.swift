@@ -89,7 +89,7 @@ struct FileContextMenu: ViewModifier {
             // Notebooks y scripts: ejecutar significa mandarlo al equipo, que
             // es donde vive el intérprete.
             if !item.isDirectory,
-               ["ipynb", "py", "jl", "sh", "r"].contains(item.url.pathExtension.lowercased()) {
+               RunInBosonCode.canRun(item.url) {
                 Button { model.runTarget = item } label: {
                     Label("Ejecutar en BosonCode…", systemImage: "play.circle")
                 }

@@ -15,6 +15,10 @@ struct CodeEditorView: View {
     @State private var loaded = false
     @State private var failure: String?
     @State private var saving = false
+    /// Elegir equipo antes de subir, igual que en la ventana del notebook.
+    @State private var choosing = false
+    @State private var sending = false
+    @State private var runMessage: String?
     @Environment(\.dismiss) private var dismiss
 
     private var ext: String { url.pathExtension.lowercased() }
@@ -52,6 +56,36 @@ struct CodeEditorView: View {
                             .keyboardShortcut("s", modifiers: .command)
                     }
                 }
+                // Un script se escribe para ejecutarlo, y hasta ahora había que
+                // cerrar la ventana e ir a buscarlo al menú contextual. El
+                // notebook ya tenía este botón; no había motivo para que un .py
+                // no lo tuviera.
+                if RunInBosonCode.canRun(url), failure == nil {
+                    ToolbarItem(placement: .primaryAction) {
+                        if sending {
+                            ProgressView()
+                        } else {
+                            Button {
+                                choosing = true
+                            } label: {
+                                Label("Ejecutar", systemImage: "play.circle")
+                            }
+                            .keyboardShortcut("r", modifiers: .command)
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $choosing) {
+                RunTargetView(name: url.lastPathComponent) { server in
+                    Task { await run(on: server) }
+                }
+            }
+            .alert("Ejecutar en BosonCode",
+                   isPresented: Binding(get: { runMessage != nil },
+                                        set: { if !$0 { runMessage = nil } })) {
+                Button("Entendido", role: .cancel) { runMessage = nil }
+            } message: {
+                Text(runMessage ?? "")
             }
             .task { await load() }
         }
@@ -92,6 +126,29 @@ struct CodeEditorView: View {
 
     private func save() {
         Task { await saveNow() }
+    }
+
+    /// Sube el script al equipo elegido y lo abre allí.
+    ///
+    /// Guarda primero si hay cambios sin guardar. Es la diferencia entre esto y
+    /// ejecutar desde el menú contextual: allí el archivo del disco es lo único
+    /// que hay, pero aquí lo estás editando, y subir la versión del disco
+    /// mientras miras otra en pantalla daría un resultado que no corresponde a
+    /// lo que lees — con el agravante de que parecería que el script está mal.
+    @MainActor
+    private func run(on server: Server) async {
+        if dirty {
+            await saveNow()
+            guard failure == nil else { return }
+        }
+        sending = true
+        defer { sending = false }
+        do {
+            let path = try await RunInBosonCode.run(url, on: server)
+            runMessage = "Subido a \(server.name):\n\(path)\n\nSe abrirá en BosonCode."
+        } catch {
+            runMessage = error.localizedDescription
+        }
     }
 
     @MainActor

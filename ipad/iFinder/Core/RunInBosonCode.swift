@@ -25,6 +25,17 @@ enum RunInBosonCode {
         }
     }
 
+    /// Qué se puede mandar a ejecutar.
+    ///
+    /// Vive aquí y no en cada menú porque hay varios sitios que lo preguntan
+    /// —el menú contextual y la ventana del editor—, y dos listas de
+    /// extensiones separadas acaban divergiendo: se añade una en un sitio y el
+    /// otro deja de ofrecerla sin que nadie se entere.
+    static func canRun(_ url: URL) -> Bool {
+        ["ipynb", "py", "jl", "sh", "bash", "zsh", "r", "rb", "js", "ts"]
+            .contains(url.pathExtension.lowercased())
+    }
+
     /// Equipos y contenedores donde se puede ejecutar algo.
     @MainActor
     static var destinations: [Server] {
