@@ -10,6 +10,7 @@ final class WebContainerView: UIView {
     var bottomConstraint: NSLayoutConstraint?
     private var lastSize: CGSize = .zero
     private var resizeWork: DispatchWorkItem?
+    private var lateResizeWork: DispatchWorkItem?
     private var watchdog: Timer?
     /// Observadores de activación de escena, para poder retirarlos.
     ///
@@ -119,6 +120,13 @@ final class WebContainerView: UIView {
 
     fileprivate func forceViewportRefresh() {
         guard let webView, let bottom = bottomConstraint else { return }
+        // Nunca en mitad de un desplazamiento. Esta función hace dos pasadas de
+        // maquetación síncronas y dispara un resize de VS Code; hacerlo
+        // mientras el contenido desliza corta la inercia en seco. Lo que se
+        // corrige es un desajuste que persiste, así que puede esperar a que el
+        // scroll pare: el vigilante vuelve a mirar en 1,5 s.
+        let scroll = webView.scrollView
+        guard !scroll.isDragging, !scroll.isDecelerating else { return }
         bottom.constant = -1
         layoutIfNeeded()
         DispatchQueue.main.async { [weak self] in
@@ -156,10 +164,19 @@ final class WebContainerView: UIView {
         }
         resizeWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
-        // segundo aviso por si el primero llegó a mitad de la animación
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak webView] in
+        // Segundo aviso por si el primero llegó a mitad de la animación.
+        //
+        // También cancelable, y ese es el arreglo: al arrastrar el borde de la
+        // ventana esto se ejecuta en cada fotograma, y sin cancelar se
+        // acumulaban decenas de avisos de resize pendientes. Cada uno obliga a
+        // VS Code a recolocar el editor entero, así que llegaban todos juntos
+        // justo al soltar — que es exactamente cuando se intenta desplazar.
+        lateResizeWork?.cancel()
+        let late = DispatchWorkItem { [weak webView] in
             webView?.evaluateJavaScript("window.dispatchEvent(new Event('resize'));")
         }
+        lateResizeWork = late
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: late)
     }
 }
 
@@ -446,8 +463,18 @@ struct CodeWebView: UIViewRepresentable {
                                     UIScene.willDeactivateNotification].map { name in
             NotificationCenter.default.addObserver(
                 forName: name, object: nil, queue: .main
-            ) { [weak container] _ in
-                container?.refreshOnFocusChange()
+            ) { [weak container] note in
+                // `object: nil` escucha a TODAS las escenas de la app, y ahí
+                // estaba el problema: abrir o tocar una ventana-terminal hacía
+                // que el editor de CADA ventana abierta —incluidas las que no
+                // se ven— rehiciera su maquetación dos veces. Todo eso cae en
+                // el hilo principal, que es el mismo que mueve la inercia del
+                // scroll, así que cualquier trasteo con las ventanas la dejaba
+                // seca. Cada editor atiende solo a la suya.
+                guard let container,
+                      let scene = note.object as? UIScene,
+                      scene === container.window?.windowScene else { return }
+                container.refreshOnFocusChange()
             }
         }
         return container

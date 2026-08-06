@@ -167,6 +167,8 @@ final class MacTerminalView: TerminalView {
     /// Deceleración tras levantar el dedo (ver `startGlide`)
     private var glide: CADisplayLink?
     private var glideVelocity: CGFloat = 0
+    /// Marca de tiempo del último fotograma de inercia
+    private var lastGlideTime: CFTimeInterval = 0
     /// Velocidad estimada a mano, en puntos por segundo (ver `.ended`)
     private var trackedVelocity: CGFloat = 0
     private var lastSampleTime: CFTimeInterval = 0
@@ -420,17 +422,29 @@ final class MacTerminalView: TerminalView {
         // por debajo de este umbral el gesto fue una colocación, no un impulso
         guard abs(velocity) > 150 else { scrollAccum = 0; return }
         glideVelocity = velocity
+        lastGlideTime = CACurrentMediaTime()
         let link = CADisplayLink(target: self, selector: #selector(stepGlide(_:)))
         link.add(to: .main, forMode: .common)
         glide = link
     }
 
     @objc private func stepGlide(_ link: CADisplayLink) {
-        // el decaimiento se ata al tiempo real, no al fotograma: así frena
-        // igual a 60 Hz que a los 120 de un iPad Pro
-        glideVelocity *= pow(0.9, CGFloat(link.duration) * 60)
+        // `link.duration` es la duración NOMINAL del fotograma, no la que de
+        // verdad pasó. Mientras el hilo principal está ocupado —redimensionar
+        // la ventana, abrir otra— las llamadas se saltan, pero cada una que
+        // llega sigue contando 1/60 s: la inercia se quedaba congelada y luego
+        // reaparecía a destiempo en vez de seguir apagándose. Con el reloj real
+        // el frenado avanza aunque se pierdan fotogramas.
+        let now = CACurrentMediaTime()
+        var dt = now - lastGlideTime
+        lastGlideTime = now
+        // Y con techo: tras un atasco largo, un dt enorme daría un salto de
+        // varias pantallas de golpe. Se prefiere quedarse corto.
+        dt = min(max(dt, 1.0 / 120), 1.0 / 30)
+
+        glideVelocity *= pow(0.9, CGFloat(dt) * 60)
         guard abs(glideVelocity) > 50 else { stopGlide(); return }
-        scrollAccum += glideVelocity * CGFloat(link.duration)
+        scrollAccum += glideVelocity * CGFloat(dt)
         emitWheelLines()
     }
 
