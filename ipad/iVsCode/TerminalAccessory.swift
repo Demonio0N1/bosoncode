@@ -170,7 +170,8 @@ final class MacTerminalView: TerminalView {
     /// Marca de tiempo del último fotograma de inercia
     private var lastGlideTime: CFTimeInterval = 0
     /// Velocidad estimada a mano, en puntos por segundo (ver `.ended`)
-    private var trackedVelocity: CGFloat = 0
+    /// Últimas muestras del gesto: cuánto se movió, en cuánto tiempo y cuándo.
+    private var samples: [(dy: CGFloat, dt: CFTimeInterval, t: CFTimeInterval)] = []
     private var lastSampleTime: CFTimeInterval = 0
     /// Indicador de desplazamiento y cuántas líneas llevamos hacia atrás
     private let scrollThumb = UIView()
@@ -280,7 +281,7 @@ final class MacTerminalView: TerminalView {
             cancelCompetingPans()
             stopGlide()                       // tocar corta la inercia anterior
             scrollAccum = 0
-            trackedVelocity = 0
+            samples.removeAll()
             lastSampleTime = CACurrentMediaTime()
         case .changed:
             let dy = gesture.translation(in: self).y
@@ -295,7 +296,7 @@ final class MacTerminalView: TerminalView {
             // arrancaba la inercia y el dedo sí. Se usa la medida propia como
             // respaldo, que vale para los dos.
             let reported = gesture.velocity(in: self).y
-            startGlide(velocity: abs(reported) > 1 ? reported : trackedVelocity)
+            startGlide(velocity: abs(reported) > 1 ? reported : flingVelocity)
         default:
             stopGlide()
             scrollAccum = 0
@@ -333,22 +334,54 @@ final class MacTerminalView: TerminalView {
         }
     }
 
-    /// Estima la velocidad con los deltas que van llegando.
+    /// Guarda lo que se movió, sin juzgar todavía.
     ///
-    /// Media móvil y no el último delta a secas: un fotograma con un salto raro
-    /// —o uno diminuto justo antes de soltar— no debe decidir por sí solo cuánta
-    /// inercia lleva el gesto.
+    /// Antes esto mantenía una media móvil y la ponía A CERO en cuanto dos
+    /// deltas llegaban con más de 0,1 s de diferencia, entendiendo que el gesto
+    /// se había detenido. Pero un hueco largo tiene DOS explicaciones muy
+    /// distintas: que el dedo se parara, o que el hilo principal estuviera
+    /// ocupado y no entregara los avisos a tiempo. Justo después de
+    /// redimensionar pasa lo segundo —recolocar el editor es caro—, así que la
+    /// velocidad se borraba, y como el trackpad además reporta cero en
+    /// `velocity(in:)`, no quedaba nada con lo que arrancar la inercia. Ese era
+    /// el "redimensiono y deja de tener inercia".
     ///
-    /// Una pausa larga entre deltas significa que el gesto se detuvo aunque los
-    /// dedos sigan puestos: ahí la velocidad se descarta, para que soltar tras
-    /// pararse no lance la vista.
+    /// Aquí solo se apunta. Distinguir las dos cosas se hace al soltar, y por
+    /// el MOVIMIENTO, que es el dato que de verdad las separa.
     private func sampleVelocity(_ dy: CGFloat) {
         let now = CACurrentMediaTime()
         let dt = now - lastSampleTime
         lastSampleTime = now
-        guard dt > 0, dt < 0.1 else { trackedVelocity = 0; return }
-        let instant = dy / CGFloat(dt)
-        trackedVelocity = trackedVelocity * 0.7 + instant * 0.3
+        guard dt > 0 else { return }
+        samples.append((dy, dt, now))
+        if samples.count > 12 { samples.removeFirst(samples.count - 12) }
+    }
+
+    /// Con cuánta velocidad se soltó.
+    ///
+    /// Se mide sobre la última fracción de segundo, no sobre el gesto entero:
+    /// lo que decide un lanzamiento es cómo terminó, no cómo empezó.
+    ///
+    /// Y así una pausa de verdad sigue sin lanzar nada —si el dedo estuvo
+    /// quieto no hay muestras recientes y sale cero— sin castigar al gesto por
+    /// un atasco del sistema, donde las muestras existen y traen movimiento
+    /// real, solo que espaciadas.
+    private var flingVelocity: CGFloat {
+        let now = CACurrentMediaTime()
+        let recent = samples.filter { now - $0.t < 0.12 }
+        if recent.count >= 2 {
+            let span = recent.reduce(0) { $0 + $1.dt }
+            if span > 0.004 {
+                return recent.reduce(0) { $0 + $1.dy } / CGFloat(span)
+            }
+        }
+        // Una sola muestra reciente basta si trae movimiento: es el caso del
+        // atasco, en el que los avisos llegan agrupados y con deltas grandes.
+        if let last = samples.last, now - last.t < 0.25,
+           last.dt > 0.004, last.dt < 0.3 {
+            return last.dy / CGFloat(last.dt)
+        }
+        return 0
     }
 
     /// Convierte lo acumulado en líneas de rueda. El alto de línea sale de la
@@ -452,7 +485,7 @@ final class MacTerminalView: TerminalView {
         glide?.invalidate()
         glide = nil
         glideVelocity = 0
-        trackedVelocity = 0
+        samples.removeAll()
         scrollAccum = 0
         // lo que no llegó a confirmarse no cuenta: si el host no respondió, no
         // se movió nada
