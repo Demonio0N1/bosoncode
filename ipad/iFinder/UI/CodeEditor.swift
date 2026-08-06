@@ -19,6 +19,8 @@ struct CodeEditorView: View {
     @State private var choosing = false
     @State private var sending = false
     @State private var runMessage: String?
+    /// Cerrar con cambios sin guardar: preguntar antes de tirarlos.
+    @State private var confirmDiscard = false
     @Environment(\.dismiss) private var dismiss
 
     private var ext: String { url.pathExtension.lowercased() }
@@ -80,6 +82,17 @@ struct CodeEditorView: View {
                     Task { await run(on: server) }
                 }
             }
+            .confirmationDialog("Tienes cambios sin guardar en \(url.lastPathComponent)",
+                                isPresented: $confirmDiscard, titleVisibility: .visible) {
+                Button("Descartar cambios", role: .destructive) { dismiss() }
+                Button("Guardar y cerrar") {
+                    Task {
+                        await saveNow()
+                        if failure == nil { dismiss() }
+                    }
+                }
+                Button("Cancelar", role: .cancel) {}
+            }
             .alert("Ejecutar en BosonCode",
                    isPresented: Binding(get: { runMessage != nil },
                                         set: { if !$0 { runMessage = nil } })) {
@@ -88,23 +101,29 @@ struct CodeEditorView: View {
                 Text(runMessage ?? "")
             }
             .task { await load() }
+            // Este valor pisa el que publica la ventana contenedora, que
+            // llamaba a `dismiss()` a secas: ⌘W tiraba los cambios mientras el
+            // botón Cerrar los guardaba, y cuál de los dos usaras cambiaba el
+            // resultado. Ahora los dos pasan por `close()`.
+            .focusedSceneValue(\.windowClose,
+                               WindowCloseAction(id: url.path) { close() })
         }
     }
 
-    /// Cierra guardando lo que haya pendiente.
+    /// Cierra sin guardar; pregunta si hay cambios pendientes.
     ///
-    /// El guardado iba en `onDisappear`, y ahí llega tarde: la vista ya se está
-    /// retirando y la escritura —que es asíncrona— podía quedarse a medias. Al
-    /// hacerlo aquí, el cierre espera a que el archivo esté en disco.
+    /// Antes cerrar guardaba en silencio, y eso convertía "abro un script para
+    /// mirarlo" en "lo he modificado sin querer": un roce en el teclado bastaba
+    /// para que el archivo del disco cambiara sin que nadie lo pidiera. Con un
+    /// botón Guardar al lado, guardar es una decisión, no un efecto secundario
+    /// de cerrar.
     ///
-    /// Y perder lo escrito por cerrar sin pensar sería el peor fallo posible en
-    /// un editor, así que cerrar guarda; no pregunta.
+    /// Se pregunta en vez de descartar de golpe porque lo contrario es el otro
+    /// extremo del mismo problema: un toque y el trabajo desaparece sin vuelta
+    /// atrás. La pregunta solo sale cuando de verdad hay algo que perder.
     private func close() {
         guard dirty else { dismiss(); return }
-        Task {
-            await saveNow()
-            dismiss()
-        }
+        confirmDiscard = true
     }
 
     private func load() async {
