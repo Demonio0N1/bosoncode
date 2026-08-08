@@ -19,6 +19,7 @@ enum ZipReader {
 
     enum Failure: LocalizedError {
         case notAZip
+        case truncated
         case unsupported(String)
         case corrupt
 
@@ -26,6 +27,8 @@ enum ZipReader {
             switch self {
             case .notAZip:
                 return "Este archivo no es un ZIP válido."
+            case .truncated:
+                return "No se pudo leer el archivo entero. Si está en la nube, ábrelo una vez para descargarlo y vuelve a intentarlo."
             case .unsupported(let what):
                 return "Este ZIP usa \(what), que aún no se puede abrir aquí."
             case .corrupt:
@@ -47,8 +50,12 @@ enum ZipReader {
 
     /// Extrae el ZIP dentro de `directory`, en una carpeta con su nombre.
     /// - Returns: la carpeta creada.
-    static func extract(_ zip: URL, into directory: URL, named folderName: String) throws -> URL {
-        let data = try Data(contentsOf: zip, options: .mappedIfSafe)
+    static func extract(_ data: Data, into directory: URL, named folderName: String) throws -> URL {
+        // Antes de culpar al formato: un ZIP no puede medir menos que su propio
+        // cierre. Si llega menos, lo que falló fue la lectura —archivo en la
+        // nube sin descargar, ámbito no concedido—, y decir "no es un ZIP
+        // válido" manda a buscar el problema donde no está.
+        guard data.count >= 22 else { throw Failure.truncated }
         let entries = try index(of: data)
 
         let root = directory.appendingPathComponent(folderName)

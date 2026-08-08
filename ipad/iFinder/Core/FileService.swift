@@ -126,44 +126,22 @@ actor FileService {
         for url in urls { try fm.removeItem(at: url) }
     }
 
-    /// Comprime en ZIP usando el coordinador del sistema (sin dependencias).
+    /// Comprime en ZIP.
+    ///
+    /// Antes esto lo hacía `NSFileCoordinator` con `.forUploading`, que parece
+    /// la vía sin dependencias pero solo empaqueta CARPETAS: con un archivo
+    /// suelto devuelve el archivo tal cual, y lo guardado como `.zip` era el
+    /// original sin comprimir. `Léeme.zip` contenía el texto de `Léeme.txt` en
+    /// claro, y `unzip` lo rechazaba por no ser un ZIP. No se notó hasta que
+    /// hubo con qué abrirlos.
     func compress(_ urls: [URL]) throws -> URL {
         guard let first = urls.first else { throw CocoaError(.fileNoSuchFile) }
         let directory = first.deletingLastPathComponent()
-        // varios elementos: se agrupan antes en una carpeta temporal
-        let source: URL
-        var temporary: URL?
-        if urls.count == 1 {
-            source = first
-        } else {
-            let box = fm.temporaryDirectory.appendingPathComponent("Archivo \(UUID().uuidString)")
-            try fm.createDirectory(at: box, withIntermediateDirectories: true)
-            for url in urls {
-                try fm.copyItem(at: url, to: box.appendingPathComponent(url.lastPathComponent))
-            }
-            source = box
-            temporary = box
-        }
-        defer { if let temporary { try? fm.removeItem(at: temporary) } }
-
-        var result: URL?
-        var coordError: NSError?
-        var copyError: Error?
-        NSFileCoordinator().coordinate(readingItemAt: source,
-                                       options: [.forUploading],
-                                       error: &coordError) { zipped in
-            let name = (urls.count == 1 ? first.deletingPathExtension().lastPathComponent
-                                        : "Archivo")
-            let target = uniqueURL(directory.appendingPathComponent(name + ".zip"))
-            do {
-                try fm.copyItem(at: zipped, to: target)
-                result = target
-            } catch { copyError = error }
-        }
-        if let coordError { throw coordError }
-        if let copyError { throw copyError }
-        guard let result else { throw CocoaError(.fileWriteUnknown) }
-        return result
+        let name = urls.count == 1 ? first.deletingPathExtension().lastPathComponent
+                                   : "Archivo"
+        let target = uniqueURL(directory.appendingPathComponent(name + ".zip"))
+        try ZipWriter.write(urls, to: target)
+        return target
     }
 
     /// Extrae un ZIP junto a él, en una carpeta con su nombre.
@@ -172,11 +150,16 @@ actor FileService {
     /// no se sabe qué hay hasta abrirlo, y volcar el contenido suelto en la
     /// carpeta actual puede soltar decenas de archivos entre los tuyos sin
     /// forma cómoda de deshacerlo.
-    func decompress(_ url: URL) throws -> URL {
+    /// - Note: lee por `CloudFileHandler` y no con `Data(contentsOf:)` directo.
+    ///   Un archivo que aún vive en la nube hay que materializarlo antes, y uno
+    ///   dentro de una carpeta concedida necesita su ámbito abierto; sin eso la
+    ///   lectura devuelve un resto vacío y el ZIP parecía inválido.
+    func decompress(_ url: URL) async throws -> URL {
+        let data = try await CloudFileHandler.shared.read(url)
         let directory = url.deletingLastPathComponent()
         let base = url.deletingPathExtension().lastPathComponent
         let target = uniqueURL(directory.appendingPathComponent(base))
-        return try ZipReader.extract(url, into: directory,
+        return try ZipReader.extract(data, into: directory,
                                      named: target.lastPathComponent)
     }
 
