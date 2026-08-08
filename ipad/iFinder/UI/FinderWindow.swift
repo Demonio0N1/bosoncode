@@ -33,7 +33,6 @@ struct FinderWindow: View {
     /// Montaje que se está renombrando y ayuda para montar una nube
     @State private var renamingMount: LocalStore.Folder?
     @State private var mountName = ""
-    @State private var showMountHelp = false
     @State private var showTrash = false
     /// Ubicación del sistema que espera permiso (si el selector viene de ahí)
     @State private var pendingLocation: SystemLocation?
@@ -61,25 +60,6 @@ struct FinderWindow: View {
             } else {
                 regularLayout
             }
-        }
-        // Renombrar el montaje: dos cuentas del mismo servicio solo se
-        .alert("Montar una nube", isPresented: $showMountHelp) {
-            Button("Abrir selector") {
-                pickerStart = nil
-                showFolderPicker = true
-            }
-            Button("Cancelar", role: .cancel) { }
-        } message: {
-            Text("""
-            Necesitas la app del servicio instalada y con la sesión iniciada \
-            (Google Drive, OneDrive…).
-
-            En el selector: toca el servicio en la barra lateral, ENTRA en él y \
-            elige una carpeta de dentro. La raíz del servicio no se puede \
-            seleccionar — es una limitación de iPadOS, no de la app.
-
-            Si el servicio no aparece, actívalo en Explorar › ••• › Editar.
-            """)
         }
         // Los menús de la barra superior operan sobre la ventana con foco:
         // esta línea es lo que se lo dice. Con dos ventanas abiertas, cada
@@ -521,10 +501,6 @@ struct FinderWindow: View {
                                   systemImage: "plus.circle", tint: .cyan) {
                         pickerStart = nil
                         showFolderPicker = true
-                    }
-                    sidebarButton(title: "Montar nube…",
-                                  systemImage: "externaldrive.badge.plus", tint: .cyan) {
-                        showMountHelp = true
                     }
                     sidebarButton(title: model.trashCount > 0
                                       ? "Papelera (\(model.trashCount))" : "Papelera",
