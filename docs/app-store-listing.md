@@ -99,7 +99,7 @@ ABRIR Y EDITAR
   de la principal.
 
 ORGANIZAR
-· Copiar, mover, duplicar, renombrar y comprimir.
+· Copiar, mover, duplicar, renombrar, comprimir y descomprimir.
 · Papelera con restauración: lo borrado vuelve a su carpeta de origen.
 · Arrastrar y soltar en los dos sentidos, con cualquier otra app del iPad.
 
@@ -108,9 +108,17 @@ Monta OneDrive, Google Drive, Dropbox o cualquier proveedor instalado, y
 renómbralos para distinguir dos cuentas del mismo servicio. El permiso se
 concede una vez y se conserva.
 
-CON TUS ORDENADORES
-Si usas BosonCode, del mismo desarrollador, ZeroSpin ve los equipos que ya has
-añadido: puedes mandarles un notebook o un script y abrirlo allí.
+EJECUTAR EN TU ORDENADOR
+El iPad no puede correr un notebook ni un script: no hay intérprete ni
+compilación al vuelo. Tu ordenador sí.
+
+Con BosonCode instalado —la app del mismo desarrollador que conecta el iPad con
+tus equipos—, ZeroSpin añade «Ejecutar en BosonCode» a cualquier .ipynb, .py,
+.sh o .jl. Eliges en qué máquina, el archivo sube y se abre allí, con su GPU y
+sus intérpretes. ZeroSpin ve los equipos que ya tengas añadidos, sin
+configurar nada dos veces.
+
+Sin BosonCode, ZeroSpin funciona igual para todo lo demás.
 
 SIN CUENTAS NI SEGUIMIENTO
 No hay registro, ni analítica, ni SDK de terceros. El acceso a tus carpetas se
@@ -120,7 +128,7 @@ que no le hayas concedido.
 
 **Palabras clave** (100):
 ```
-archivos,explorador,carpetas,gestor,columnas,finder,onedrive,drive,dropbox,editor,texto,notebook
+archivos,explorador,carpetas,gestor,columnas,finder,onedrive,drive,dropbox,zip,descomprimir,notebook
 ```
 
 ---
@@ -213,7 +221,7 @@ OPENING AND EDITING
 · Every file opens in its own window, not in a tab trapped inside the main one.
 
 ORGANISING
-· Copy, move, duplicate, rename and compress.
+· Copy, move, duplicate, rename, compress and unzip.
 · A trash you can restore from: deleted items go back where they came from.
 · Drag and drop both ways, with any other app on the iPad.
 
@@ -222,9 +230,17 @@ Mount OneDrive, Google Drive, Dropbox or any provider you have installed, and
 rename them to tell two accounts of the same service apart. Access is granted
 once and kept.
 
-WITH YOUR COMPUTERS
-If you use BosonCode, by the same developer, ZeroSpin sees the machines you have
-already added: send a notebook or a script over and open it there.
+RUN IT ON YOUR COMPUTER
+The iPad cannot run a notebook or a script: there is no interpreter and no
+just-in-time compilation. Your computer can.
+
+With BosonCode installed — the app by the same developer that connects the iPad
+to your machines — ZeroSpin adds "Run in BosonCode" to any .ipynb, .py, .sh or
+.jl. You pick which machine, the file goes up and opens there, with its GPU and
+its interpreters. ZeroSpin sees the machines you have already added, so nothing
+is configured twice.
+
+Without BosonCode, ZeroSpin works the same for everything else.
 
 NO ACCOUNTS, NO TRACKING
 No sign-up, no analytics, no third-party SDKs. Access to your folders is
@@ -234,7 +250,7 @@ files you have not granted.
 
 **Keywords** (100):
 ```
-files,browser,folders,manager,columns,finder,onedrive,drive,dropbox,editor,text,notebook
+files,browser,folders,manager,columns,finder,onedrive,drive,dropbox,zip,unzip,notebook
 ```
 
 ---
