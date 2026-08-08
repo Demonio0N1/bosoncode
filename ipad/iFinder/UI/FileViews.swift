@@ -462,7 +462,12 @@ struct ColumnsBrowserView: View {
                         .padding(.top, 12)
                         .padding(.bottom, 4)
                     ForEach(items) { item in
-                        row(item, level: index, selected: level.selection.contains(item.id))
+                        row(item, level: index,
+                            selected: level.selection.contains(item.id),
+                            // La última columna es la que manda: una marca en
+                            // cualquier otra es solo el rastro de por dónde se
+                            // entró, no algo elegido.
+                            active: index == model.levels.count - 1)
                     }
                 }
                 }
@@ -475,29 +480,38 @@ struct ColumnsBrowserView: View {
         }
     }
 
-    private func row(_ item: FileItem, level: Int, selected: Bool) -> some View {
-        HStack(spacing: 8) {
+    /// Una fila de columna.
+    ///
+    /// `selected` y `active` no son lo mismo, y confundirlos era el fallo: al
+    /// entrar en una carpeta, la carpeta se queda marcada en su columna para
+    /// enseñar el camino, igual que en Finder. Pintándola con el mismo azul que
+    /// lo elegido de verdad, parecía que hubiera dos cosas seleccionadas
+    /// —carpeta y archivo— cuando las operaciones solo actúan sobre la última.
+    ///
+    /// El rastro va en gris, que es como lo distingue Finder: sigue diciendo por
+    /// dónde vas sin competir con la selección real.
+    private func row(_ item: FileItem, level: Int, selected: Bool, active: Bool) -> some View {
+        let chosen = selected && active
+        return HStack(spacing: 8) {
             ThumbnailView(item: item, size: CGSize(width: 22, height: 22))
             Text(item.name).lineLimit(1)
             if let badge = item.cloudBadge {
                 Image(systemName: badge)
                     .font(.caption2)
-                    .foregroundStyle(selected ? Color.white.opacity(0.8) : Color.secondary)
+                    .foregroundStyle(chosen ? Color.white.opacity(0.8) : Color.secondary)
             }
             Spacer(minLength: 4)
             if item.isDirectory {
                 Image(systemName: "chevron.right")
                     .font(.caption2)
-                    .foregroundStyle(selected ? Color.white.opacity(0.8) : Color.secondary.opacity(0.6))
+                    .foregroundStyle(chosen ? Color.white.opacity(0.8) : Color.secondary.opacity(0.6))
             }
         }
         .font(.callout)
-        .foregroundStyle(selected ? .white : .primary)
+        .foregroundStyle(chosen ? .white : .primary)
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(selected ? Color.accentColor
-                             : (hovered == item.id ? Color.primary.opacity(0.06) : .clear),
-                    in: RoundedRectangle(cornerRadius: 6))
+        .background(background(chosen, selected, item), in: RoundedRectangle(cornerRadius: 6))
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
         .hoverEffect(.highlight)
@@ -505,6 +519,14 @@ struct ColumnsBrowserView: View {
         .fileTapGestures(model, item: item, level: level)
         .fileContextMenu(model, item: item, level: level)
         .fileDragAndDrop(model, item: item, level: level)
+    }
+
+    /// Elegido → color de acento. Rastro del camino → gris. Ni uno ni otro →
+    /// lo que haya bajo el puntero.
+    private func background(_ chosen: Bool, _ selected: Bool, _ item: FileItem) -> Color {
+        if chosen { return .accentColor }
+        if selected { return .primary.opacity(0.14) }
+        return hovered == item.id ? .primary.opacity(0.06) : .clear
     }
 
     private func grouped(_ items: [FileItem]) -> [(String, [FileItem])] {
