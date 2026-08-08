@@ -185,7 +185,13 @@ extension View {
 struct IconsView: View {
     @ObservedObject var model: BrowserViewModel
     let level: Int
-    @State private var hovered: String?
+    /// Sin estado de «bajo el puntero»: lo pinta `.hoverEffect(.highlight)`.
+    ///
+    /// Guardarlo aquí costaba caro. Al ser estado de la VISTA, cada vez que el
+    /// puntero cruzaba una fila SwiftUI reconstruía todas las demás y volvía a
+    /// agrupar la lista entera. Con trackpad eso pasa justo mientras el
+    /// contenido desliza —el puntero está quieto y las filas pasan por debajo—,
+    /// así que la deceleración competía con un redibujado por fila cruzada.
 
     private let columns = [GridItem(.adaptive(minimum: 96, maximum: 140), spacing: 18)]
     private let itemMin: CGFloat = 96
@@ -234,11 +240,8 @@ struct IconsView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(6)
-                    .background(hovered == item.id ? Color.primary.opacity(0.06) : .clear,
-                                in: RoundedRectangle(cornerRadius: 8))
                     .contentShape(Rectangle())
                     .hoverEffect(.highlight)                    // puntero del Magic Keyboard
-                    .onHover { hovered = $0 ? item.id : nil }
                     .id(item.id)
                     .fileTapGestures(model, item: item, level: level)
                     .fileContextMenu(model, item: item, level: level)
@@ -261,7 +264,6 @@ struct IconsView: View {
 struct DetailListView: View {
     @ObservedObject var model: BrowserViewModel
     let level: Int
-    @State private var hovered: String?
 
     /// Qué columnas caben en el ancho que hay.
     ///
@@ -386,7 +388,6 @@ struct DetailListView: View {
         .background(background(item))
         .contentShape(Rectangle())
         .hoverEffect(.highlight)
-        .onHover { hovered = $0 ? item.id : nil }
         .fileTapGestures(model, item: item, level: level)
         .fileContextMenu(model, item: item, level: level)
         .fileDragAndDrop(model, item: item, level: level)
@@ -395,7 +396,6 @@ struct DetailListView: View {
     private func background(_ item: FileItem) -> some View {
         Group {
             if selected(item) { Color.accentColor }
-            else if hovered == item.id { Color.primary.opacity(0.06) }
             else { Color.clear }
         }
     }
@@ -411,7 +411,6 @@ struct DetailListView: View {
 struct ColumnsBrowserView: View {
     @ObservedObject var model: BrowserViewModel
     let columnWidth: CGFloat
-    @State private var hovered: String?
 
     var body: some View {
         GeometryReader { geo in
@@ -520,7 +519,6 @@ struct ColumnsBrowserView: View {
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
         .hoverEffect(.highlight)
-        .onHover { hovered = $0 ? item.id : nil }
         .fileTapGestures(model, item: item, level: level)
         .fileContextMenu(model, item: item, level: level)
         .fileDragAndDrop(model, item: item, level: level)
@@ -531,7 +529,7 @@ struct ColumnsBrowserView: View {
     private func background(_ chosen: Bool, _ selected: Bool, _ item: FileItem) -> Color {
         if chosen { return .accentColor }
         if selected { return .primary.opacity(0.14) }
-        return hovered == item.id ? .primary.opacity(0.06) : .clear
+        return .clear
     }
 
     private func grouped(_ items: [FileItem]) -> [(String, [FileItem])] {
