@@ -27,7 +27,27 @@ enum ZipWriter {
         for url in urls {
             try collect(url, base: url.deletingLastPathComponent(), into: &entries)
         }
+        // El ZIP clásico cuenta las entradas en 16 bits. Pasarse no daba un
+        // error: `UInt16(entries.count)` ABORTA el proceso, y comprimir una
+        // carpeta con muchos archivos cerraba la app de golpe.
+        guard entries.count <= 0xFFFF else {
+            throw Failure.tooMany(entries.count)
+        }
         try assemble(entries, to: destination)
+    }
+
+    enum Failure: LocalizedError {
+        case tooMany(Int)
+        case tooBig(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .tooMany(let n):
+                return "Son \(n) archivos y un ZIP admite 65 535. Comprime menos elementos a la vez."
+            case .tooBig(let name):
+                return "«\(name)» pasa de 4 GB, que es el máximo de un ZIP normal."
+            }
+        }
     }
 
     // MARK: - Recorrido
@@ -81,6 +101,12 @@ enum ZipWriter {
             let isDirectory = entry.url == nil
             let raw = try isDirectory ? Data() : Data(contentsOf: entry.url!, options: .mappedIfSafe)
 
+            // Igual que arriba: los tamaños van en 32 bits y `UInt32(...)`
+            // aborta al desbordar. Un vídeo de más de 4 GB cerraba la app.
+            guard raw.count <= 0xFFFF_FFFF, offset <= 0xFFFF_FFFF else {
+                throw Failure.tooBig(entry.name)
+            }
+
             let crc = crc32(raw)
             var method: UInt16 = 0
             var body = raw
@@ -92,6 +118,7 @@ enum ZipWriter {
             }
 
             let name = Array(entry.name.utf8)
+            guard name.count <= 0xFFFF else { throw Failure.tooBig(entry.name) }
             let (time, date) = dosTimestamp(entry.modified)
             // bit 11: los nombres van en UTF-8. Sin esta marca, un archivo con
             // tildes o eñes se abre con el nombre roto en otros sistemas.
@@ -122,6 +149,11 @@ enum ZipWriter {
 
         var out = payload
         let centralOffset = out.count
+        // El total también se anota en 32 bits. Cada entrada cabía por
+        // separado, pero la suma puede no caber.
+        guard centralOffset <= 0xFFFF_FFFF, central.count <= 0xFFFF_FFFF else {
+            throw Failure.tooBig(destination.lastPathComponent)
+        }
         out.append(central)
         out.u32(0x0605_4b50)
         out.u16(0); out.u16(0)
@@ -191,7 +223,11 @@ enum ZipWriter {
     private static func dosTimestamp(_ date: Date) -> (time: UInt16, date: UInt16) {
         let c = Calendar(identifier: .gregorian)
         let p = c.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
-        let year = max(1980, p.year ?? 1980)
+        // El formato solo llega hasta 2107, y por arriba TAMBIÉN hay que
+        // acotar: con una fecha corrupta —que las hay, y basta una— el
+        // desplazamiento se salía de 16 bits y la conversión abortaba la app.
+        // Una fecha rara dentro de un ZIP no es motivo para no comprimirlo.
+        let year = min(2107, max(1980, p.year ?? 1980))
         let time = UInt16((p.hour ?? 0) << 11 | (p.minute ?? 0) << 5 | ((p.second ?? 0) / 2))
         let day = UInt16((year - 1980) << 9 | (p.month ?? 1) << 5 | (p.day ?? 1))
         return (time, day)
