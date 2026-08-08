@@ -166,6 +166,20 @@ actor FileService {
         return result
     }
 
+    /// Extrae un ZIP junto a él, en una carpeta con su nombre.
+    ///
+    /// Siempre en carpeta, aunque dentro venga un solo archivo: al descomprimir
+    /// no se sabe qué hay hasta abrirlo, y volcar el contenido suelto en la
+    /// carpeta actual puede soltar decenas de archivos entre los tuyos sin
+    /// forma cómoda de deshacerlo.
+    func decompress(_ url: URL) throws -> URL {
+        let directory = url.deletingLastPathComponent()
+        let base = url.deletingPathExtension().lastPathComponent
+        let target = uniqueURL(directory.appendingPathComponent(base))
+        return try ZipReader.extract(url, into: directory,
+                                     named: target.lastPathComponent)
+    }
+
     /// Tamaño real de una carpeta (recursivo). Caro: por eso vive en el actor.
     func directorySize(_ url: URL) -> Int64 {
         guard let enumerator = fm.enumerator(at: url,

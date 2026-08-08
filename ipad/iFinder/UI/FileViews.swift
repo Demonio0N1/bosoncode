@@ -86,6 +86,11 @@ struct FileContextMenu: ViewModifier {
                     Label("Usar como fondo de ZeroSpin", systemImage: "photo.on.rectangle")
                 }
             }
+            if targets.contains(where: { BrowserViewModel.isArchive($0.url) }) {
+                Button { act { await model.decompress(targets) } } label: {
+                    Label("Descomprimir", systemImage: "archivebox")
+                }
+            }
             // Notebooks y scripts: ejecutar significa mandarlo al equipo, que
             // es donde vive el intérprete.
             if !item.isDirectory,

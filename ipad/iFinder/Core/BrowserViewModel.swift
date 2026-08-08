@@ -595,6 +595,24 @@ final class BrowserViewModel: ObservableObject {
         await run { _ = try await FileService.shared.compress(items.map(\.url)) }
     }
 
+    /// Descomprime los ZIP que haya entre lo indicado.
+    func decompress(_ items: [FileItem]) async {
+        let zips = items.filter { Self.isArchive($0.url) }
+        guard !zips.isEmpty else { return }
+        await run {
+            for zip in zips { _ = try await FileService.shared.decompress(zip.url) }
+        }
+    }
+
+    /// ¿Es algo que sepamos abrir?
+    ///
+    /// Solo ZIP: es lo que produce «Comprimir» y lo único que sabe leer
+    /// `ZipReader`. Ofrecerlo para un .tar.gz sería prometer algo que fallaría
+    /// al pulsarlo.
+    static func isArchive(_ url: URL) -> Bool {
+        url.pathExtension.lowercased() == "zip"
+    }
+
     /// Pega en la carpeta indicada; sin indicar ninguna, en la abierta.
     ///
     /// Pegar desde el menú de una CARPETA debe meter las cosas ahí dentro, que

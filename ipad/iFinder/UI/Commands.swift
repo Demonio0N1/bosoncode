@@ -115,6 +115,11 @@ struct FinderCommands: Commands {
             Button("Comprimir") { run { await $0.compressSelection() } }
                 .disabled(!hasSelection)
 
+            Button("Descomprimir") {
+                if let items = model?.selectedItems { run { await $0.decompress(items) } }
+            }
+            .disabled(!(model?.selectedItems.contains { BrowserViewModel.isArchive($0.url) } ?? false))
+
             Divider()
 
             Button("Mover a la papelera") { run { await $0.deleteSelection() } }
