@@ -1,0 +1,2234 @@
+#!/usr/bin/env bash
+# iVsCode serve.sh — convierte este computador en backend de la app iVsCode.
+# Sin Docker, sin root: descarga code-server standalone en ~/.ivscode, lo
+# levanta en la red y se anuncia por mDNS para que la app lo detecte sola.
+#
+# Uso:  ./serve.sh [--port N] [--name "Mi PC"] [--password PASS]
+#       ./serve.sh --install-service   # deja el backend arrancando solo al encender
+#       ./serve.sh --install-idb       # (macOS) toques en el simulador de iOS
+#                                      # (systemd de usuario en Linux, LaunchAgent en macOS)
+
+set -euo pipefail
+
+PORT="${PORT:-8443}"
+NAME="${NAME:-$(hostname -s 2>/dev/null || hostname)}"
+PASSWORD="${PASSWORD:-}"
+IVSCODE_DIR="$HOME/.ivscode"
+INSTALL_SERVICE=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --port) PORT="$2"; shift 2 ;;
+    --name) NAME="$2"; shift 2 ;;
+    --password) PASSWORD="$2"; shift 2 ;;
+    --install-service) INSTALL_SERVICE=1; shift ;;
+    --install-idb) INSTALL_IDB=1; shift ;;
+    -h|--help)
+      grep '^# ' "$0" | sed 's/^# //'
+      exit 0 ;;
+    *) echo "opción desconocida: $1 (usa --help)"; exit 1 ;;
+  esac
+done
+
+# ---------- detectar plataforma ----------
+case "$(uname -s)" in
+  Linux)  PLATFORM=linux ;;
+  Darwin) PLATFORM=macos ;;
+  *) echo "SO no soportado: $(uname -s)"; exit 1 ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)  ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) echo "arquitectura no soportada: $(uname -m)"; exit 1 ;;
+esac
+
+# ---------- --install-idb: toques en el simulador de iOS ----------
+# Aparte y explícito, no dentro del arranque normal.
+#
+# `brew trust` autoriza a un tap de terceros a ejecutar código en tu equipo, y
+# eso no es algo que un script deba hacer por su cuenta mientras crees que solo
+# está levantando un editor. Aquí lo pides tú.
+#
+# Y no va en setup-machine.sh porque ese corre DENTRO de la máquina Linux —usa
+# apt, dnf o pacman— mientras que idb tiene que estar en el Mac anfitrión, que
+# es donde vive el simulador.
+if [ "${INSTALL_IDB:-0}" = 1 ]; then
+  [ "$PLATFORM" = macos ] || { echo "idb es para el simulador de iOS, que solo existe en macOS."; exit 1; }
+  command -v brew >/dev/null 2>&1 || { echo "Falta Homebrew. Instalalo desde https://brew.sh"; exit 1; }
+  echo "== instalando idb (toques en el simulador de iOS) =="
+  brew tap facebook/fb || true
+  brew trust facebook/fb || true
+  brew install idb-companion
+  python3 -m pip install --user --upgrade fb-idb
+  if command -v idb >/dev/null 2>&1; then
+    echo "OK: idb listo. El simulador de BosonCode ya acepta toques."
+  else
+    echo "idb se instalo pero no esta en el PATH; suele quedar en ~/Library/Python/*/bin"
+    echo "La app lo encuentra igual: busca ahi por su cuenta."
+  fi
+  exit 0
+fi
+
+# ---------- contraseña persistente por equipo ----------
+# Se define aquí arriba porque --install-service también la necesita: antes esa
+# rama terminaba antes de llegar a la generación y el usuario se quedaba sin
+# saber la contraseña, con el servicio ya corriendo.
+ensure_password() {
+  mkdir -p "$IVSCODE_DIR"
+  if [ -n "$PASSWORD" ]; then
+    printf '%s' "$PASSWORD" > "$IVSCODE_DIR/password"
+  elif [ -f "$IVSCODE_DIR/password" ]; then
+    PASSWORD=$(cat "$IVSCODE_DIR/password")
+  else
+    PASSWORD=$(openssl rand -hex 8 2>/dev/null \
+      || head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    printf '%s' "$PASSWORD" > "$IVSCODE_DIR/password"
+  fi
+  chmod 600 "$IVSCODE_DIR/password"
+}
+
+# Muestra la contraseña en pantalla, nunca en un log.
+#
+# `[ -t 1 ]` distingue una terminal de un servicio: en systemd o launchd la
+# salida va a un archivo que queda ahí para siempre, y una contraseña no debe
+# vivir en un log. Al instalar el servicio sí hay terminal delante, que es
+# justo el momento en que hace falta verla.
+find_tailscale() {
+  if command -v tailscale >/dev/null 2>&1; then command -v tailscale; return; fi
+  for candidate in \
+      /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+      /opt/homebrew/bin/tailscale \
+      /usr/local/bin/tailscale \
+      "$HOME/Applications/Tailscale.app/Contents/MacOS/Tailscale"; do
+    [ -x "$candidate" ] && { echo "$candidate"; return; }
+  done
+}
+
+# Lo que hay que teclear en la app, junto y con su título.
+#
+# En una función porque hay DOS finales distintos —instalar como servicio sale
+# antes, y ahí es justo cuando más falta hace— y tener el bloque en uno solo
+# significaba que quien seguía el camino recomendado no lo veía nunca.
+bosoncode_block() {
+  local ts nombre dns puerto url
+  ts="$(find_tailscale 2>/dev/null)"
+  [ -n "$ts" ] || return 0
+  dns="$("$ts" status --json 2>/dev/null \
+         | sed -n 's/.*"DNSName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  dns="${dns%.}"                       # el JSON lo devuelve con punto final
+  [ -n "$dns" ] || return 0
+  nombre="${dns%%.*}"
+
+  # La dirección completa, que es lo que se pega. Tres fuentes en orden de
+  # fiabilidad: la que ya calculó el arranque, la que Tailscale esté sirviendo
+  # ahora, y por ultimo la regla que usa este mismo script (PORT + 1000). En la
+  # rama de --install-service las dos primeras aun no existen, y sin la tercera
+  # el recuadro saldria sin puerto — que es justo lo que hace que no funcione.
+  if [ -n "${CANON_URL:-}" ]; then
+    url="$CANON_URL"
+  else
+    puerto="$("$ts" serve status 2>/dev/null \
+              | sed -n "s#^https://[^:]*:\([0-9]*\).*#\1#p" | head -1)"
+    case "$puerto" in ''|*[!0-9]*) puerto=$((PORT + 1000)) ;; esac
+    url="https://${dns}:${puerto}"
+  fi
+
+  echo ""
+  echo "  ┌─ Para añadir este equipo en BosonCode ──────────────────────────"
+  echo "  │  Dirección:   $url"
+  echo "  │  Nombre:      $nombre"
+  if [ -t 1 ]; then
+    echo "  │  Contraseña:  $PASSWORD"
+  else
+    echo "  │  Contraseña:  ./setup.sh --password"
+  fi
+  echo "  └──────────────────────────────────────────────────────────────────"
+  echo "     En la app: Añadir → pega la dirección (o solo el nombre) → la contraseña."
+}
+
+show_password() {
+  echo ""
+  if [ -t 1 ]; then
+    echo "  🔑 Contraseña: $PASSWORD"
+  else
+    echo "  🔑 Contraseña: cat $IVSCODE_DIR/password"
+  fi
+  echo "     (guardada en $IVSCODE_DIR/password — para verla luego:"
+  echo "      cat $IVSCODE_DIR/password)"
+  echo ""
+}
+
+# ---------- --install-service: dejarlo permanente y salir ----------
+if [ "$INSTALL_SERVICE" = 1 ]; then
+  SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  ensure_password
+  if [ "$PLATFORM" = linux ]; then
+    mkdir -p "$HOME/.config/systemd/user"
+    cat > "$HOME/.config/systemd/user/ivscode.service" <<EOF
+[Unit]
+Description=iVsCode backend (code-server nativo + anuncio mDNS)
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=NAME=$NAME
+Environment=PORT=$PORT
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+ExecStart=$SCRIPT_PATH
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+    systemctl --user daemon-reload
+    systemctl --user enable ivscode.service >/dev/null 2>&1
+    loginctl enable-linger "$USER" 2>/dev/null \
+      && echo "→ Linger activado: arranca aunque nadie inicie sesión." \
+      || echo "⚠ No pude activar linger; ejecútalo tú: sudo loginctl enable-linger $USER"
+    systemctl --user restart ivscode.service
+    echo "✔ Servicio instalado y corriendo."
+    show_password
+    bosoncode_block
+    echo "  Estado:    systemctl --user status ivscode"
+    echo "  Logs:      journalctl --user -u ivscode -f"
+    echo "  Reiniciar: systemctl --user restart ivscode"
+  else
+    # macOS protege ~/Desktop, ~/Documents y ~/Downloads: un LaunchAgent que
+    # apunte ahí arranca con "Operation not permitted" y muere en bucle, sin
+    # más pista que el log. Si el script vive en una de esas carpetas, se
+    # instala una copia en ~/.ivscode, que sí es accesible.
+    case "$SCRIPT_PATH" in
+      "$HOME/Desktop/"*|"$HOME/Documents/"*|"$HOME/Downloads/"*)
+        cp "$SCRIPT_PATH" "$IVSCODE_DIR/serve.sh"
+        chmod +x "$IVSCODE_DIR/serve.sh"
+        SCRIPT_PATH="$IVSCODE_DIR/serve.sh"
+        echo "→ Copiado a $SCRIPT_PATH (macOS no deja que un servicio lea esa carpeta)."
+        echo "  Si actualizas el repositorio, vuelve a ejecutar --install-service."
+        ;;
+    esac
+    PLIST="$HOME/Library/LaunchAgents/com.ivscode.serve.plist"
+    mkdir -p "$HOME/Library/LaunchAgents"
+    cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.ivscode.serve</string>
+  <key>ProgramArguments</key>
+  <array><string>$SCRIPT_PATH</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NAME</key><string>$NAME</string>
+    <key>PORT</key><string>$PORT</string>
+    <!-- launchd arranca con un PATH mínimo (/usr/bin:/bin:/usr/sbin:/sbin) en
+         el que no existen docker ni las herramientas de Homebrew. -->
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardOutPath</key><string>$HOME/.ivscode/serve.log</string>
+  <key>StandardErrorPath</key><string>$HOME/.ivscode/serve.log</string>
+</dict>
+</plist>
+EOF
+    launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl load -w "$PLIST"
+    echo "✔ LaunchAgent instalado y corriendo (logs: ~/.ivscode/serve.log)"
+    show_password
+    bosoncode_block
+  fi
+  exit 0
+fi
+
+# ---------- instalar code-server standalone si falta ----------
+mkdir -p "$IVSCODE_DIR"
+if [ ! -x "$IVSCODE_DIR/current/bin/code-server" ]; then
+  echo "→ Descargando code-server standalone ($PLATFORM-$ARCH)…"
+  VERSION=$(curl -fsSL https://api.github.com/repos/coder/code-server/releases/latest 2>/dev/null \
+    | sed -n 's/.*"tag_name": *"v\([0-9][0-9.]*\)".*/\1/p' | sed -n 1p || true)
+  if [ -z "$VERSION" ]; then
+    echo "⚠ No pude consultar la última versión (rate limit de GitHub?); uso 4.130.0"
+    VERSION=4.130.0
+  fi
+  TAR="code-server-${VERSION}-${PLATFORM}-${ARCH}.tar.gz"
+  curl -fL --progress-bar \
+    "https://github.com/coder/code-server/releases/download/v${VERSION}/${TAR}" \
+    -o "$IVSCODE_DIR/$TAR"
+  tar -xzf "$IVSCODE_DIR/$TAR" -C "$IVSCODE_DIR"
+  rm -f "$IVSCODE_DIR/$TAR"
+  ln -sfn "$IVSCODE_DIR/code-server-${VERSION}-${PLATFORM}-${ARCH}" "$IVSCODE_DIR/current"
+  echo "→ Instalado code-server v${VERSION} en $IVSCODE_DIR"
+fi
+
+# ---------- code-server linux para los contenedores (solo host macOS) ----------
+# Las máquinas Docker son Linux y montan el code-server del host en
+# /opt/code-server. Si el host es un Mac, ese binario es Mach-O y el contenedor
+# muere con "exec format error". Se baja una copia linux —una sola vez, y solo
+# si hay Docker— y el gestor monta esa.
+if [ "$PLATFORM" = macos ] && command -v docker >/dev/null 2>&1; then
+  CS_VER=$(basename "$(readlink "$IVSCODE_DIR/current" 2>/dev/null || echo "")" \
+           | sed -n 's/code-server-\([0-9][0-9.]*\)-.*/\1/p')
+  if [ -n "$CS_VER" ] && [ ! -x "$IVSCODE_DIR/code-server-${CS_VER}-linux-${ARCH}/bin/code-server" ]; then
+    echo "→ Descargando code-server linux-${ARCH} para las máquinas Docker…"
+    LTAR="code-server-${CS_VER}-linux-${ARCH}.tar.gz"
+    if curl -fL --progress-bar \
+        "https://github.com/coder/code-server/releases/download/v${CS_VER}/${LTAR}" \
+        -o "$IVSCODE_DIR/$LTAR"; then
+      tar -xzf "$IVSCODE_DIR/$LTAR" -C "$IVSCODE_DIR" && rm -f "$IVSCODE_DIR/$LTAR"
+    else
+      echo "⚠ No pude descargarlo: las máquinas Docker no arrancarán en este Mac."
+    fi
+  fi
+  [ -d "$IVSCODE_DIR/code-server-${CS_VER}-linux-${ARCH}" ] \
+    && ln -sfn "$IVSCODE_DIR/code-server-${CS_VER}-linux-${ARCH}" "$IVSCODE_DIR/linux-current"
+fi
+
+# ---------- extensiones por defecto (Jupyter, Python) ----------
+# Directorio AISLADO: si se usa el default, code-server mezcla las extensiones
+# del VS Code de escritorio (~/.vscode/extensions), builds para un motor más
+# nuevo que quedan desactivadas — y sin Jupyter no abren los notebooks.
+EXT_DIR="$IVSCODE_DIR/extensions"
+mkdir -p "$EXT_DIR"
+INSTALLED=$("$IVSCODE_DIR/current/bin/code-server" --extensions-dir "$EXT_DIR" --list-extensions 2>/dev/null || true)
+for ext in ms-toolsai.jupyter ms-python.python detachhead.basedpyright; do
+  echo "$INSTALLED" | grep -qi "^$ext$" && continue
+  echo "→ Instalando extensión ${ext}…"
+  "$IVSCODE_DIR/current/bin/code-server" --extensions-dir "$EXT_DIR" --install-extension "$ext" >/dev/null 2>&1 \
+    || echo "⚠ No pude instalar $ext (sin internet?); instálala luego desde la UI."
+done
+
+# ---------- ajustes por defecto (sin Restricted Mode) ----------
+# En modo restringido code-server desactiva Jupyter y los notebooks no abren.
+# Es tu propia máquina: se desactiva el workspace trust.
+if command -v python3 >/dev/null 2>&1; then
+  python3 - <<'PYEOF'
+import json, pathlib
+p = pathlib.Path.home() / ".local/share/code-server/User/settings.json"
+p.parent.mkdir(parents=True, exist_ok=True)
+raw = p.read_text() if p.exists() else "{}"
+try:
+    cfg = json.loads(raw)
+except Exception:
+    # settings.json con comentarios (JSONC) o corrupto: se respalda antes de
+    # tocarlo para no perder la configuración del usuario
+    p.with_suffix(".json.bak").write_text(raw)
+    print("⚠ settings.json no era JSON válido; copia en settings.json.bak")
+    cfg = {}
+cfg.setdefault("security.workspace.trust.enabled", False)
+cfg.setdefault("security.workspace.trust.startupPrompt", "never")
+cfg.setdefault("security.workspace.trust.untrustedFiles", "open")
+cfg.setdefault("extensions.ignoreRecommendations", True)
+cfg.setdefault("window.autoDetectColorScheme", True)
+p.write_text(json.dumps(cfg, indent=2))
+PYEOF
+fi
+
+# ---------- contraseña persistente por equipo ----------
+ensure_password
+
+# ---------- buscar puerto libre ----------
+port_busy() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -q ":$1 "
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+while port_busy "$PORT"; do
+  echo "→ Puerto $PORT ocupado, pruebo $((PORT + 1))"
+  PORT=$((PORT + 1))
+done
+
+# ---------- localizar el CLI de Tailscale ----------
+# En macOS, la app de Tailscale trae el CLI DENTRO del paquete y no lo pone en
+# el PATH: `command -v tailscale` fallaba y el script se saltaba en silencio
+# todo el HTTPS. Sin HTTPS no hay Service Workers, y sin ellos no hay notebooks.
+TS="$(find_tailscale)"
+if [ -z "$TS" ]; then
+  echo "⚠ No encuentro el CLI de Tailscale: la app funcionará por HTTP, sin notebooks."
+  echo "  macOS: instala la app desde tailscale.com o 'brew install tailscale'."
+fi
+
+# ---------- HTTPS vía Tailscale (contexto seguro: notebooks/webviews) ----------
+# Los webviews de VS Code (editor de notebooks incluido) exigen HTTPS. Si hay
+# tailscale, publicamos este puerto con cert válido y anunciamos ESA URL.
+CANON_URL=""
+# Puerto HTTPS del gestor de máquinas: fijo por convención, la app lo asume.
+MGR_HTTPS_PORT=9500
+if [ -n "$TS" ]; then
+  # Arrancando con el sistema, este script le gana la carrera a tailscaled: un
+  # segundo despues del boot aun no hay DNSName, `tailscale serve` falla y
+  # CANON_URL queda vacio. Sin CANON_URL no arrancan NI el gestor NI el canal
+  # del terminal, pero el editor sigue sirviendose con el mapeo de la sesion
+  # anterior — asi que todo parece bien hasta que abres ⌃⌥T y da "connection
+  # refused". Por eso se espera aqui en lugar de rendirse al primer intento.
+  TS_DNS=""
+  tries=0
+  while [ -z "$TS_DNS" ] && [ "$tries" -lt 30 ]; do
+    TS_DNS=$("$TS" status --json 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' \
+      2>/dev/null || true)
+    if [ -z "$TS_DNS" ]; then
+      [ "$tries" = 0 ] && echo "→ Esperando a que Tailscale esté listo…"
+      tries=$((tries + 1))
+      sleep 2
+    fi
+  done
+  # el listener HTTPS lo abre tailscaled: debe ir en un puerto DISTINTO al de
+  # code-server o chocan (EADDRINUSE). Si ya existe un mapeo hacia nuestro
+  # puerto, se reutiliza (la URL no cambia entre reinicios).
+  HTTPS_PORT=$("$TS" serve status 2>/dev/null | awk -v tgt="http://127.0.0.1:$PORT" '
+    /^https:\/\// { port = (match($1, /:[0-9]+$/) ? substr($1, RSTART+1, RLENGTH-1) : 443) }
+    index($0, tgt) && port { print port; exit }' || true)
+  case "$HTTPS_PORT" in ''|*[!0-9]*) HTTPS_PORT="" ;; esac
+  if [ -z "$HTTPS_PORT" ]; then
+    HTTPS_PORT=$((PORT + 1000))
+    # 9500 es del gestor y la app lo da por sentado. Hay que saltarlo: con
+    # --port 8500 el editor caía justo ahí y el mapeo del gestor lo pisaba,
+    # dejando la URL del editor apuntando al gestor. port_busy no lo detecta
+    # porque quien escucha en ese puerto es tailscaled, no un proceso local.
+    while port_busy "$HTTPS_PORT" || [ "$HTTPS_PORT" = "$MGR_HTTPS_PORT" ]; do
+      HTTPS_PORT=$((HTTPS_PORT + 1))
+    done
+  fi
+  # tailscaled puede responder al status y no aceptar todavia un serve: se
+  # reintenta unas cuantas veces antes de darlo por imposible.
+  tries=0
+  while [ -n "$TS_DNS" ] && [ -z "$CANON_URL" ] && [ "$tries" -lt 10 ]; do
+    if "$TS" serve --bg --https="$HTTPS_PORT" "http://127.0.0.1:$PORT" >/dev/null 2>&1; then
+      CANON_URL="https://${TS_DNS}:${HTTPS_PORT}"
+    else
+      tries=$((tries + 1))
+      sleep 3
+    fi
+  done
+  if [ -z "$CANON_URL" ]; then
+    echo "⚠ No pude configurar tailscale serve (¿falta 'tailscale set --operator=$USER'?)."
+    echo "  Sin HTTPS no hay notebooks, NI gestor de máquinas, NI terminal (⌃⌥T)."
+  fi
+fi
+
+# ---------- anunciar por mDNS (_ivscode._tcp) ----------
+MDNS_PID=""
+TXT_ARG=()
+[ -n "$CANON_URL" ] && TXT_ARG=("url=$CANON_URL")
+
+# El sistema operativo del equipo, para que la app pinte el icono correcto sin
+# adivinarlo por el nombre del host. WSL cuenta como Linux: lo es.
+case "$(uname -s)" in
+  Linux)                HOST_OS="linux" ;;
+  Darwin)               HOST_OS="macos" ;;
+  MINGW*|MSYS*|CYGWIN*) HOST_OS="windows" ;;
+  *)                    HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')" ;;
+esac
+TXT_ARG+=("os=$HOST_OS")
+if command -v avahi-publish >/dev/null 2>&1; then
+  avahi-publish -s "$NAME" _ivscode._tcp "$PORT" ${TXT_ARG[@]+"${TXT_ARG[@]}"} >/dev/null 2>&1 &
+  MDNS_PID=$!
+elif command -v dns-sd >/dev/null 2>&1; then
+  dns-sd -R "$NAME" _ivscode._tcp . "$PORT" ${TXT_ARG[@]+"${TXT_ARG[@]}"} >/dev/null 2>&1 &
+  MDNS_PID=$!
+elif command -v python3 >/dev/null 2>&1 && python3 -c "import dbus" 2>/dev/null \
+     && systemctl is-active -q avahi-daemon 2>/dev/null; then
+  # fallback sin root ni instalaciones: publicar vía D-Bus de Avahi
+  cat > "$IVSCODE_DIR/announce_dbus.py" <<'PYEOF'
+import sys, time
+import dbus
+
+name, port = sys.argv[1], int(sys.argv[2])
+txt_entries = [t.encode() for t in sys.argv[3:]]
+bus = dbus.SystemBus()
+server = dbus.Interface(
+    bus.get_object("org.freedesktop.Avahi", "/"),
+    "org.freedesktop.Avahi.Server",
+)
+group = dbus.Interface(
+    bus.get_object("org.freedesktop.Avahi", server.EntryGroupNew()),
+    "org.freedesktop.Avahi.EntryGroup",
+)
+group.AddService(
+    dbus.Int32(-1), dbus.Int32(-1), dbus.UInt32(0),
+    name, "_ivscode._tcp", "", "",
+    dbus.UInt16(port),
+    dbus.Array([dbus.ByteArray(t) for t in txt_entries], signature="ay"),
+)
+group.Commit()
+while True:
+    time.sleep(60)
+PYEOF
+  python3 "$IVSCODE_DIR/announce_dbus.py" "$NAME" "$PORT" ${TXT_ARG[@]+"${TXT_ARG[@]}"} >/dev/null 2>&1 &
+  MDNS_PID=$!
+elif command -v python3 >/dev/null 2>&1; then
+  # fallback sin root: zeroconf instalado a nivel usuario
+  if ! python3 -c "import zeroconf" 2>/dev/null; then
+    echo "→ Preparando anunciador mDNS (python zeroconf)…"
+    python3 -m pip install --user -q zeroconf 2>/dev/null \
+      || python3 -m pip install --user --break-system-packages -q zeroconf \
+      || echo "⚠ No pude instalar zeroconf; sin auto-detección (conéctate por IP)."
+  fi
+  cat > "$IVSCODE_DIR/announce.py" <<'PYEOF'
+import socket, sys, time
+from zeroconf import Zeroconf, ServiceInfo
+
+name, port = sys.argv[1], int(sys.argv[2])
+props = dict(t.split("=", 1) for t in sys.argv[3:] if "=" in t)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.connect(("8.8.8.8", 80))
+ip = s.getsockname()[0]
+s.close()
+info = ServiceInfo(
+    "_ivscode._tcp.local.",
+    f"{name}._ivscode._tcp.local.",
+    addresses=[socket.inet_aton(ip)],
+    port=port,
+    properties=props,
+    server=f"{name.lower().replace(' ', '-')}.local.",
+)
+zc = Zeroconf()
+zc.register_service(info)
+while True:
+    time.sleep(60)
+PYEOF
+  if python3 -c "import zeroconf" 2>/dev/null; then
+    python3 "$IVSCODE_DIR/announce.py" "$NAME" "$PORT" ${TXT_ARG[@]+"${TXT_ARG[@]}"} >/dev/null 2>&1 &
+    MDNS_PID=$!
+  fi
+else
+  echo "⚠ Sin avahi-publish, dns-sd ni python3: la app no detectará este equipo sola."
+  echo "  Puedes conectarte por IP igualmente (URLs abajo)."
+fi
+MGR_PID=""
+cleanup() {
+  [ -n "$MDNS_PID" ] && kill "$MDNS_PID" 2>/dev/null || true
+  # Red de seguridad: bash aplaza los traps mientras hay un hijo en primer
+  # plano (code-server), así que un SIGTERM al script —lo que hace systemd o
+  # launchd al parar el servicio— puede llegar tarde y dejar el anunciador
+  # vivo. Un anuncio huérfano es peor que ninguno: la app muestra el equipo
+  # con una URL que ya no sirve.
+  pkill -f "[d]ns-sd -R $NAME _ivscode._tcp" 2>/dev/null || true
+  pkill -f "[a]vahi-publish -s $NAME" 2>/dev/null || true
+  pkill -f "[a]nnounce_dbus.py $NAME" 2>/dev/null || true
+  pkill -f "[a]nnounce.py $NAME" 2>/dev/null || true
+  if [ -n "$MGR_PID" ]; then
+    kill "$MGR_PID" 2>/dev/null || true          # supervisor
+    pkill -f "[m]anager\.py" 2>/dev/null || true # y el python que supervisa
+  fi
+}
+trap cleanup EXIT INT TERM HUP QUIT
+
+# ---------- gestor de máquinas Docker (API para la app) ----------
+# Crea/inicia/detiene contenedores con el OS elegido; cada uno corre el
+# code-server del host montado read-only (crear una máquina no descarga nada).
+# OJO: aquí NO se exige docker. Este bloque abre también el canal PTY del
+# terminal (⌃⌥T), que es un shell y no tiene nada que ver con contenedores.
+# Pedir docker dejaba sin terminal a cualquier equipo que no lo tuviera —o
+# donde el servicio no lo viera— y la app respondía "Connection refused".
+# Los endpoints de máquinas se degradan solos si docker falta.
+if [ -n "$CANON_URL" ] && command -v python3 >/dev/null 2>&1; then
+  MGR_LOCAL=39500
+  # setup-machine: disponible como comando dentro de cada máquina
+  cat > "$IVSCODE_DIR/setup-machine.sh" <<'SETUPEOF'
+#!/usr/bin/env bash
+# setup-machine — configura esta máquina iVsCode como un entorno de desarrollo
+# completo. Uso: setup-machine [--ml]  (--ml añade PyTorch con CUDA, ~3 GB)
+set -euo pipefail
+ML=0
+[ "${1:-}" = "--ml" ] && ML=1
+echo "══ setup-machine: configurando $(hostname) ══"
+if command -v apt-get >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y --no-install-recommends \
+    git curl wget nano htop tmux unzip zip ca-certificates openssh-client \
+    build-essential python3 python3-pip python3-venv
+elif command -v dnf >/dev/null 2>&1; then
+  dnf install -y git curl wget nano htop tmux unzip zip openssh-clients \
+    gcc gcc-c++ make python3 python3-pip
+elif command -v pacman >/dev/null 2>&1; then
+  pacman -Sy --noconfirm git curl wget nano htop tmux unzip zip openssh \
+    base-devel python python-pip
+else
+  echo "✗ Gestor de paquetes no soportado"; exit 1
+fi
+echo "── Python: kernel de Jupyter + libs científicas ──"
+python3 -m pip install --break-system-packages --upgrade \
+  ipykernel ipywidgets numpy pandas matplotlib 2>/dev/null \
+  || python3 -m pip install --upgrade ipykernel ipywidgets numpy pandas matplotlib
+python3 -m ipykernel install --name python3 --display-name "Python 3 ($(hostname))"
+if [ "$ML" = 1 ]; then
+  echo "── PyTorch (CUDA) ──"
+  python3 -m pip install --break-system-packages torch torchvision 2>/dev/null \
+    || python3 -m pip install torch torchvision
+  python3 -c "import torch; print('PyTorch:', torch.__version__, '| CUDA disponible:', torch.cuda.is_available())"
+fi
+echo ""
+echo "✔ Máquina configurada. Recarga la ventana de VS Code y elige el kernel."
+SETUPEOF
+  chmod +x "$IVSCODE_DIR/setup-machine.sh"
+  cat > "$IVSCODE_DIR/manager.py" <<'PYEOF'
+import fcntl, hmac, json, os, pty, re, select, shlex, shutil, signal, socket
+import struct, subprocess, sys, termios, threading, time, urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# OJO: aqui habia `signal.signal(signal.SIGCHLD, signal.SIG_IGN)` para que los
+# hijos del pty no dejaran zombies. Resolvia eso y rompia algo mucho peor: con
+# SIGCHLD ignorado, el nucleo recoge a TODOS los hijos, `waitpid` devuelve
+# ECHILD y Python da por hecho que el proceso salio bien. O sea que CUALQUIER
+# subproceso del gestor —docker, xcodebuild, adb— informaba de codigo 0 aunque
+# hubiera fallado. Una compilacion con errores se daba por buena y se instalaba
+# igual.
+#
+# (Esto explica tambien la rareza que estaba documentada en `sh()`: que docker
+# devolviera 0 y escribiera "permission denied" en stderr. No era cosa de
+# docker.)
+#
+# El zombie del pty se evita recogiendo su hijo al cerrar la sesion, que es
+# donde toca, en vez de desactivar la notificacion para todo el proceso.
+
+HOST_DNS = sys.argv[1]
+PORT = int(sys.argv[2])
+HTTPS_PORT = int(sys.argv[3])   # puerto HTTPS canonico del host (app-bound)
+PASSWORD = open(os.path.expanduser("~/.ivscode/password")).read().strip()
+# En un host macOS, "current" es un code-server de macOS y no sirve dentro de
+# un contenedor Linux: serve.sh deja ahí una copia linux como "linux-current".
+CS_DIR = os.path.expanduser("~/.ivscode/linux-current") \
+    if os.path.isdir(os.path.expanduser("~/.ivscode/linux-current")) \
+    else os.path.expanduser("~/.ivscode/current")
+# carpeta compartida host<->maquinas: ~/ivscode-shared en el PC == /shared dentro
+SHARED_DIR = os.path.expanduser("~/ivscode-shared")
+os.makedirs(SHARED_DIR, exist_ok=True)
+
+# extensiones del host (se copian a cada maquina nueva: nada que descargar)
+EXT_DIR = os.path.expanduser("~/.ivscode/extensions")
+# comando setup-machine montado dentro de cada maquina
+MACHINE_SETUP = os.path.expanduser("~/.ivscode/setup-machine.sh")
+# settings por defecto de cada maquina: sin Restricted Mode (mata Jupyter)
+SETTINGS_FILE = os.path.expanduser("~/.ivscode/machine-settings.json")
+with open(SETTINGS_FILE, "w") as _f:
+    json.dump({
+        "security.workspace.trust.enabled": False,
+        "security.workspace.trust.startupPrompt": "never",
+        "security.workspace.trust.untrustedFiles": "open",
+        "extensions.ignoreRecommendations": True,
+        "window.autoDetectColorScheme": True,
+    }, _f)
+
+def _docker_running():
+    """Hay demonio de Docker al otro lado, no solo el binario instalado.
+
+    Sin esto, con Docker Desktop cerrado el contenedor no llegaba a arrancar y
+    el usuario recibia "la maquina arranco y murio: sin logs", que no dice
+    nada del problema real. Se comprueba la version del SERVIDOR, no la del
+    cliente: el cliente responde aunque el demonio este parado.
+    """
+    rc, out, err = sh("docker", "info", "--format", "{{.ServerVersion}}", timeout=8)
+    return rc == 0 and out.strip() != "" and "cannot connect" not in (err or "").lower()
+
+
+def _ensure_docker(timeout=150):
+    """Se asegura de que haya demonio de Docker, arrancandolo si hace falta.
+
+    El gestor corre EN el equipo, asi que puede abrir Docker Desktop por su
+    cuenta: desde el iPad no hay forma de hacerlo, y obligar al usuario a
+    levantarse a abrirlo rompia el flujo entero de crear una maquina.
+    Docker Desktop tarda entre 20 y 60 segundos en levantar el demonio.
+    """
+    if _docker_running():
+        return True
+    if sys.platform == "darwin":
+        # -g: en segundo plano, sin robar el foco de lo que estes haciendo
+        subprocess.run(["open", "-ga", "Docker"], capture_output=True)
+    else:
+        # Docker Desktop para Linux es un servicio de usuario; el demonio
+        # clasico necesita root y ahi no se puede hacer nada sin contrasena
+        subprocess.run(["systemctl", "--user", "start", "docker-desktop"],
+                       capture_output=True)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(3)
+        if _docker_running():
+            return True
+    return False
+
+
+def _docker_direct_ok():
+    # OJO: docker 29 sale con codigo 0 aunque escriba "permission denied", asi
+    # que hay que mirar tambien stderr o la sonda miente.
+    try:
+        r = subprocess.run(["docker", "ps", "-q"], capture_output=True,
+                           text=True, timeout=10)
+        return r.returncode == 0 and "permission denied" not in (r.stderr or "").lower()
+    except Exception:
+        return False
+
+# Si el proceso aun no tiene el grupo docker (usermod posterior al arranque de
+# systemd --user), se enruta docker a traves de `sg docker`.
+DOCKER_VIA_SG = (sys.platform.startswith("linux")
+                 and shutil.which("sg") is not None
+                 and not _docker_direct_ok())
+IMAGES = {
+    # "slim" es la opcion ligera y la que usa el despliegue rapido: arranca en
+    # segundos y ocupa la mitad que ubuntu.
+    #
+    # No hay Alpine a proposito. El code-server que se monta desde el host trae
+    # su propio node con modulos nativos compilados contra glibc, y Alpine usa
+    # musl: sin gcompat da "no such file or directory" y CON gcompat sigue
+    # fallando ("Error relocating node: fcntl64: symbol not found"). Comprobado.
+    "slim": "debian:12-slim",
+    "ubuntu": "ubuntu:24.04",
+    "debian": "debian:12",
+    "fedora": "fedora:41",
+    "arch": "archlinux:latest",
+}
+LABEL = "ivscode.machine"
+
+def _run(args, timeout):
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError as e:
+        return 127, "", str(e)
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout tras %ss" % timeout
+    return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+def sh(*args, timeout=600):
+    global DOCKER_VIA_SG
+    is_docker = args[0] == "docker"
+    def via_sg(a):
+        return ("sg", "docker", "-c", " ".join(shlex.quote(x) for x in a))
+    rc, out, err = _run(via_sg(args) if (is_docker and DOCKER_VIA_SG) else args, timeout)
+    # OJO: docker 29 devuelve rc=0 y escribe "permission denied" en stderr, así
+    # que el reintento NO puede depender del código de salida.
+    if is_docker and not DOCKER_VIA_SG and "permission denied" in err.lower() \
+            and shutil.which("sg"):
+        DOCKER_VIA_SG = True
+        rc, out, err = _run(via_sg(args), timeout)
+    return rc, out, err
+
+def machines():
+    rc, out, err = sh("docker", "ps", "-a", "--filter", "label=" + LABEL, "--format",
+                      '{{.Names}}\t{{.Status}}\t{{.Label "ivscode.port"}}\t{{.Label "ivscode.os"}}')
+    if "permission denied" in err.lower():
+        raise RuntimeError((err or "docker no disponible")[-200:])
+    if rc != 0:
+        # Sin docker —o con el daemon parado— no hay maquinas, y eso NO es un
+        # error: el equipo sigue sirviendo editor, terminal y simulador. Antes
+        # esto no se notaba porque los codigos de salida siempre llegaban a
+        # cero; al arreglarlos, este endpoint empezo a dar 500 y se llevaba por
+        # delante la pantalla de maquinas de un equipo perfectamente usable.
+        return []
+    result = []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 4 or not parts[2].isdigit():
+            continue
+        name, status, port, osname = parts[:4]
+        short = name[5:] if name.startswith("ivsc_") else name
+        result.append({
+            "name": short,
+            "os": osname,
+            "status": "running" if status.startswith("Up") else "stopped",
+            # misma origin (host:puerto) que el VS Code principal: WebKit solo
+            # permite service workers en el dominio/puerto app-bound, asi que
+            # cada maquina se monta como RUTA, nunca como puerto propio
+            "url": "https://%s:%d/m-%s/" % (HOST_DNS, HTTPS_PORT, short),
+            "port": int(port),
+        })
+    return result
+
+# token efimero para las descargas iniciadas desde la pagina (arrastrar desde
+# el explorador de VS Code): una URL no puede llevar cabeceras de auth
+import secrets
+DOWNLOAD_TOKEN = secrets.token_hex(16)
+
+# tmux propio de iVsCode: raton activo (scroll del historial y seleccion),
+# historial largo y sin retardo de escape. No toca el ~/.tmux.conf del usuario.
+TMUX_CONF = os.path.expanduser("~/.ivscode/tmux.conf")
+
+def _tmux_conf():
+    try:
+        with open(TMUX_CONF, "w") as f:
+            f.write(
+                "source-file -q ~/.tmux.conf\n"
+                "set -g mouse on\n"
+                "set -g history-limit 50000\n"
+                "set -sg escape-time 10\n"
+                "set -g default-terminal 'xterm-256color'\n"
+                "set -ga terminal-overrides ',*256col*:Tc'\n"
+            )
+    except Exception:
+        pass
+
+# portapapeles de archivos entre sesiones (host y maquinas del mismo PC)
+STAGE = os.path.expanduser("~/.ivscode/clipboard")
+
+def clip_copy(path, machine):
+    machine = valid_machine(machine)
+    if not path.startswith("/"):
+        raise ValueError("selecciona un archivo en el explorador antes de copiar")
+    os.makedirs(STAGE, exist_ok=True)
+    for f in os.listdir(STAGE):
+        p = os.path.join(STAGE, f)
+        shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
+    if machine:
+        rc, out, err = sh("docker", "cp", "ivsc_%s:%s" % (machine, path), STAGE + "/")
+    else:
+        rc, out, err = sh("cp", "-r", path, STAGE + "/")
+    if rc != 0:
+        raise RuntimeError((err or out)[-200:])
+    return os.listdir(STAGE)
+
+def session_cwd(machine):
+    """Directorio de trabajo actual de la terminal (panel de tmux)."""
+    if machine:
+        rc, out, _ = sh("docker", "exec", "ivsc_" + machine, "tmux",
+                        "display-message", "-p", "-t", "ivscode",
+                        "-F", "#{pane_current_path}")
+    else:
+        rc, out, _ = sh("tmux", "display-message", "-p", "-t", "ivscode",
+                        "-F", "#{pane_current_path}")
+    out = (out or "").strip().splitlines()[0].strip() if out.strip() else ""
+    return out if rc == 0 and out.startswith("/") else ""
+
+def resolve_dest(machine, dest):
+    home = "/root" if machine else os.path.expanduser("~")
+    d = (dest or "").strip()
+    # "@cwd": el destino es donde esté la terminal en ese momento
+    if d == "@cwd":
+        return session_cwd(machine) or home
+    # "@zerospin": carpeta propia para lo que llega desde el explorador del
+    # iPad. Se crea si no existe: dejar los archivos sueltos en el home los
+    # mezcla con todo lo demas y no hay forma de saber de donde salieron.
+    if d == "@zerospin":
+        target = os.path.join(home, "ZeroSpin")
+        if machine:
+            sh("docker", "exec", "ivsc_" + machine, "mkdir", "-p", target)
+        else:
+            os.makedirs(target, exist_ok=True)
+        return target
+    if not d.startswith("/"):
+        return home
+    if machine:
+        rc, out, err = sh("docker", "exec", "ivsc_" + machine, "sh", "-c",
+                          '[ -d "$0" ] && echo dir || { [ -e "$0" ] && echo file || echo none; }', d)
+        kind = out.strip()
+    else:
+        kind = "dir" if os.path.isdir(d) else ("file" if os.path.exists(d) else "none")
+    if kind == "dir":
+        return d
+    if kind == "file":
+        return os.path.dirname(d) or home
+    return home
+
+def clip_paste(machine, dest=""):
+    machine = valid_machine(machine)
+    items = os.listdir(STAGE) if os.path.isdir(STAGE) else []
+    if not items:
+        raise RuntimeError("portapapeles de archivos vacio: usa ctrl+opt+C primero")
+    target = resolve_dest(machine, dest)
+    for f in items:
+        src = os.path.join(STAGE, f)
+        if machine:
+            rc, out, err = sh("docker", "cp", src, "ivsc_%s:%s/" % (machine, target))
+        else:
+            rc, out, err = sh("cp", "-r", src, target + "/")
+        if rc != 0:
+            raise RuntimeError((err or out)[-200:])
+    return items, target
+
+def valid_machine(m):
+    m = (m or "").strip()
+    if m and not re.fullmatch(r"[a-zA-Z0-9_-]{1,30}", m):
+        raise ValueError("nombre de maquina invalido")
+    return m
+
+def fs_list(machine, path):
+    machine = valid_machine(machine)
+    if path in ("", "~"):
+        path = "/root" if machine else os.path.expanduser("~")
+    if not path.startswith("/"):
+        raise ValueError("ruta invalida")
+    entries = []
+    if machine:
+        # formato: tipo|tamaño|mtime|nombre
+        rc, out, err = sh("docker", "exec", "ivsc_" + machine, "sh", "-c",
+                          "cd %s 2>/dev/null && ls -A | while IFS= read -r f; do "
+                          "if [ -d \"$f\" ]; then t=d; else t=f; fi; "
+                          "s=$(stat -c %%s \"$f\" 2>/dev/null || echo 0); "
+                          "m=$(stat -c %%Y \"$f\" 2>/dev/null || echo 0); "
+                          "printf '%%s|%%s|%%s|%%s\\n' \"$t\" \"$s\" \"$m\" \"$f\"; done"
+                          % shlex.quote(path))
+        if rc != 0:
+            raise RuntimeError((err or out)[-200:] or "no pude listar (maquina apagada?)")
+        for line in out.splitlines():
+            parts = line.split("|", 3)
+            if len(parts) == 4:
+                entries.append({"name": parts[3], "dir": parts[0] == "d",
+                                "size": int(parts[1] or 0), "mtime": float(parts[2] or 0)})
+    else:
+        for name in sorted(os.listdir(path), key=str.lower):
+            full = os.path.join(path, name)
+            try:
+                st = os.stat(full)
+                entries.append({"name": name, "dir": os.path.isdir(full),
+                                "size": st.st_size, "mtime": st.st_mtime})
+            except OSError:
+                entries.append({"name": name, "dir": False, "size": 0, "mtime": 0})
+    entries.sort(key=lambda e: (not e["dir"], e["name"].lower()))
+    return path, entries
+
+def fs_op(machine, op, path, target=""):
+    """Operaciones del explorador: crear carpeta, renombrar, mover, borrar."""
+    machine = valid_machine(machine)
+    if not path.startswith("/"):
+        raise ValueError("ruta invalida")
+    if op in ("rename", "move", "copy") and not target.startswith("/"):
+        raise ValueError("destino invalido")
+    cmds = {
+        "mkdir":  ["mkdir", "-p", path],
+        "rename": ["mv", path, target],
+        "move":   ["mv", path, target],
+        "copy":   ["cp", "-r", path, target],
+        "delete": ["rm", "-rf", path],
+    }
+    if op not in cmds:
+        raise ValueError("operacion invalida")
+    if machine:
+        rc, out, err = sh("docker", "exec", "ivsc_" + machine, *cmds[op])
+    else:
+        rc, out, err = sh(*cmds[op])
+    if rc != 0:
+        raise RuntimeError((err or out)[-200:])
+
+def mount(name, port):
+    sh("tailscale", "serve", "--bg", "--https=%d" % HTTPS_PORT,
+       "--set-path=/m-" + name, "http://127.0.0.1:%d" % port)
+
+def unmount(name):
+    sh("tailscale", "serve", "--https=%d" % HTTPS_PORT, "--set-path=/m-" + name, "off")
+
+def free_port():
+    used = {m["port"] for m in machines()}
+    for p in range(10100, 10200):
+        if p not in used:
+            return p
+    raise RuntimeError("sin puertos libres")
+
+_create_lock = threading.Lock()
+
+def create(name, osname):
+    if not _ensure_docker():
+        raise RuntimeError("Docker esta cerrado y no he podido arrancarlo. "
+                           "Abrelo a mano en el equipo (Docker Desktop en macOS, "
+                           "'sudo systemctl start docker' en Linux) y reintenta.")
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,30}", name):
+        raise ValueError("nombre invalido: usa letras, numeros, - o _")
+    if osname not in IMAGES:
+        raise ValueError("os invalido; opciones: " + ", ".join(IMAGES))
+    # el lock evita que dos creaciones simultaneas elijan el mismo puerto
+    with _create_lock:
+        _create_locked(name, osname)
+
+def _create_locked(name, osname):
+    port = free_port()
+    opts = [
+        "--name", "ivsc_" + name,
+        "--label", LABEL + "=1",
+        "--label", "ivscode.port=%d" % port,
+        "--label", "ivscode.os=" + osname,
+        "-p", "127.0.0.1:%d:8080" % port,
+        "-e", "PASSWORD=" + PASSWORD,
+        "-v", CS_DIR + ":/opt/code-server:ro",
+        "-v", "ivsc_%s_home:/root" % name,
+        "-v", SHARED_DIR + ":/shared",
+        "-v", MACHINE_SETUP + ":/usr/local/bin/setup-machine:ro",
+    ]
+    cmd = [IMAGES[osname], "/opt/code-server/bin/code-server",
+           "--bind-addr", "0.0.0.0:8080", "--auth", "password", "--disable-telemetry"]
+    container = "ivsc_" + name
+
+    def _start(extra):
+        """Lanza el contenedor y confirma que sigue VIVO unos segundos despues.
+
+        No se mira el codigo de salida: docker 29 devuelve 0 aunque falle (el
+        mismo defecto del "permission denied"). Con --gpus all en un Mac deja
+        un contenedor creado y muerto, y fiandose del codigo el reintento sin
+        GPU no llegaba a ejecutarse nunca.
+        """
+        sh("docker", "run", "-d", *extra, *opts, *cmd)
+        for _ in range(6):
+            rc, state, _ = sh("docker", "inspect", "-f", "{{.State.Running}}", container)
+            if rc == 0 and state.strip() == "true":
+                return True
+            time.sleep(0.5)
+        return False
+
+    try:
+        # primero con GPU (RTX del host); si el runtime no lo soporta, sin GPU
+        if not _start(["--gpus", "all"]):
+            sh("docker", "rm", "-f", container)        # limpia el intento fallido
+            if not _start([]):
+                _, logs, _ = sh("docker", "logs", "--tail", "15", container)
+                raise RuntimeError("la maquina arranco y murio: " + (logs or "sin logs")[-300:])
+        provision(name)
+        mount(name, port)
+    except BaseException:
+        sh("docker", "rm", "-f", "ivsc_" + name)   # nunca dejar restos a medias
+        raise
+
+def repair(name):
+    """Recrea el contenedor con la contrasena ACTUAL del host, sin perder datos.
+
+    La contrasena de code-server se inyecta como variable de entorno al crear
+    el contenedor, y las variables de entorno no se pueden cambiar en caliente:
+    hay que rehacerlo. El disco vive en el volumen ivsc_<nombre>_home, que NO
+    se toca, asi que archivos y configuracion sobreviven intactos.
+
+    Hace falta cuando la contrasena del host se regenera (por ejemplo al borrar
+    ~/.ivscode) y los contenedores creados antes se quedan con la anterior.
+    """
+    container = "ivsc_" + name
+    rc, osname, _ = sh("docker", "inspect", "-f",
+                       '{{index .Config.Labels "ivscode.os"}}', container)
+    if rc != 0:
+        raise RuntimeError("esa maquina no existe")
+    osname = (osname or "").strip() or "ubuntu"
+    if osname not in IMAGES:
+        osname = "ubuntu"
+    unmount(name)
+    sh("docker", "rm", "-f", container)
+    with _create_lock:
+        _create_locked(name, osname)      # reutiliza el volumen existente
+
+
+def provision(name):
+    """Deja la maquina lista: extensiones del host + settings sin Restricted Mode."""
+    c = "ivsc_" + name
+    sh("docker", "exec", c, "mkdir", "-p",
+       "/root/.local/share/code-server/extensions",
+       "/root/.local/share/code-server/User")
+    if os.path.isdir(EXT_DIR):
+        sh("docker", "cp", EXT_DIR + "/.", c + ":/root/.local/share/code-server/extensions")
+    sh("docker", "cp", SETTINGS_FILE, c + ":/root/.local/share/code-server/User/settings.json")
+    # reinicia el code-server interno para que cargue extensiones y settings
+    sh("docker", "restart", c)
+
+
+# ---------- simuladores y emuladores (ventana de simulador de la app) ----------
+# Dos mundos distintos con la misma forma por fuera:
+#   · iOS  -> simctl. SOLO en macOS: el Simulador es de Apple y no existe en
+#             Linux. Un equipo Linux devuelve la lista de Android y ya está.
+#   · Android -> adb, que va igual en los dos y ademas aprovecha la GPU y KVM
+#             del PC, donde corre mas rapido que en el Mac.
+#
+# La imagen se sirve como PNG suelto y no como vídeo. Es peor para animaciones
+# y mucho mas simple: no hay codecs, ni negociación, ni un proceso que mantener
+# vivo por cliente. Para mirar como quedo una pantalla y pulsar botones —que es
+# para lo que uno tiene el simulador al lado del editor— basta.
+
+IS_MAC = sys.platform == "darwin"
+
+
+def _bin(*args, timeout=30):
+    """Como sh(), pero devuelve stdout en BYTES. Las capturas son PNG."""
+    try:
+        r = subprocess.run(args, capture_output=True, timeout=timeout)
+    except FileNotFoundError as e:
+        return 127, b"", str(e)
+    except subprocess.TimeoutExpired:
+        return 124, b"", "timeout tras %ss" % timeout
+    return r.returncode, r.stdout, r.stderr.decode("utf-8", "replace").strip()
+
+
+def _simctl():
+    """Ruta real de simctl, sin depender de `xcrun`.
+
+    `xcrun simctl` parece lo natural, pero falla con «unable to find utility
+    simctl» siempre que `xcode-select` apunta a las Command Line Tools en vez
+    de a Xcode.app — que es una configuración muy común y la causa habitual de
+    que el simulador «no arranque» tambien fuera de aqui. Y un servicio en
+    segundo plano arranca con un entorno minimo, sin DEVELOPER_DIR, asi que no
+    se puede contar con el.
+
+    Se busca en orden: lo que diga el entorno, lo que diga xcode-select si
+    de verdad lo tiene, y por ultimo las Xcode instaladas.
+    """
+    candidatos = []
+    env = os.environ.get("DEVELOPER_DIR")
+    if env:
+        candidatos.append(env)
+    rc, out, _ = _run(("xcode-select", "-p"), 15)
+    if rc == 0 and out.strip():
+        candidatos.append(out.strip())
+    candidatos += ["/Applications/Xcode.app/Contents/Developer",
+                   "/Applications/Xcode-beta.app/Contents/Developer"]
+    for base in candidatos:
+        ruta = os.path.join(base, "usr", "bin", "simctl")
+        if os.path.isfile(ruta) and os.access(ruta, os.X_OK):
+            return ruta
+    return None
+
+
+def _adb():
+    return shutil.which("adb")
+
+
+def _idb():
+    """Ruta del cliente idb, que da los toques al simulador de iOS.
+
+    No basta con `which`: idb se instala con pip, y suele acabar en el bin de
+    conda o en el del usuario, ninguno de los cuales esta en el PATH de un
+    servicio en segundo plano.
+    """
+    ruta = shutil.which("idb")
+    if ruta:
+        return ruta
+    for base in ("/opt/homebrew/Caskroom/miniforge/base/bin",
+                 "/opt/homebrew/bin", "/usr/local/bin",
+                 os.path.expanduser("~/.local/bin"),
+                 os.path.expanduser("~/Library/Python/3.11/bin"),
+                 os.path.expanduser("~/Library/Python/3.12/bin")):
+        cand = os.path.join(base, "idb")
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _idb_env():
+    """idb necesita DEVELOPER_DIR apuntando a Xcode.
+
+    Sin el dice «Xcode is not available, idb will not be able to use
+    Simulators» y solo ve dispositivos fisicos — el mismo problema que
+    `xcrun`, y con el mismo origen: xcode-select apuntando a las Command Line
+    Tools. Se le da el entorno bueno en vez de exigir que el equipo este bien
+    configurado.
+    """
+    env = dict(os.environ)
+    simctl = _simctl()
+    if simctl:
+        # .../Contents/Developer/usr/bin/simctl -> .../Contents/Developer
+        env["DEVELOPER_DIR"] = os.path.dirname(os.path.dirname(os.path.dirname(simctl)))
+    return env
+
+
+_PUNTOS = {}
+
+
+def _ios_points(dev):
+    """Tamaño de la pantalla en PUNTOS, que es en lo que trabaja idb.
+
+    La captura llega en pixeles —1206x2622 en un iPhone 17 Pro— pero idb espera
+    puntos, 402x874, porque la pantalla es 3x. Mandar pixeles hace que cada
+    gesto caiga fuera de la pantalla y no pase nada: el toque se acepta, se
+    responde que todo fue bien, y no se mueve nada. Android no tiene este
+    problema porque `adb shell input` usa los mismos pixeles que screencap.
+
+    Se pregunta una vez por dispositivo: `idb describe` tarda lo suyo y el
+    tamaño no cambia.
+    """
+    if dev in _PUNTOS:
+        return _PUNTOS[dev]
+    idb = _idb()
+    if not idb:
+        return None
+    try:
+        r = subprocess.run([idb, "describe", "--udid", dev, "--json"],
+                           capture_output=True, text=True, timeout=120,
+                           env=_idb_env())
+        d = json.loads(r.stdout).get("screen_dimensions") or {}
+        w, h = int(d.get("width_points", 0)), int(d.get("height_points", 0))
+        if w > 0 and h > 0:
+            _PUNTOS[dev] = (w, h)
+            return (w, h)
+    except Exception:
+        pass
+    return None
+
+
+def _has_idb():
+    """idb da toques al simulador de iOS; simctl solo sabe mirar."""
+    return _idb() is not None
+
+
+def sim_devices():
+    """Todo lo que esta maquina puede enseñar, ya arrancado o por arrancar."""
+    out = []
+
+    simctl = _simctl() if IS_MAC else None
+    if simctl:
+        rc, txt, _ = sh(simctl, "list", "devices", "--json", timeout=30)
+        if rc == 0:
+            try:
+                data = json.loads(txt).get("devices", {})
+            except Exception:
+                data = {}
+            for runtime, devices in data.items():
+                # "com.apple.CoreSimulator.SimRuntime.iOS-26-5" -> "iOS 26.5"
+                label = runtime.rsplit(".", 1)[-1].replace("-", " ", 1).replace("-", ".")
+                for d in devices:
+                    if not d.get("isAvailable", False):
+                        continue
+                    out.append({
+                        "id": d.get("udid", ""),
+                        "name": d.get("name", "?"),
+                        "kind": "ios",
+                        "runtime": label,
+                        "booted": d.get("state") == "Booted",
+                        "canInput": _has_idb(),
+                    })
+
+    adb = _adb()
+    if adb:
+        rc, txt, _ = sh(adb, "devices", "-l", timeout=20)
+        if rc == 0:
+            for line in txt.splitlines()[1:]:
+                parts = line.split()
+                if len(parts) < 2 or parts[1] != "device":
+                    continue
+                serial = parts[0]
+                name = serial
+                for p in parts[2:]:
+                    if p.startswith("model:"):
+                        name = p.split(":", 1)[1].replace("_", " ")
+                out.append({
+                    "id": serial,
+                    "name": name,
+                    "kind": "android",
+                    "runtime": "emulador" if serial.startswith("emulator-") else "dispositivo",
+                    "booted": True,
+                    "canInput": True,
+                })
+
+    # AVDs definidos pero apagados: se pueden arrancar desde la app
+    emu = shutil.which("emulator")
+    if emu:
+        rc, txt, _ = sh(emu, "-list-avds", timeout=20)
+        if rc == 0:
+            vivos = {d["name"] for d in out if d["kind"] == "android"}
+            for avd in txt.splitlines():
+                avd = avd.strip()
+                if avd and avd not in vivos:
+                    out.append({"id": "avd:" + avd, "name": avd, "kind": "android",
+                                "runtime": "AVD apagado", "booted": False, "canInput": True})
+    return out
+
+
+def sim_boot(kind, dev):
+    if kind == "ios":
+        simctl = _simctl()
+        if not simctl:
+            raise RuntimeError("no encuentro Xcode en este equipo: el simulador de iOS necesita Xcode instalado")
+        rc, out, err = sh(simctl, "boot", dev, timeout=120)
+        # arrancar uno ya arrancado no es un error que deba ver el usuario
+        if rc != 0 and "current state: Booted" not in (err + out):
+            raise RuntimeError((err or out)[-200:])
+        # Sin la app Simulator abierta el dispositivo corre pero no dibuja, y
+        # las capturas salen en negro.
+        sh("open", "-a", "Simulator", "--args", "-CurrentDeviceUDID", dev, timeout=60)
+        return
+    if dev.startswith("avd:"):
+        emu = shutil.which("emulator")
+        if not emu:
+            raise RuntimeError("el emulador de Android no esta instalado en este equipo")
+        nombre = dev[4:]
+        # `-no-window` no es un ahorro, es un requisito: el gestor corre como
+        # servicio y no tiene DISPLAY, asi que el emulador no puede abrir
+        # ventana y muere nada mas arrancar. Ademas la ventana en el PC no
+        # sirve de nada cuando quien mira esta en el iPad: la pantalla se
+        # captura por adb, que funciona igual sin ella.
+        registro = os.path.expanduser("~/.ivscode/emulator-%s.log" % nombre)
+        try:
+            salida = open(registro, "wb")
+        except OSError:
+            salida = subprocess.DEVNULL
+        proceso = subprocess.Popen(
+            [emu, "-avd", nombre, "-no-window", "-no-audio", "-no-boot-anim",
+             "-no-metrics", "-gpu", "swiftshader_indirect", "-no-snapshot-load"],
+            stdout=salida, stderr=subprocess.STDOUT, start_new_session=True)
+
+        # Comprobar que sigue vivo, y si no, DECIR POR QUE.
+        #
+        # El emulador puede morir al segundo —sin KVM es lo que hace— y hasta
+        # ahora eso se traducia en un "ok" seguido de una ventana que se queda
+        # esperando para siempre. El motivo estaba en el registro, que nadie va
+        # a ir a leer desde un iPad.
+        time.sleep(4)
+        if proceso.poll() is not None:
+            motivo = ""
+            try:
+                with open(registro, "r", errors="replace") as fh:
+                    lineas = [l.strip() for l in fh if "ERROR" in l or "KVM" in l]
+                motivo = " ".join(lineas[:2])[:300]
+            except OSError:
+                pass
+            if "KVM" in motivo or "acceleration" in motivo:
+                raise RuntimeError(
+                    "El emulador necesita KVM y el servicio no tiene permiso. "
+                    "En el equipo: sudo usermod -aG kvm $USER, y reinicia. "
+                    "(La ACL de /dev/kvm solo vale para sesiones interactivas; "
+                    "un servicio en segundo plano necesita el grupo.)")
+            raise RuntimeError(motivo or "el emulador se cerro nada mas arrancar")
+        return
+    raise RuntimeError("ese dispositivo ya esta encendido")
+
+
+def sim_shutdown(kind, dev):
+    if kind == "ios":
+        simctl = _simctl()
+        if simctl:
+            sh(simctl, "shutdown", dev, timeout=60)
+    else:
+        adb = _adb()
+        if adb and not dev.startswith("avd:"):
+            sh(adb, "-s", dev, "emu", "kill", timeout=30)
+
+
+def _png_size(png):
+    """Ancho y alto leidos de la cabecera del PNG, sin decodificar la imagen.
+
+    Hace falta porque el toque llega en coordenadas de lo que se ve —la imagen
+    ya encogida— y hay que devolverlo a las del dispositivo. Los 8 bytes del
+    IHDR bastan y evitan una dependencia.
+    """
+    try:
+        w = int.from_bytes(png[16:20], "big")
+        h = int.from_bytes(png[20:24], "big")
+        return "%dx%d" % (w, h)
+    except Exception:
+        return "0x0"
+
+
+def _shrink(png, width):
+    """Reduce la captura antes de mandarla por la red.
+
+    Una pantalla de iPhone 17 Pro sale a 1206x2622 y pesa 2,9 MB en PNG. A tres
+    fotogramas por segundo eso son 9 MB/s por el tunel, que no se sostiene. A
+    640 px y JPEG el mismo fotograma pesa 29 KB: cien veces menos, y en la
+    pantalla del iPad no se nota porque ahi se ve mas pequeño todavia.
+
+    Tres caminos porque las maquinas son distintas: PIL si esta, `sips` que
+    viene siempre en macOS, y ffmpeg como ultimo recurso. Si no hay ninguno se
+    manda el PNG entero — lento, pero funciona.
+    """
+    try:
+        import io as _io
+        from PIL import Image
+        img = Image.open(_io.BytesIO(png))
+        if img.width > width:
+            img = img.resize((width, int(img.height * width / img.width)), Image.LANCZOS)
+        buf = _io.BytesIO()
+        img.convert("RGB").save(buf, "JPEG", quality=62, optimize=False)
+        return buf.getvalue(), "image/jpeg"
+    except Exception:
+        pass
+
+    os.makedirs(STAGE, exist_ok=True)
+    src = os.path.join(STAGE, "shrink-in.png")
+    dst = os.path.join(STAGE, "shrink-out.jpg")
+    try:
+        with open(src, "wb") as fh:
+            fh.write(png)
+        if shutil.which("sips"):
+            rc, _, _ = sh("sips", "-Z", str(width), "-s", "format", "jpeg",
+                          "-s", "formatOptions", "62", src, "--out", dst, timeout=30)
+        elif shutil.which("ffmpeg"):
+            rc, _, _ = sh("ffmpeg", "-y", "-i", src, "-vf",
+                          "scale=%d:-1" % width, "-q:v", "6", dst, timeout=30)
+        else:
+            return png, "image/png"
+        if rc == 0 and os.path.exists(dst):
+            return open(dst, "rb").read(), "image/jpeg"
+    except Exception:
+        pass
+    finally:
+        for f in (src, dst):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+    return png, "image/png"
+
+
+def sim_frame(kind, dev):
+    """Un PNG del estado actual de la pantalla."""
+    if kind == "ios":
+        simctl = _simctl()
+        if not simctl:
+            raise RuntimeError("no encuentro Xcode en este equipo")
+        # A archivo temporal y no a la salida estandar: el guion que simctl
+        # documenta como stdout no lo respetan todas las versiones —esta crea
+        # un archivo LLAMADO "-" en el directorio actual— y ademas mezcla avisos
+        # («No display specified») con los bytes del PNG.
+        os.makedirs(STAGE, exist_ok=True)
+        tmp = os.path.join(STAGE, "sim-%s.png" % dev[:8])
+        rc, _out, err = sh(simctl, "io", dev, "screenshot", "--type=png", tmp,
+                           timeout=25)
+        try:
+            png = open(tmp, "rb").read() if rc == 0 else b""
+        except OSError:
+            png = b""
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    else:
+        adb = _adb()
+        if not adb:
+            raise RuntimeError("adb no esta instalado en este equipo")
+        rc, png, err = _bin(adb, "-s", dev, "exec-out", "screencap", "-p", timeout=25)
+    if rc != 0 or not png.startswith(b"\x89PNG"):
+        raise RuntimeError((err or "no se pudo capturar la pantalla")[-200:])
+    return png
+
+
+def sim_input(kind, dev, op, data):
+    """Toques y teclas hacia dentro del dispositivo."""
+    x, y = int(data.get("x", 0)), int(data.get("y", 0))
+    entorno = None
+    if kind == "ios":
+        idb = _idb()
+        if not idb:
+            raise RuntimeError(
+                "para tocar el simulador de iOS hace falta idb. Instalalo en el Mac con:\n"
+                "  brew tap facebook/fb && brew trust facebook/fb\n"
+                "  brew install idb-companion && pip3 install fb-idb")
+        entorno = _idb_env()
+        if op == "tap":
+            cmd = [idb, "ui", "tap", "--udid", dev, str(x), str(y)]
+        elif op == "swipe":
+            cmd = [idb, "ui", "swipe", "--udid", dev, str(x), str(y),
+                   str(int(data.get("x2", x))), str(int(data.get("y2", y)))]
+        elif op == "text":
+            cmd = [idb, "ui", "text", "--udid", dev, str(data.get("text", ""))]
+        elif op == "key":
+            # el boton de inicio del simulador
+            cmd = [idb, "ui", "button", "--udid", dev, str(data.get("key", "HOME"))]
+        else:
+            raise ValueError("gesto desconocido")
+    else:
+        adb = _adb()
+        if not adb:
+            raise RuntimeError("adb no esta instalado en este equipo")
+        base = [adb, "-s", dev, "shell", "input"]
+        if op == "tap":
+            cmd = base + ["tap", str(x), str(y)]
+        elif op == "swipe":
+            cmd = base + ["swipe", str(x), str(y),
+                          str(int(data.get("x2", x))), str(int(data.get("y2", y))),
+                          str(int(data.get("ms", 200)))]
+        elif op == "text":
+            cmd = base + ["text", str(data.get("text", "")).replace(" ", "%s")]
+        elif op == "key":
+            teclas = {"HOME": "KEYCODE_HOME", "BACK": "KEYCODE_BACK",
+                      "APPS": "KEYCODE_APP_SWITCH", "POWER": "KEYCODE_POWER",
+                      "ENTER": "KEYCODE_ENTER", "DELETE": "KEYCODE_DEL"}
+            cmd = base + ["keyevent", teclas.get(str(data.get("key", "HOME")), "KEYCODE_HOME")]
+        else:
+            raise ValueError("gesto desconocido")
+    if entorno is not None:
+        # idb arranca su propio companion la primera vez y eso tarda; 30 s se
+        # quedaban cortos justo en el primer toque de cada sesion.
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=90, env=entorno)
+            rc, out, err = r.returncode, r.stdout.strip(), r.stderr.strip()
+        except subprocess.TimeoutExpired:
+            rc, out, err = 124, "", "el dispositivo no respondio al gesto"
+    else:
+        rc, out, err = sh(*cmd, timeout=30)
+    if rc != 0:
+        raise RuntimeError((err or out)[-200:])
+
+
+def sim_install(kind, dev, path):
+    """Instala y lanza lo recien compilado, que es el objetivo de todo esto."""
+    if kind == "ios":
+        simctl = _simctl()
+        if not simctl:
+            raise RuntimeError("no encuentro Xcode en este equipo")
+        rc, out, err = sh(simctl, "install", dev, path, timeout=300)
+        if rc != 0:
+            raise RuntimeError((err or out)[-300:])
+        plist = os.path.join(path, "Info.plist")
+        rc, bundle, _ = sh("/usr/libexec/PlistBuddy", "-c",
+                           "Print :CFBundleIdentifier", plist, timeout=30)
+        if rc == 0 and bundle.strip():
+            sh(simctl, "launch", dev, bundle.strip(), timeout=120)
+        return bundle.strip()
+    adb = _adb()
+    if not adb:
+        raise RuntimeError("adb no esta instalado en este equipo")
+    rc, out, err = sh(adb, "-s", dev, "install", "-r", path, timeout=300)
+    if rc != 0 or "Failure" in out:
+        raise RuntimeError((err or out)[-300:])
+    return ""
+
+
+
+# ---------- compilar y ejecutar en el dispositivo ----------
+# Una compilacion tarda minutos y puede fallar por mil sitios, asi que no vale
+# con devolver "ok" o "error" al final: hay que poder LEER lo que va pasando.
+# Por eso se arranca en un hilo y se acumula la salida, que la app va pidiendo.
+
+_TRABAJOS = {}
+_TRABAJOS_LOCK = threading.Lock()
+
+
+def _apunta(job, linea):
+    with _TRABAJOS_LOCK:
+        t = _TRABAJOS.get(job)
+        if t is None:
+            return
+        t["log"].append(linea)
+        # Un `xcodebuild` verboso son decenas de miles de lineas y nadie las
+        # lee: solo interesan las ultimas y los errores, que se guardan aparte.
+        if len(t["log"]) > 400:
+            del t["log"][:-400]
+        if "error:" in linea or "FAILED" in linea or "error Gradle" in linea:
+            t["errores"].append(linea.strip()[:300])
+            del t["errores"][20:]
+
+
+def _proyecto(path):
+    """Que hay en esa carpeta y como se compila.
+
+    El orden importa. `run.sh` va primero a proposito: si el proyecto trae su
+    propio guion, sabe cosas que aqui no se pueden adivinar —esquemas, sabores,
+    variables— y adivinar por encima de el seria peor que obedecerle.
+    """
+    if not os.path.isdir(path):
+        raise RuntimeError("esa carpeta no existe en este equipo: %s" % path)
+    tiene = set(os.listdir(path))
+    if "run.sh" in tiene:
+        return "script"
+    if any(n.endswith((".xcodeproj", ".xcworkspace")) for n in tiene) or "project.yml" in tiene:
+        return "ios"
+    if "gradlew" in tiene or "settings.gradle" in tiene or "settings.gradle.kts" in tiene:
+        return "android"
+    raise RuntimeError(
+        "no reconozco esta carpeta como un proyecto.\n"
+        "Se admiten: un run.sh propio, un proyecto de Xcode (.xcodeproj, .xcworkspace "
+        "o project.yml) o uno de Gradle.")
+
+
+def _corre(job, cmd, cwd, env=None):
+    """Ejecuta y va apuntando la salida linea a linea."""
+    _apunta(job, "$ " + " ".join(cmd))
+    try:
+        p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, bufsize=1)
+    except FileNotFoundError as e:
+        _apunta(job, "no encontrado: %s" % e)
+        return 127
+    with _TRABAJOS_LOCK:
+        if job in _TRABAJOS:
+            _TRABAJOS[job]["proc"] = p
+    for linea in p.stdout:
+        _apunta(job, linea.rstrip())
+    p.wait()
+    # El codigo de salida, en el registro. Sin el, un fallo silencioso obliga a
+    # deducir por que se paro leyendo miles de lineas.
+    if p.returncode != 0:
+        _apunta(job, "  (salio con codigo %d)" % p.returncode)
+    return p.returncode
+
+
+def _build_ios(job, path, dev):
+    simctl = _simctl()
+    if not simctl:
+        raise RuntimeError("no encuentro Xcode en este equipo")
+    env = _idb_env()          # trae DEVELOPER_DIR ya resuelto
+
+    tiene = set(os.listdir(path))
+    if "project.yml" in tiene and shutil.which("xcodegen"):
+        _corre(job, ["xcodegen", "generate", "--quiet"], path, env)
+        tiene = set(os.listdir(path))
+
+    workspace = next((n for n in sorted(tiene) if n.endswith(".xcworkspace")), None)
+    project = next((n for n in sorted(tiene) if n.endswith(".xcodeproj")), None)
+    if not workspace and not project:
+        raise RuntimeError("no hay ningun .xcodeproj ni .xcworkspace en la carpeta")
+
+    destino = ["-workspace", workspace] if workspace else ["-project", project]
+
+    # El esquema no se puede adivinar: se le pregunta a xcodebuild.
+    r = subprocess.run(["xcodebuild"] + destino + ["-list", "-json"],
+                       cwd=path, capture_output=True, text=True, timeout=180, env=env)
+    try:
+        info = json.loads(r.stdout)
+        datos = info.get("workspace") or info.get("project") or {}
+        esquemas = datos.get("schemes") or []
+    except Exception:
+        esquemas = []
+    if not esquemas:
+        raise RuntimeError("xcodebuild no encuentra ningun esquema que compilar")
+    esquema = esquemas[0]
+    _apunta(job, "▸ esquema: %s" % esquema)
+
+    rc = _corre(job, ["xcodebuild"] + destino + [
+        "-scheme", esquema, "-configuration", "Debug", "-sdk", "iphonesimulator",
+        "-destination", "id=%s" % dev, "-derivedDataPath", ".build",
+        "-quiet", "build"], path, env)
+    if rc != 0:
+        raise RuntimeError("la compilacion fallo")
+
+    app = None
+    for raiz, _dirs, _f in os.walk(os.path.join(path, ".build", "Build", "Products")):
+        if raiz.endswith(".app"):
+            app = raiz
+            break
+    if not app:
+        raise RuntimeError("la compilacion termino pero no produjo ninguna app")
+
+    _apunta(job, "▸ instalando %s" % os.path.basename(app))
+    rc, out, err = sh(simctl, "install", dev, app, timeout=300)
+    if rc != 0:
+        raise RuntimeError((err or out)[-300:])
+
+    rc, bundle, _ = sh("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleIdentifier",
+                       os.path.join(app, "Info.plist"), timeout=30)
+    bundle = bundle.strip()
+    if bundle:
+        _apunta(job, "▸ lanzando %s" % bundle)
+        sh(simctl, "launch", dev, bundle, timeout=120)
+    return bundle
+
+
+def _build_android(job, path, dev):
+    adb = _adb()
+    if not adb:
+        raise RuntimeError("adb no esta instalado en este equipo")
+    gradlew = os.path.join(path, "gradlew")
+    cmd = [gradlew] if os.access(gradlew, os.X_OK) else ["gradle"]
+    rc = _corre(job, cmd + ["installDebug"], path)
+    if rc != 0:
+        raise RuntimeError("la compilacion fallo")
+    # monkey con un solo evento es la forma corta de "abre la app de inicio"
+    # sin tener que averiguar cual es la actividad principal.
+    paquete = os.path.basename(path.rstrip("/"))
+    _corre(job, [adb, "-s", dev, "shell", "monkey", "-p", paquete,
+                 "-c", "android.intent.category.LAUNCHER", "1"], path)
+    return paquete
+
+
+def sim_install_idb():
+    """Instala idb en el Mac, que es lo que da los toques al simulador de iOS.
+
+    Son cuatro comandos poco habituales —incluido un `brew trust`, que Homebrew
+    exige para taps de terceros— y ninguno se adivina. Pedirselos a alguien que
+    esta en un iPad sin teclado es pedirle que no lo use.
+    """
+    if not IS_MAC:
+        raise RuntimeError("idb es para el simulador de iOS, que solo existe en macOS")
+    brew = shutil.which("brew")
+    for cand in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+        if not brew and os.access(cand, os.X_OK):
+            brew = cand
+    if not brew:
+        raise RuntimeError("no encuentro Homebrew en este equipo. Instalalo desde brew.sh")
+
+    job = secrets.token_hex(6)
+    with _TRABAJOS_LOCK:
+        _TRABAJOS[job] = {"log": [], "errores": [], "done": False, "ok": False,
+                          "proc": None, "titulo": "idb"}
+
+    def trabajo():
+        try:
+            pasos = [
+                [brew, "tap", "facebook/fb"],
+                # Homebrew se niega a usar formulas de taps de terceros sin esto
+                [brew, "trust", "facebook/fb"],
+                [brew, "install", "idb-companion"],
+                [sys.executable, "-m", "pip", "install", "--user", "--upgrade", "fb-idb"],
+            ]
+            for cmd in pasos:
+                rc = _corre(job, cmd, os.path.expanduser("~"))
+                # `brew tap` de algo ya añadido devuelve error y no es un fallo
+                if rc != 0 and cmd[1] not in ("tap", "trust"):
+                    raise RuntimeError("falló: %s" % " ".join(cmd[-2:]))
+            _PUNTOS.clear()          # se vuelve a preguntar el tamaño en puntos
+            if _idb():
+                _apunta(job, "✓ idb instalado")
+                with _TRABAJOS_LOCK:
+                    _TRABAJOS[job]["ok"] = True
+            else:
+                raise RuntimeError("terminó sin errores pero no encuentro el comando idb")
+        except Exception as e:
+            _apunta(job, "✗ %s" % e)
+        finally:
+            with _TRABAJOS_LOCK:
+                _TRABAJOS[job]["done"] = True
+
+    threading.Thread(target=trabajo, daemon=True).start()
+    return job
+
+
+def sim_check(paths):
+    """Cuales de esas carpetas siguen existiendo, y que son.
+
+    El historial de la app vive en el iPad y las carpetas en el equipo, asi que
+    se desincronizan solos: renombras un proyecto, lo mueves, formateas. Sin
+    esta comprobacion la lista ofrece atajos que fallan al pulsarlos, que es
+    peor que no ofrecerlos.
+    """
+    salida = []
+    for bruto in paths[:40]:
+        ruta = os.path.expanduser(str(bruto))
+        existe = os.path.isdir(ruta)
+        tipo = ""
+        if existe:
+            try:
+                tipo = _proyecto(ruta)
+            except Exception:
+                # la carpeta esta, pero ya no parece un proyecto: se distingue
+                # de "desaparecio", porque se arregla de otra manera
+                tipo = "?"
+        salida.append({"path": bruto, "exists": existe, "type": tipo})
+    return salida
+
+
+def sim_run(kind, dev, path):
+    """Arranca la compilacion y devuelve el identificador para ir mirandola."""
+    path = os.path.expanduser(path)
+    tipo = _proyecto(path)
+    job = secrets.token_hex(6)
+    with _TRABAJOS_LOCK:
+        # solo se guarda el ultimo puñado: esto no es un historial
+        for viejo in list(_TRABAJOS)[:-4]:
+            _TRABAJOS.pop(viejo, None)
+        _TRABAJOS[job] = {"log": [], "errores": [], "done": False, "ok": False,
+                          "proc": None, "titulo": os.path.basename(path.rstrip("/"))}
+
+    def trabajo():
+        try:
+            if tipo == "script":
+                rc = _corre(job, ["/usr/bin/env", "bash", "./run.sh"], path,
+                            _idb_env() if IS_MAC else None)
+                if rc != 0:
+                    raise RuntimeError("run.sh termino con error %d" % rc)
+            elif tipo == "ios":
+                _build_ios(job, path, dev)
+            else:
+                _build_android(job, path, dev)
+            _apunta(job, "✓ listo")
+            with _TRABAJOS_LOCK:
+                _TRABAJOS[job]["ok"] = True
+        except Exception as e:
+            _apunta(job, "✗ %s" % e)
+        finally:
+            with _TRABAJOS_LOCK:
+                if job in _TRABAJOS:
+                    _TRABAJOS[job]["done"] = True
+                    _TRABAJOS[job]["proc"] = None
+
+    threading.Thread(target=trabajo, daemon=True).start()
+    return job, tipo
+
+
+def sim_run_status(job, desde=0):
+    with _TRABAJOS_LOCK:
+        t = _TRABAJOS.get(job)
+        if t is None:
+            raise RuntimeError("ese trabajo ya no existe")
+        return {"lines": t["log"][desde:], "total": len(t["log"]),
+                "done": t["done"], "ok": t["ok"], "errors": t["errores"],
+                "title": t["titulo"]}
+
+
+def sim_run_cancel(job):
+    with _TRABAJOS_LOCK:
+        t = _TRABAJOS.get(job)
+        p = t.get("proc") if t else None
+    if p is not None:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+
+
+class Handler(BaseHTTPRequestHandler):
+    timeout = 30
+
+    def log_message(self, *a):
+        pass
+
+    def _body(self):
+        n = min(int(self.headers.get("Content-Length", 0) or 0), 1 << 20)
+        return self.rfile.read(n) if n else b"{}"
+
+    def _send(self, code, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _authed(self):
+        # /download tambien acepta el token (llega en la URL, sin cabeceras)
+        if self.path.startswith("/download"):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            tok = (q.get("token") or [""])[0]
+            if tok and hmac.compare_digest(tok, DOWNLOAD_TOKEN):
+                return True
+        if not hmac.compare_digest(self.headers.get("X-Password", ""), PASSWORD):
+            self._send(401, {"error": "no autorizado"})
+            return False
+        return True
+
+    def do_GET(self):
+        if not self._authed():
+            return
+        parsed = urllib.parse.urlparse(self.path)
+        try:
+            if parsed.path == "/machines":
+                self._send(200, {"machines": machines()})
+            elif parsed.path == "/download":
+                q = urllib.parse.parse_qs(parsed.query)
+                machine = valid_machine((q.get("machine") or [""])[0])
+                path = (q.get("path") or [""])[0]
+                if not path.startswith("/"):
+                    raise ValueError("ruta invalida")
+                if machine:
+                    os.makedirs(STAGE, exist_ok=True)
+                    tmp = os.path.join(STAGE, os.path.basename(path) or "archivo")
+                    rc, out, err = sh("docker", "cp", "ivsc_%s:%s" % (machine, path), tmp)
+                    if rc != 0:
+                        raise RuntimeError((err or out)[-200:])
+                    src = tmp
+                else:
+                    src = path
+                if os.path.isdir(src):
+                    raise ValueError("es una carpeta: comprimela antes de descargarla")
+                size = os.path.getsize(src)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Disposition",
+                                 'attachment; filename="%s"' % os.path.basename(src))
+                self.end_headers()
+                with open(src, "rb") as fh:
+                    shutil.copyfileobj(fh, self.wfile, 65536)
+                if machine:
+                    try:
+                        os.remove(src)
+                    except Exception:
+                        pass
+            elif parsed.path == "/token":
+                self._send(200, {"token": DOWNLOAD_TOKEN})
+            elif parsed.path == "/cwd":
+                q = urllib.parse.parse_qs(parsed.query)
+                machine = valid_machine((q.get("machine") or [""])[0])
+                self._send(200, {"cwd": session_cwd(machine)})
+            elif parsed.path == "/sim/devices":
+                self._send(200, {"devices": sim_devices(), "mac": IS_MAC})
+            elif parsed.path == "/sim/frame":
+                q = urllib.parse.parse_qs(parsed.query)
+                ancho = max(240, min(1400, int((q.get("w") or ["640"])[0])))
+                png = sim_frame((q.get("kind") or ["ios"])[0],
+                                (q.get("id") or [""])[0])
+                datos, tipo = _shrink(png, ancho)
+                # La imagen va en crudo y no dentro de un JSON: en base64
+                # creceria un tercio, y esto se pide varias veces por segundo.
+                self.send_response(200)
+                self.send_header("Content-Type", tipo)
+                self.send_header("Content-Length", str(len(datos)))
+                self.send_header("Cache-Control", "no-store")
+                # El tamaño en el que hay que mandar los gestos, no el de la
+                # imagen: en iOS son PUNTOS y la captura viene en pixeles.
+                # Mandando lo segundo, cada toque cae fuera de la pantalla.
+                kind = (q.get("kind") or ["ios"])[0]
+                medida = _ios_points((q.get("id") or [""])[0]) if kind == "ios" else None
+                self.send_header("X-Screen-Size",
+                                 "%dx%d" % medida if medida else _png_size(png))
+                self.end_headers()
+                self.wfile.write(datos)
+            elif parsed.path == "/sim/run/status":
+                q = urllib.parse.parse_qs(parsed.query)
+                self._send(200, sim_run_status((q.get("job") or [""])[0],
+                                               int((q.get("from") or ["0"])[0])))
+            elif parsed.path == "/fs/list":
+                q = urllib.parse.parse_qs(parsed.query)
+                machine = (q.get("machine") or [""])[0]
+                path = (q.get("path") or ["~"])[0]
+                resolved, entries = fs_list(machine, path)
+                self._send(200, {"path": resolved, "entries": entries})
+            else:
+                self._send(404, {"error": "no existe"})
+        except Exception as e:
+            self._send(500, {"error": str(e)})
+
+    def do_POST(self):
+        if not self._authed():
+            return
+        try:
+            if self.path.startswith("/sim/"):
+                data = json.loads(self._body() or b"{}")
+                kind = data.get("kind", "ios")
+                dev = data.get("id", "")
+                if self.path == "/sim/boot":
+                    sim_boot(kind, dev)
+                elif self.path == "/sim/shutdown":
+                    sim_shutdown(kind, dev)
+                elif self.path == "/sim/input":
+                    sim_input(kind, dev, data.get("op", "tap"), data)
+                elif self.path == "/sim/run":
+                    job, tipo = sim_run(kind, dev, data.get("path", "~"))
+                    self._send(200, {"job": job, "type": tipo})
+                    return
+                elif self.path == "/sim/idb":
+                    self._send(200, {"job": sim_install_idb(), "type": "idb"})
+                    return
+                elif self.path == "/sim/check":
+                    self._send(200, {"results": sim_check(data.get("paths", []))})
+                    return
+                elif self.path == "/sim/run/cancel":
+                    sim_run_cancel(data.get("job", ""))
+                elif self.path == "/sim/install":
+                    bundle = sim_install(kind, dev, data.get("path", ""))
+                    self._send(200, {"ok": True, "bundle": bundle})
+                    return
+                else:
+                    self._send(404, {"error": "no existe"})
+                    return
+                self._send(200, {"ok": True})
+                return
+            if self.path == "/fs/op":
+                data = json.loads(self._body() or b"{}")
+                fs_op(data.get("machine", ""), data.get("op", ""),
+                      data.get("path", ""), data.get("target", ""))
+                self._send(200, {"ok": True})
+                return
+            if self.path == "/upload":
+                name = os.path.basename(self.headers.get("X-Filename", "archivo"))
+                if not name or name in (".", ".."):
+                    raise ValueError("nombre de archivo invalido")
+                machine = valid_machine(self.headers.get("X-Machine", ""))
+                dest = self.headers.get("X-Dest", "").strip()
+                n = min(int(self.headers.get("Content-Length", 0) or 0), 512 << 20)
+                os.makedirs(STAGE, exist_ok=True)
+                tmp = os.path.join(STAGE, name)
+                remaining = n
+                with open(tmp, "wb") as fh:
+                    while remaining > 0:
+                        chunk = self.rfile.read(min(65536, remaining))
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                        remaining -= len(chunk)
+                target = resolve_dest(machine, dest)
+                if machine:
+                    rc, out, err = sh("docker", "cp", tmp, "ivsc_%s:%s/" % (machine, target))
+                else:
+                    rc, out, err = sh("cp", tmp, target + "/")
+                os.remove(tmp)
+                if rc != 0:
+                    raise RuntimeError((err or out)[-200:])
+                self._send(200, {"ok": True, "file": name, "dest": target})
+                return
+            if self.path == "/clipboard":
+                data = json.loads(self._body() or b"{}")
+                op = data.get("op", "")
+                machine = data.get("machine", "")
+                if op == "copy":
+                    files = clip_copy(data.get("path", "").strip(), machine)
+                    dest = ""
+                elif op == "paste":
+                    files, dest = clip_paste(machine, data.get("dest", ""))
+                else:
+                    raise ValueError("op debe ser copy o paste")
+                self._send(200, {"files": files, "dest": dest})
+                return
+            if self.path == "/machines":
+                data = json.loads(self._body() or b"{}")
+                create(data.get("name", ""), data.get("os", ""))
+                self._send(200, {"ok": True})
+                return
+            m = re.fullmatch(r"/machines/([a-zA-Z0-9_-]+)/repair", self.path)
+            if m:
+                repair(m.group(1))
+                self._send(200, {"ok": True})
+                return
+            m = re.fullmatch(r"/machines/([a-zA-Z0-9_-]+)/(start|stop|restart)", self.path)
+            if not m:
+                self._send(404, {"error": "no existe"})
+                return
+            name, action = m.groups()
+            if action in ("start", "restart") and not _ensure_docker():
+                raise RuntimeError("Docker esta cerrado y no he podido arrancarlo.")
+            rc, out, err = sh("docker", action, "ivsc_" + name)
+            if rc != 0:
+                raise RuntimeError((err or out)[-200:])
+            # reiniciar conserva el puerto, pero el mapeo hay que rehacerlo
+            # igual que al arrancar
+            if action in ("start", "restart"):
+                for mach in machines():
+                    if mach["name"] == name:
+                        mount(name, mach["port"])
+            else:
+                unmount(name)
+            self._send(200, {"ok": True})
+        except Exception as e:
+            self._send(500, {"error": str(e)})
+
+    def do_DELETE(self):
+        if not self._authed():
+            return
+        parsed = urllib.parse.urlparse(self.path)
+        m = re.fullmatch(r"/machines/([a-zA-Z0-9_-]+)", parsed.path)
+        if not m:
+            self._send(404, {"error": "no existe"})
+            return
+        name = m.group(1)
+        q = urllib.parse.parse_qs(parsed.query)
+        with_volume = (q.get("volume") or ["0"])[0] == "1"
+        rc, out, err = sh("docker", "rm", "-f", "ivsc_" + name)
+        if rc != 0:
+            self._send(500, {"error": (err or out)[-200:]})
+            return
+        if with_volume:
+            sh("docker", "volume", "rm", "ivsc_%s_home" % name)
+        unmount(name)
+        self._send(200, {"ok": True})
+
+# ---------- servidor PTY para la terminal flotante de la app ----------
+# TCP en 127.0.0.1:39600 (expuesto solo en la tailnet via tailscale serve --tcp).
+# Protocolo: 1a linea JSON {password, machine, cols, rows}\n; luego bytes pty
+# crudos en ambos sentidos. Resize: frame de 10 bytes 0x00 'R' cccc rrrr.
+TERM_PORT = 39600
+
+def _term_client(client):
+    pid = None
+    master = None
+    try:
+        client.settimeout(15)
+        buf = b""
+        while b"\n" not in buf:
+            d = client.recv(1024)
+            if not d:
+                return
+            buf += d
+        line, rest = buf.split(b"\n", 1)
+        req = json.loads(line.decode())
+        if not hmac.compare_digest(str(req.get("password", "")), PASSWORD):
+            time.sleep(1.0)
+            client.sendall(b"auth incorrecta\r\n")
+            return
+        machine = req.get("machine", "")
+        cols, rows = int(req.get("cols", 80)), int(req.get("rows", 24))
+        # Cada ventana pide su propia sesion de tmux. Antes el nombre era fijo
+        # ("ivscode") y -A hacia que TODAS las conexiones se adjuntaran a la
+        # misma: dos terminales del mismo equipo mostraban el mismo shell y lo
+        # que escribias en uno salia en el otro.
+        # Sin este campo (app antigua) se conserva el nombre de siempre.
+        session = str(req.get("session", "") or "")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{0,32}", session):
+            session = ""
+        tmux_name = "ivscode-" + session if session else "ivscode"
+
+        # Salto SSH a otra maquina: lo ejecuta ESTE equipo, no el iPad.
+        #
+        # Es deliberado. El OpenSSH del host ya sabe de claves, known_hosts,
+        # agente y teclado-interactivo; meter un cliente SSH en la app seria
+        # reimplementar todo eso con menos garantias. Ademas la contrasena, si
+        # hace falta, la pide ssh dentro del terminal: la app nunca la ve ni la
+        # guarda.
+        ssh_target = str(req.get("ssh", "") or "").strip()
+        if ssh_target and not re.fullmatch(r"[A-Za-z0-9._@%+:-]{1,120}", ssh_target):
+            client.sendall(b"destino ssh invalido\r\n")
+            return
+        if machine:
+            if not re.fullmatch(r"[a-zA-Z0-9_-]+", machine):
+                return
+            argv = ["docker", "exec", "-it", "ivsc_" + machine, "sh", "-lc",
+                    "if command -v tmux >/dev/null; then "
+                    "printf '%s\\n' 'set -g mouse on' 'set -g history-limit 50000' "
+                    "> /tmp/ivscode.tmux.conf; "
+                    "exec tmux -f /tmp/ivscode.tmux.conf new-session -A -s " + shlex.quote(tmux_name) + "; "
+                    "else exec bash -l; fi"]
+            # el exec del PTY no pasa por sh(), asi que aplica aqui el mismo
+            # rodeo por grupo docker (systemd --user no lo hereda)
+            if DOCKER_VIA_SG or not _docker_direct_ok():
+                argv = ["sg", "docker", "-c", " ".join(shlex.quote(a) for a in argv)]
+        else:
+            # con tmux, la sesion sobrevive a desconexiones (reattach automatico)
+            if ssh_target:
+                # -t fuerza pty en el destino: sin el, no hay editor ni prompt
+                # en color al otro lado.
+                ssh_cmd = ["ssh", "-t"]
+                if ":" in ssh_target and "@" in ssh_target:
+                    host_part, _, port = ssh_target.rpartition(":")
+                    if port.isdigit():
+                        ssh_cmd += ["-p", port]
+                        ssh_target = host_part
+                ssh_cmd.append(ssh_target)
+                if shutil.which("tmux"):
+                    _tmux_conf()
+                    argv = ["tmux", "-f", TMUX_CONF, "new-session", "-A",
+                            "-s", tmux_name] + ssh_cmd
+                else:
+                    argv = ssh_cmd
+            elif shutil.which("tmux"):
+                _tmux_conf()
+                argv = ["tmux", "-f", TMUX_CONF, "new-session", "-A", "-s", tmux_name]
+            else:
+                argv = [os.environ.get("SHELL", "/bin/bash"), "-l"]
+        pid, master = pty.fork()
+        if pid == 0:
+            os.environ["TERM"] = "xterm-256color"
+            os.environ["LANG"] = os.environ.get("LANG", "C.UTF-8")
+            os.execvp(argv[0], argv)
+            os._exit(1)
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        client.settimeout(None)
+        pend = rest
+        if pend and 0 not in pend:
+            os.write(master, pend)
+            pend = b""
+        while True:
+            r, _, _ = select.select([client, master], [], [], 120)
+            if client in r:
+                d = client.recv(4096)
+                if not d:
+                    break
+                data = pend + d
+                pend = b""
+                out = b""
+                i = 0
+                while i < len(data):
+                    if data[i] == 0:
+                        # 0x00 0x00 = un NUL literal del usuario (Ctrl+Espacio)
+                        if i + 2 <= len(data) and data[i + 1] == 0:
+                            out += b"\x00"
+                            i += 2
+                            continue
+                        if i + 10 <= len(data) and data[i + 1:i + 2] == b"R":
+                            try:
+                                c2 = int(data[i + 2:i + 6])
+                                r2 = int(data[i + 6:i + 10])
+                                fcntl.ioctl(master, termios.TIOCSWINSZ,
+                                            struct.pack("HHHH", r2, c2, 0, 0))
+                                os.kill(pid, signal.SIGWINCH)
+                                i += 10
+                                continue
+                            except Exception:
+                                pass
+                        elif i + 10 > len(data):
+                            pend = data[i:]
+                            break
+                    out += data[i:i + 1]
+                    i += 1
+                if out:
+                    os.write(master, out)
+            if master in r:
+                try:
+                    d = os.read(master, 8192)
+                except OSError:
+                    break
+                if not d:
+                    break
+                client.sendall(d)
+    except Exception:
+        pass
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+        if master is not None:
+            try:
+                os.close(master)   # sin esto se filtraba un fd por conexion
+            except Exception:
+                pass
+        if pid:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+            # Recogerlo aqui es lo que evita el zombie por sesion, ahora que
+            # SIGCHLD vuelve a comportarse como debe.
+            try:
+                os.waitpid(pid, 0)
+            except Exception:
+                pass
+
+def term_server():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", TERM_PORT))
+    s.listen(8)
+    while True:
+        try:
+            c, _ = s.accept()
+        except OSError:
+            time.sleep(0.5)
+            continue
+        threading.Thread(target=_term_client, args=(c,), daemon=True).start()
+
+threading.Thread(target=term_server, daemon=True).start()
+
+ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+PYEOF
+  if "$TS" serve --bg --https=$MGR_HTTPS_PORT "http://127.0.0.1:$MGR_LOCAL" >/dev/null 2>&1; then
+    pkill -f "[m]anager\.py $TS_DNS" 2>/dev/null || true
+    sleep 0.3
+    ( while true; do
+        python3 "$IVSCODE_DIR/manager.py" "$TS_DNS" "$MGR_LOCAL" "$HTTPS_PORT" \
+          >>"$IVSCODE_DIR/manager.log" 2>&1
+        echo "[$(date '+%F %T')] gestor caído, reiniciando…" >>"$IVSCODE_DIR/manager.log"
+        sleep 3
+      done ) &
+    MGR_PID=$!
+    echo "→ Gestor de máquinas Docker: https://${TS_DNS}:9500"
+    # canal PTY de la terminal flotante (TCP crudo dentro de la tailnet)
+    "$TS" serve --bg --tcp=39600 "tcp://127.0.0.1:39600" >/dev/null 2>&1 \
+      && echo "→ Terminal PTY: puerto 39600 (tailnet)" \
+      || echo "⚠ No pude exponer el puerto 39600 (terminal flotante no disponible)"
+  fi
+fi
+
+# ---------- resumen de conexión ----------
+echo ""
+echo "═══════════════════════════════════════════════════"
+echo "  iVsCode backend: $NAME"
+if [ -t 1 ]; then echo "  🔑 Contraseña: $PASSWORD"
+else echo "  🔑 Contraseña: cat $IVSCODE_DIR/password"; fi
+if [ -n "$CANON_URL" ]; then
+  echo "  URL principal (HTTPS, notebooks OK):"
+  echo "    $CANON_URL"
+fi
+
+bosoncode_block
+[ -n "$CANON_URL" ] && echo "     (si prefieres la URL entera: $CANON_URL)"
+# Solo se menciona donde puede servir: un Mac con Xcode y sin idb. En Linux o
+# sin Xcode no hay simulador de iOS y el aviso seria ruido.
+if [ "$PLATFORM" = macos ] && [ -x "/Applications/Xcode.app/Contents/Developer/usr/bin/simctl" ] \
+   && ! command -v idb >/dev/null 2>&1; then
+  echo "  El simulador de iOS se vera desde la app, pero no aceptara toques."
+  echo "  Para activarlos:  ./serve.sh --install-idb"
+fi
+echo "  URLs alternativas (http, sin webviews/notebooks):"
+if [ "$PLATFORM" = linux ]; then
+  for ip in $(hostname -I 2>/dev/null); do echo "    http://$ip:$PORT"; done
+else
+  for ip in $(ifconfig 2>/dev/null | awk '/inet / && $2 != "127.0.0.1" {print $2}'); do
+    echo "    http://$ip:$PORT"
+  done
+fi
+if [ -n "$TS" ]; then
+  TS_IP=$("$TS" ip -4 2>/dev/null | head -1 || true)
+  [ -n "$TS_IP" ] && echo "    http://$TS_IP:$PORT  (tailscale, desde fuera de casa)"
+fi
+echo "  La app iVsCode lo detectará sola en esta red."
+echo "═══════════════════════════════════════════════════"
+echo ""
+
+PASSWORD="$PASSWORD" "$IVSCODE_DIR/current/bin/code-server" \
+  --bind-addr "0.0.0.0:$PORT" \
+  --auth password \
+  --extensions-dir "$EXT_DIR" \
+  --disable-telemetry

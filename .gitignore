@@ -1,0 +1,10 @@
+# Secretos — nunca versionar
+backend/.env
+*.pem
+*.key
+
+# Workspace del backend (código del usuario, no del proyecto)
+backend/workspace/
+
+# macOS
+.DS_Store
