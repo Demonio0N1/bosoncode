@@ -110,7 +110,7 @@ find_tailscale() {
 # antes, y ahí es justo cuando más falta hace— y tener el bloque en uno solo
 # significaba que quien seguía el camino recomendado no lo veía nunca.
 bosoncode_block() {
-  local ts nombre dns puerto url
+  local ts nombre dns puerto url ts_ip
   ts="$(find_tailscale 2>/dev/null)"
   [ -n "$ts" ] || return 0
   dns="$("$ts" status --json 2>/dev/null \
@@ -119,21 +119,46 @@ bosoncode_block() {
   [ -n "$dns" ] || return 0
   nombre="${dns%%.*}"
 
-  # La dirección completa, que es lo que se pega. Tres fuentes en orden de
-  # fiabilidad: la que ya calculó el arranque, la que Tailscale esté sirviendo
-  # ahora, y por ultimo la regla que usa este mismo script (PORT + 1000). En la
-  # rama de --install-service las dos primeras aun no existen, y sin la tercera
-  # el recuadro saldria sin puerto — que es justo lo que hace que no funcione.
+  # La dirección completa, que es lo que se pega. Dos fuentes, las dos con
+  # respaldo real: la que calculó el arranque, y la que Tailscale esté
+  # sirviendo ahora mismo.
+  #
+  # Antes había una tercera —dar por hecho PORT + 1000— y era una mentira. Si
+  # `tailscale serve` había fallado, el recuadro anunciaba igualmente una
+  # dirección HTTPS que nadie atendía, y el aviso del fallo quedaba seis
+  # líneas más arriba, donde no se ve. El usuario pegaba esa dirección en la
+  # app y la app, con razón, no conectaba con nada.
   if [ -n "${CANON_URL:-}" ]; then
     url="$CANON_URL"
   else
     puerto="$("$ts" serve status 2>/dev/null \
               | sed -n "s#^https://[^:]*:\([0-9]*\).*#\1#p" | head -1)"
-    case "$puerto" in ''|*[!0-9]*) puerto=$((PORT + 1000)) ;; esac
-    url="https://${dns}:${puerto}"
+    case "$puerto" in
+      ''|*[!0-9]*) url="" ;;
+      *)           url="https://${dns}:${puerto}" ;;
+    esac
   fi
 
   echo ""
+  if [ -z "$url" ]; then
+    # Sin HTTPS no hay nada que añadir: se dice aquí, que es donde se mira.
+    ts_ip="$("$ts" ip -4 2>/dev/null | head -1 || true)"
+    echo "  ┌─ Este equipo TODAVÍA no se puede añadir ────────────────────────"
+    echo "  │  Falta el HTTPS de Tailscale. Sin él la app no tiene notebooks,"
+    echo "  │  ni gestor de máquinas, ni terminal."
+    echo "  │"
+    echo "  │  Arréglalo así:"
+    echo "  │     sudo tailscale set --operator=$(id -un)"
+    echo "  │     ./serve.sh"
+    echo "  │"
+    echo "  │  Si sigue fallando, activa MagicDNS y HTTPS Certificates en"
+    echo "  │  https://login.tailscale.com/admin/dns"
+    [ -n "$ts_ip" ] && \
+    echo "  │  Mientras tanto, solo el editor:  http://${ts_ip}:${PORT}"
+    echo "  └──────────────────────────────────────────────────────────────────"
+    return 0
+  fi
+
   echo "  ┌─ Para añadir este equipo en BosonCode ──────────────────────────"
   echo "  │  Dirección:   $url"
   echo "  │  Nombre:      $nombre"

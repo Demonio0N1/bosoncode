@@ -344,14 +344,57 @@ over SSH — for hosts where you cannot install Tailscale or run anything as roo
 
 ## Building the apps
 
-The source of the two iPadOS apps is not in this repository. This one holds the
-host side: the installer, the backend and the docs you need to set up your own
-machine.
+Requires Xcode 15+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) and an
+Apple developer account (a free one is enough for your own devices).
 
-Get the apps from the App Store:
+```bash
+brew install xcodegen
+cd ipad
+xcodegen generate
+open iVsCode.xcodeproj
+```
 
-- **BosonCode** — editor client and terminal
-- **ZeroSpin** — file manager, free
+Set your own team in `project.yml` (`DEVELOPMENT_TEAM`) before building.
+
+### Add your tailnet (needed for Jupyter notebooks)
+
+The editor, the terminal and everything else work out of the box on any
+tailnet. **Notebooks are the exception** and need one edit.
+
+Notebooks rely on Service Workers, which WKWebView only allows on domains
+listed under `WKAppBoundDomains` in `ipad/iVsCode/Info.plist`. Add yours:
+
+```bash
+tailscale status --json | grep MagicDNSSuffix
+```
+
+```xml
+<key>WKAppBoundDomains</key>
+<array>
+    <string>vscode.dev</string>
+    <string>github.dev</string>
+    <string>your-tailnet.ts.net</string>   <!-- add this -->
+</array>
+```
+
+**There is no wildcard, and `ts.net` on its own does not work.** WebKit matches
+the *registrable* domain, and since `ts.net` is on the
+[Public Suffix List](https://publicsuffix.org/), every tailnet counts as its own
+domain. Verified on a device: with only `ts.net` listed the page refused to
+load; adding the full tailnet fixed it immediately.
+
+The app degrades gracefully rather than failing: it turns the App-Bound flag on
+only for listed domains, so an unlisted tailnet still opens the editor — you
+just lose notebooks until you add it. The list caps at 10 entries.
+
+**Delete the app from the device after editing this list.** WebKit reads
+`WKAppBoundDomains` when the app is installed and does not re-read it.
+Installing over the top leaves a stale state where the app counts as
+non-app-bound and script injection is silently denied — the editor loads but
+stops responding to the keyboard, and ⌃⌥T dies, because key forwarding goes
+through `evaluateJavaScript`. A clean reinstall fixes it.
+
+---
 
 ## Repository layout
 
@@ -361,10 +404,23 @@ bosoncode/
 ├── serve.sh              # host backend: code-server + HTTPS + mDNS announce
 ├── setup-machine.sh      # provisions a GPU container image (runs INSIDE a machine)
 ├── bridge.sh             # SSH bridge for hosts without Tailscale
-└── backend/              # optional Docker Compose setup with GPU passthrough
+├── backend/              # optional Docker Compose setup with GPU passthrough
+└── ipad/
+    ├── project.yml       # XcodeGen manifest → generates the .xcodeproj
+    ├── iVsCode/          # BosonCode (editor client + terminal)
+    └── iFinder/          # ZeroSpin (file manager)
 ```
 
-`setup.sh` is the only one you run by hand. It calls the others as needed.
+Both targets are built from one project. `Server.swift`, `DockerMachines.swift`
+and `IncomingDrop.swift` are compiled into both: the host list, the manager
+client and drag-and-drop handling are the same problem in either app. The two
+apps also share an App Group and a Keychain access group, which is how ZeroSpin
+sees the machines you added in BosonCode.
+
+The `ipad/iVsCode` and `ipad/iFinder` directory names predate the current app
+names and are kept so build paths stay stable.
+
+---
 
 ## Troubleshooting
 
