@@ -142,6 +142,36 @@ else
   fi
 fi
 
+# `tailscale serve` —lo que publica el HTTPS— exige ser root o el usuario
+# marcado como operador. Sin ese permiso serve.sh falla más adelante y el equipo
+# queda sin notebooks, sin gestor de máquinas y sin terminal: se veía el aviso al
+# final de una instalación por lo demás correcta, y había que arreglarlo a mano.
+#
+# Se comprueba y se concede AQUÍ, mientras la terminal es interactiva y pedir la
+# contraseña de sudo tiene sentido. Dentro de serve.sh sería pedirla en mitad del
+# arranque, o peor, en un servicio donde no hay nadie para contestarla.
+#
+# La comprobación es el propio `serve status`: si responde, ya hay permiso y no
+# se molesta a nadie; si no, es justo lo que va a fallar luego.
+if [ "$PLATAFORMA" = linux ] && ! "$TS" serve status >/dev/null 2>&1; then
+  USUARIO="$(id -un)"
+  if [ "$SOLO_COMPROBAR" = 1 ]; then
+    falta "sin permiso para publicar HTTPS"
+    nota "ejecuta:  sudo $TS set --operator=$USUARIO"
+  elif sudo -n true 2>/dev/null || [ -t 0 ]; then
+    nota "falta el permiso para publicar HTTPS; te pido sudo una vez"
+    if sudo "$TS" set --operator="$USUARIO" >/dev/null 2>&1; then
+      ok "permiso concedido a $USUARIO"
+    else
+      falta "no pude conceder el permiso"
+      nota "hazlo a mano:  sudo $TS set --operator=$USUARIO"
+    fi
+  else
+    falta "sin permiso para publicar HTTPS y sin terminal donde pedir sudo"
+    nota "ejecuta:  sudo $TS set --operator=$USUARIO"
+  fi
+fi
+
 nota "Instala Tailscale también en el iPad y entra con la MISMA cuenta:"
 nota "  https://apps.apple.com/app/tailscale/id1470499037"
 nota "Sin eso, el iPad y este equipo no se ven: es lo que sustituye a abrir puertos."
