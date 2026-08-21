@@ -7,6 +7,9 @@
 #   ./setup.sh --foreground   lo arranca aquí y ahora, atado a esta terminal
 #   ./setup.sh --check        solo diagnostica, no toca nada
 #   ./setup.sh --password     enseña la contraseña de este equipo
+#   ./setup.sh --uninstall    quita el servicio y lo descargado (no tu código)
+#                             añade --purge para llevarse también tus ajustes
+#                             del editor, y -y para no preguntar
 #
 # Instala Tailscale si falta, comprueba que la sesión esté iniciada, deja
 # code-server en marcha y anuncia el equipo para que la app lo encuentre sin
@@ -22,15 +25,21 @@ cd "$(dirname "$0")"
 SOLO_COMPROBAR=0
 EN_PRIMER_PLANO=0
 VER_PASSWORD=0
+DESINSTALAR=0
+PURGAR=0
+SIN_PREGUNTAR=0
 for arg in "$@"; do
   case "$arg" in
     --check) SOLO_COMPROBAR=1 ;;
     --password|--contrasena|--contraseña) VER_PASSWORD=1 ;;
     --foreground|--fg|--primer-plano) EN_PRIMER_PLANO=1 ;;
+    --uninstall|--desinstalar) DESINSTALAR=1 ;;
+    --purge|--purgar) PURGAR=1 ;;
+    -y|--yes|--si|--sí) SIN_PREGUNTAR=1 ;;
     # Ya no hace falta: es lo que hace ./setup.sh a secas. Se acepta en
     # silencio para no romper a quien lo tenga escrito en una nota o un alias.
     --service|--install-service) ;;
-    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "opción desconocida: $arg (usa --help)"; exit 1 ;;
   esac
 done
@@ -79,6 +88,85 @@ case "$(uname -s)" in
   Linux)  PLATAFORMA=linux ;;
   *) rojo "Este script es para macOS y Linux. Detectado: $(uname -s)"; exit 1 ;;
 esac
+
+# ---------- --uninstall: quitar lo que puso este script y salir ----------
+# Todo lo que instala vive en sitios propios, así que se puede deshacer entero.
+# Lo que NO se toca importa tanto como lo que sí: el código del usuario está en
+# su carpeta personal y no pasa por aquí, y la sesión de Tailscale es suya y le
+# sirve para otras cosas.
+if [ "$DESINSTALAR" = 1 ]; then
+  titulo "BosonCode · desinstalando de $(hostname)"
+
+  # La lista antes de tocar nada: borrar cosas de la carpeta personal de alguien
+  # sin enseñarle qué se va es la clase de favor que nadie agradece.
+  nota "se va a borrar:"
+  nota "  · el servicio, para que deje de arrancar solo"
+  nota "  · ~/.ivscode — code-server, extensiones y la contraseña de este equipo"
+  nota "  · la publicación HTTPS de Tailscale"
+  if [ "$PURGAR" = 1 ]; then
+    nota "  · ~/.local/share/code-server y ~/.config/code-server — TUS ajustes"
+  fi
+  nota "NO se toca: tu código, tu sesión de Tailscale, ni Tailscale."
+  [ "$PURGAR" = 1 ] || \
+    nota "para llevarse también los ajustes del editor:  --uninstall --purge"
+
+  if [ "$SIN_PREGUNTAR" != 1 ]; then
+    printf '\n  ¿Sigo? [s/N] '
+    read -r RESPUESTA || RESPUESTA=""
+    case "$RESPUESTA" in
+      s|S|si|Si|SI|sí|Sí|SÍ|y|Y|yes) ;;
+      *) echo "  No he tocado nada."; exit 0 ;;
+    esac
+  fi
+  echo ""
+
+  if [ "$PLATAFORMA" = linux ]; then
+    if systemctl --user show-environment >/dev/null 2>&1; then
+      systemctl --user stop ivscode 2>/dev/null || true
+      systemctl --user disable ivscode 2>/dev/null || true
+      rm -rf "$HOME/.config/systemd/user/ivscode.service" \
+             "$HOME/.config/systemd/user/ivscode.service.d"
+      systemctl --user daemon-reload 2>/dev/null || true
+      ok "servicio quitado"
+    else
+      nota "sin systemd de usuario: no había servicio que quitar"
+    fi
+  else
+    PLIST="$HOME/Library/LaunchAgents/com.ivscode.serve.plist"
+    if [ -f "$PLIST" ]; then
+      launchctl bootout "gui/$(id -u)/com.ivscode.serve" 2>/dev/null \
+        || launchctl unload "$PLIST" 2>/dev/null || true
+      rm -f "$PLIST"
+      ok "LaunchAgent quitado"
+    else
+      nota "no había LaunchAgent"
+    fi
+  fi
+
+  # `serve reset` necesita el mismo permiso que `serve`: si no lo hay, no es un
+  # problema — significa que tampoco llegó a publicarse nada.
+  TS_BIN="$(command -v tailscale 2>/dev/null || echo /Applications/Tailscale.app/Contents/MacOS/Tailscale)"
+  if [ -x "$TS_BIN" ] && "$TS_BIN" serve reset >/dev/null 2>&1; then
+    ok "publicación HTTPS de Tailscale borrada"
+  else
+    nota "no había publicación de Tailscale que borrar"
+  fi
+
+  rm -rf "$HOME/.ivscode"
+  ok "~/.ivscode borrado"
+
+  if [ "$PURGAR" = 1 ]; then
+    rm -rf "$HOME/.local/share/code-server" "$HOME/.config/code-server"
+    ok "ajustes del editor borrados"
+  fi
+
+  titulo "Desinstalado"
+  nota "para volver a instalarlo:  ./setup.sh"
+  nota "en el iPad, borra la tarjeta de este equipo antes de añadirla otra vez:"
+  nota "la contraseña se genera de cero y la vieja ya no vale."
+  echo ""
+  exit 0
+fi
 
 titulo "BosonCode · preparando $(hostname)"
 gris "Sistema: $PLATAFORMA"
