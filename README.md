@@ -86,14 +86,17 @@ cd bosoncode
 ```
 
 That installs Tailscale if it is missing, checks you are signed in, installs
-code-server, starts the backend and announces the machine. When it finishes it
-prints the URL and the password, and your machine shows up in the app on its
-own.
+code-server, installs the backend as a service and announces the machine. When
+it finishes it prints the URL and the password, and your machine shows up in the
+app on its own.
+
+It stays put: it survives closing the terminal and comes back on boot. That is
+what keeps the iPad from losing its server because a window was closed.
 
 ```bash
-./setup.sh --check      # diagnose only, touches nothing
-./setup.sh --service    # also start on every boot
-./setup.sh --password   # show this machine's password again
+./setup.sh --check        # diagnose only, touches nothing
+./setup.sh --foreground   # run it tied to this terminal (for debugging)
+./setup.sh --password     # show this machine's password again
 ```
 
 The password is generated once and shown when the server starts. That moment is

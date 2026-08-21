@@ -89,13 +89,18 @@ cd bosoncode
 ```
 
 Eso instala Tailscale si falta, comprueba que la sesión esté iniciada, instala
-code-server, arranca el servidor y anuncia el equipo. Al terminar imprime la
-dirección y la contraseña, y tu equipo aparece solo en la app.
+code-server, deja el servidor instalado como servicio y anuncia el equipo. Al
+terminar imprime la dirección y la contraseña, y tu equipo aparece solo en la
+app.
+
+Queda puesto para siempre: sobrevive a cerrar la terminal y vuelve solo al
+encender el equipo. Es lo que hace falta para que el iPad no se quede sin
+servidor por haber cerrado una ventana.
 
 ```bash
-./setup.sh --check      # solo diagnostica, no toca nada
-./setup.sh --service    # además, arranca al encender el equipo
-./setup.sh --password   # vuelve a enseñar la contraseña de este equipo
+./setup.sh --check        # solo diagnostica, no toca nada
+./setup.sh --foreground   # lo arranca atado a esta terminal (para depurar)
+./setup.sh --password     # vuelve a enseñar la contraseña de este equipo
 ```
 
 La contraseña se genera una vez y se enseña al arrancar el servidor. Ese momento

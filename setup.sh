@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # setup — deja este equipo listo para BosonCode, de una sola pasada.
 #
-#   ./setup.sh              instala lo que falte y arranca el servidor
-#   ./setup.sh --service    además, que arranque solo al encender
-#   ./setup.sh --check      solo diagnostica, no toca nada
-#   ./setup.sh --password   enseña la contraseña de este equipo
+#   ./setup.sh                instala lo que falte y deja el servidor puesto
+#                             para siempre: sobrevive a cerrar la terminal y
+#                             arranca solo al encender el equipo
+#   ./setup.sh --foreground   lo arranca aquí y ahora, atado a esta terminal
+#   ./setup.sh --check        solo diagnostica, no toca nada
+#   ./setup.sh --password     enseña la contraseña de este equipo
 #
 # Instala Tailscale si falta, comprueba que la sesión esté iniciada, deja
 # code-server en marcha y anuncia el equipo para que la app lo encuentre sin
@@ -18,14 +20,17 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 SOLO_COMPROBAR=0
-COMO_SERVICIO=0
+EN_PRIMER_PLANO=0
 VER_PASSWORD=0
 for arg in "$@"; do
   case "$arg" in
     --check) SOLO_COMPROBAR=1 ;;
     --password|--contrasena|--contraseña) VER_PASSWORD=1 ;;
-    --service|--install-service) COMO_SERVICIO=1 ;;
-    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --foreground|--fg|--primer-plano) EN_PRIMER_PLANO=1 ;;
+    # Ya no hace falta: es lo que hace ./setup.sh a secas. Se acepta en
+    # silencio para no romper a quien lo tenga escrito en una nota o un alias.
+    --service|--install-service) ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "opción desconocida: $arg (usa --help)"; exit 1 ;;
   esac
 done
@@ -258,11 +263,39 @@ fi
 
 # ---------- 5. arrancar ----------
 titulo "5 · Arrancando"
-if [ "$COMO_SERVICIO" = 1 ]; then
-  nota "se instalará como servicio: arrancará solo al encender el equipo"
+
+# Como servicio por defecto, y en primer plano solo si se pide.
+#
+# Antes era al revés y era la elección equivocada. Dejarlo en primer plano ata
+# el servidor a la terminal que lo lanzó: cierras esa ventana y el iPad pierde
+# el editor, el terminal y los notebooks de golpe, sin ninguna pista de por qué.
+# Y un equipo que sirve a otro dispositivo se espera que siga sirviendo cuando
+# nadie lo mira — que es justo lo que hace un servicio.
+#
+# `--foreground` conserva el comportamiento de antes, que sigue siendo el bueno
+# para depurar: se ven los registros según salen.
+if [ "$EN_PRIMER_PLANO" = 1 ]; then
+  nota "en primer plano: se para al cerrar esta terminal"
+  nota "para dejarlo permanente:  ./setup.sh"
+  echo ""
+  exec ./serve.sh
+fi
+
+# systemd de usuario no está en todas partes: WSL sin systemd es el caso
+# habitual. Si no lo hay, no se puede instalar el servicio, así que se avisa y
+# se sigue en primer plano en lugar de fallar.
+SIRVE_SERVICIO=1
+if [ "$PLATAFORMA" = linux ] && ! systemctl --user show-environment >/dev/null 2>&1; then
+  SIRVE_SERVICIO=0
+fi
+
+if [ "$SIRVE_SERVICIO" = 1 ]; then
+  nota "se instala como servicio: sigue vivo al cerrar la terminal y arranca al encender"
   exec ./serve.sh --install-service
 else
-  nota "para que arranque solo al encender:  ./setup.sh --service"
+  falta "aquí no hay systemd de usuario, no puedo dejarlo permanente"
+  nota "en WSL: pon systemd=true en /etc/wsl.conf, y luego  wsl --shutdown"
+  nota "mientras tanto arranca en primer plano: NO cierres esta terminal"
   echo ""
   exec ./serve.sh
 fi
