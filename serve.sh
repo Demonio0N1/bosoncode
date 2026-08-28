@@ -346,6 +346,44 @@ cfg.setdefault("security.workspace.trust.untrustedFiles", "open")
 cfg.setdefault("extensions.ignoreRecommendations", True)
 cfg.setdefault("window.autoDetectColorScheme", True)
 p.write_text(json.dumps(cfg, indent=2))
+
+# ---------- ⌃+ y ⌃− para el tamaño de letra ----------
+#
+# En el VS Code de escritorio esas teclas hacen zoom de la VENTANA, así que en
+# la versión web no están asignadas a nada: pulsarlas no hacía absolutamente
+# nada. Lo que sí existe en la web es el zoom del EDITOR
+# —`editor.action.fontZoom*`—, que solo cambia el tamaño del texto y es lo que
+# uno quiere en una tableta.
+#
+# Se dejan las dos formas de la tecla: en un teclado la misma posición manda
+# `=` o `+` según se pulse Mayúsculas, y quien busca «hacer la letra más
+# grande» la pulsa de las dos maneras sin pensarlo.
+k = p.parent / "keybindings.json"
+try:
+    atajos = json.loads(k.read_text()) if k.exists() else []
+    if not isinstance(atajos, list):
+        atajos = []
+except Exception:
+    k.with_suffix(".json.bak").write_text(k.read_text())
+    print("⚠ keybindings.json no era JSON válido; copia en keybindings.json.bak")
+    atajos = []
+
+nuestros = [
+    {"key": "ctrl+=",     "command": "editor.action.fontZoomIn"},
+    {"key": "ctrl+shift+=", "command": "editor.action.fontZoomIn"},
+    {"key": "ctrl+-",     "command": "editor.action.fontZoomOut"},
+    {"key": "ctrl+numpad_add",      "command": "editor.action.fontZoomIn"},
+    {"key": "ctrl+numpad_subtract", "command": "editor.action.fontZoomOut"},
+    {"key": "ctrl+0",     "command": "editor.action.fontZoomReset"},
+]
+# Lo que el usuario haya puesto para esas teclas manda: solo se añade lo que
+# falta, y nunca se pisa una asignación suya.
+existentes = {(a.get("key"), a.get("command")) for a in atajos if isinstance(a, dict)}
+teclas_suyas = {a.get("key") for a in atajos if isinstance(a, dict)}
+nuevos = [a for a in nuestros
+          if (a["key"], a["command"]) not in existentes and a["key"] not in teclas_suyas]
+if nuevos:
+    k.write_text(json.dumps(atajos + nuevos, indent=2))
 PYEOF
 fi
 
