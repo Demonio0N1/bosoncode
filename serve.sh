@@ -207,7 +207,11 @@ show_password() {
 APP_ENVOLTURA="$HOME/Applications/BosonCode Server.app"
 
 construir_envoltura() {
-  command -v clang    >/dev/null 2>&1 || return 1
+  # No basta con preguntar por clang: /usr/bin/clang existe en todos los Mac,
+  # pero sin las herramientas de línea de comandos es solo un intermediario que
+  # abre el diálogo de instalación del sistema. Preguntar por ellas primero
+  # evita ese susto en mitad de la instalación.
+  xcode-select -p     >/dev/null 2>&1 || return 1
   command -v codesign >/dev/null 2>&1 || return 1
 
   local tmp
@@ -334,7 +338,7 @@ EOF
     else
       PROGRAMA="$SCRIPT_PATH"
       ENVOLTURA=0
-      echo "⚠ No pude crear la aplicación (falta clang o codesign)."
+      echo "⚠ No pude crear la aplicación: faltan las herramientas de desarrollo."
       echo "  El servidor funciona igual, pero para leer Escritorio, Documentos"
       echo "  o Descargas habrá que dar el permiso a /bin/bash, que es mucho más"
       echo "  amplio. Instala las herramientas: xcode-select --install"
