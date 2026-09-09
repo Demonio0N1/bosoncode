@@ -183,6 +183,100 @@ show_password() {
   echo ""
 }
 
+# ---------- envoltura .app, para poder acotar el permiso de disco ----------
+#
+# macOS protege ~/Desktop, ~/Documents y ~/Downloads aparte del resto del disco,
+# y el permiso se concede a un ejecutable concreto. El responsable de todo lo
+# que hace el servidor es el intérprete que arranca launchd —/bin/bash—, así que
+# concederlo ahí se lo da a CUALQUIER script de shell del equipo.
+#
+# Una aplicación propia acota el permiso a este servidor. Con dos condiciones
+# que no son opcionales:
+#
+#   · El ejecutable principal tiene que ser un binario compilado. Si fuera un
+#     script con un .app alrededor, el sistema volvería a atribuir el acceso al
+#     intérprete y estaríamos donde empezamos.
+#   · Hay que firmarlo, aunque sea sin identidad. El permiso se guarda contra la
+#     firma; sin ella el sistema no tiene a qué asociarlo.
+#
+# El binario no hace nada más que ejecutar ~/.ivscode/serve.sh, y es a propósito
+# que no haga nada más: mientras no cambie, actualizar el servidor no invalida
+# el permiso ya concedido. Por eso el LaunchAgent apunta siempre a la copia de
+# ~/.ivscode y no al script del repositorio.
+
+APP_ENVOLTURA="$HOME/Applications/BosonCode Server.app"
+
+construir_envoltura() {
+  command -v clang    >/dev/null 2>&1 || return 1
+  command -v codesign >/dev/null 2>&1 || return 1
+
+  local tmp
+  tmp="$(mktemp -d)" || return 1
+
+  cat > "$tmp/main.c" <<'FUENTE'
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+/* Arranca ~/.ivscode/serve.sh heredando el entorno que ponga el LaunchAgent. */
+int main(void) {
+    const char *home = getenv("HOME");
+    if (home == NULL) {
+        fputs("BosonCode: no hay HOME en el entorno\n", stderr);
+        return 1;
+    }
+
+    char script[4096];
+    int n = snprintf(script, sizeof script, "%s/.ivscode/serve.sh", home);
+    if (n < 0 || n >= (int)sizeof script) {
+        fputs("BosonCode: la ruta de serve.sh no cabe\n", stderr);
+        return 1;
+    }
+
+    execl("/bin/bash", "bash", script, (char *)NULL);
+    perror("BosonCode: no pude ejecutar serve.sh");
+    return 1;
+}
+FUENTE
+
+  rm -rf "$APP_ENVOLTURA"
+  mkdir -p "$APP_ENVOLTURA/Contents/MacOS"
+
+  if ! clang -O2 -arch "$(uname -m)" \
+             -o "$APP_ENVOLTURA/Contents/MacOS/BosonCodeServer" "$tmp/main.c" 2>/dev/null; then
+    rm -rf "$tmp" "$APP_ENVOLTURA"
+    return 1
+  fi
+  rm -rf "$tmp"
+
+  # LSBackgroundOnly: es un servicio, no debe aparecer en el Dock ni robar el
+  # foco al arrancar la sesión.
+  cat > "$APP_ENVOLTURA/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>BosonCodeServer</string>
+  <key>CFBundleIdentifier</key><string>com.garyguaman.bosoncode.server</string>
+  <key>CFBundleName</key><string>BosonCode Server</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSBackgroundOnly</key><true/>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+</dict>
+</plist>
+PLIST
+
+  if ! codesign --force --sign - \
+                --identifier com.garyguaman.bosoncode.server \
+                "$APP_ENVOLTURA" >/dev/null 2>&1; then
+    rm -rf "$APP_ENVOLTURA"
+    return 1
+  fi
+  return 0
+}
+
 # ---------- --install-service: dejarlo permanente y salir ----------
 if [ "$INSTALL_SERVICE" = 1 ]; then
   SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
@@ -219,19 +313,32 @@ EOF
     echo "  Logs:      journalctl --user -u ivscode -f"
     echo "  Reiniciar: systemctl --user restart ivscode"
   else
-    # macOS protege ~/Desktop, ~/Documents y ~/Downloads: un LaunchAgent que
-    # apunte ahí arranca con "Operation not permitted" y muere en bucle, sin
-    # más pista que el log. Si el script vive en una de esas carpetas, se
-    # instala una copia en ~/.ivscode, que sí es accesible.
-    case "$SCRIPT_PATH" in
-      "$HOME/Desktop/"*|"$HOME/Documents/"*|"$HOME/Downloads/"*)
-        cp "$SCRIPT_PATH" "$IVSCODE_DIR/serve.sh"
-        chmod +x "$IVSCODE_DIR/serve.sh"
-        SCRIPT_PATH="$IVSCODE_DIR/serve.sh"
-        echo "→ Copiado a $SCRIPT_PATH (macOS no deja que un servicio lea esa carpeta)."
-        echo "  Si actualizas el repositorio, vuelve a ejecutar --install-service."
-        ;;
-    esac
+    # Siempre se instala desde una copia en ~/.ivscode, no desde donde esté el
+    # repositorio. Dos motivos: si el script vive en Desktop, Documents o
+    # Downloads, un LaunchAgent que apunte ahí arranca con "Operation not
+    # permitted" y muere en bucle sin más pista que el log; y la envoltura .app
+    # apunta a una ruta fija, que es lo que hace que el permiso de disco
+    # sobreviva a las actualizaciones.
+    if [ "$SCRIPT_PATH" != "$IVSCODE_DIR/serve.sh" ]; then
+      cp "$SCRIPT_PATH" "$IVSCODE_DIR/serve.sh"
+      chmod +x "$IVSCODE_DIR/serve.sh"
+      SCRIPT_PATH="$IVSCODE_DIR/serve.sh"
+      echo "→ Instalado desde una copia en $SCRIPT_PATH"
+      echo "  Si actualizas el repositorio, vuelve a ejecutar --install-service."
+    fi
+
+    if construir_envoltura; then
+      PROGRAMA="$APP_ENVOLTURA/Contents/MacOS/BosonCodeServer"
+      ENVOLTURA=1
+      echo "→ Aplicación creada en $APP_ENVOLTURA"
+    else
+      PROGRAMA="$SCRIPT_PATH"
+      ENVOLTURA=0
+      echo "⚠ No pude crear la aplicación (falta clang o codesign)."
+      echo "  El servidor funciona igual, pero para leer Escritorio, Documentos"
+      echo "  o Descargas habrá que dar el permiso a /bin/bash, que es mucho más"
+      echo "  amplio. Instala las herramientas: xcode-select --install"
+    fi
     PLIST="$HOME/Library/LaunchAgents/com.ivscode.serve.plist"
     mkdir -p "$HOME/Library/LaunchAgents"
     cat > "$PLIST" <<EOF
@@ -241,7 +348,7 @@ EOF
 <dict>
   <key>Label</key><string>com.ivscode.serve</string>
   <key>ProgramArguments</key>
-  <array><string>$SCRIPT_PATH</string></array>
+  <array><string>$PROGRAMA</string></array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>NAME</key><string>$NAME</string>
@@ -260,6 +367,23 @@ EOF
     launchctl unload "$PLIST" 2>/dev/null || true
     launchctl load -w "$PLIST"
     echo "✔ LaunchAgent instalado y corriendo (logs: ~/.ivscode/serve.log)"
+    if [ "$ENVOLTURA" = 1 ]; then
+      echo ""
+      echo "  ┌─ Para entrar en Escritorio, Documentos y Descargas ──────────────"
+      echo "  │  macOS protege esas tres carpetas y el permiso se da a mano."
+      echo "  │  Se concede una sola vez, aquí en el Mac:"
+      echo "  │"
+      echo "  │   1. Ajustes del Sistema → Privacidad y seguridad"
+      echo "  │   2. Acceso total al disco → botón +"
+      echo "  │   3. Pulsa ⇧⌘G y pega:  ~/Applications"
+      echo "  │   4. Elige «BosonCode Server» y deja el interruptor encendido"
+      echo "  │   5. Vuelve aquí y ejecuta:"
+      echo "  │        launchctl kickstart -k gui/\$(id -u)/com.ivscode.serve"
+      echo "  │"
+      echo "  │  El permiso queda en esta aplicación, no en todo el sistema."
+      echo "  │  Sin darlo el servidor funciona: solo esas tres carpetas fallan."
+      echo "  └──────────────────────────────────────────────────────────────────"
+    fi
     show_password
     bosoncode_block
   fi

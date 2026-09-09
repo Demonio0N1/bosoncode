@@ -141,6 +141,17 @@ if [ "$DESINSTALAR" = 1 ]; then
     else
       nota "no había LaunchAgent"
     fi
+
+    APP="$HOME/Applications/BosonCode Server.app"
+    if [ -d "$APP" ]; then
+      rm -rf "$APP"
+      ok "aplicación quitada"
+      # El permiso de disco no se puede retirar desde aquí: la lista de Ajustes
+      # es del sistema y solo la toca su dueño. Se avisa en vez de dejar una
+      # entrada muerta ahí para siempre.
+      nota "queda su entrada en Ajustes → Privacidad → Acceso total al disco;"
+      nota "puedes borrarla tú con el botón −"
+    fi
   fi
 
   # `serve reset` necesita el mismo permiso que `serve`: si no lo hay, no es un
