@@ -759,62 +759,6 @@ echo ""
 echo "✔ Máquina configurada. Recarga la ventana de VS Code y elige el kernel."
 SETUPEOF
   chmod +x "$IVSCODE_DIR/setup-machine.sh"
-# ---------- backend de matplotlib que manda las gráficas al iPad ----------
-#
-# Un script que corre aquí no tiene pantalla. `plt.show()` intenta abrir una
-# ventana de escritorio que no existe: o falla, o no hace nada, y no queda nada
-# que enseñar.
-#
-# matplotlib tiene un punto de extensión para esto —el backend— y es el camino
-# soportado, no un parche: no se toca matplotlib, no se reescribe ningún script
-# y, si matplotlib no está instalado, este archivo ni se carga.
-mkdir -p "$IVSCODE_DIR/pyplots" "$IVSCODE_DIR/plots"
-cat > "$IVSCODE_DIR/pyplots/ivscode_mpl.py" <<'PYEOF'
-"""Backend de matplotlib: en vez de dibujar en pantalla, guarda para el iPad."""
-import os
-import time
-
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.backend_bases import FigureManagerBase, _Backend
-
-PLOTS = os.path.expanduser("~/.ivscode/plots")
-
-
-def _destino(indice):
-    os.makedirs(PLOTS, exist_ok=True)
-    # El nombre lleva la hora y el numero de figura: ordena solo y dos figuras
-    # del mismo script no se pisan.
-    marca = time.strftime("%Y%m%d-%H%M%S")
-    return os.path.join(PLOTS, "%s-%02d.png" % (marca, indice))
-
-
-def _guardar(fig, indice):
-    try:
-        # bbox_inches recorta el margen vacio, que en una pantalla pequena es
-        # la diferencia entre leer los ejes y no leerlos.
-        fig.savefig(_destino(indice), dpi=144, bbox_inches="tight")
-    except Exception:
-        # Una grafica que no se puede guardar no debe tumbar el script que la
-        # produjo: es una comodidad, no el trabajo del usuario.
-        pass
-
-
-@_Backend.export
-class _BackendIvscode(_Backend):
-    FigureCanvas = FigureCanvasAgg
-    FigureManager = FigureManagerBase
-
-    @staticmethod
-    def show(*args, **kwargs):
-        from matplotlib import pyplot as plt
-
-        for i, num in enumerate(plt.get_fignums(), start=1):
-            _guardar(plt.figure(num), i)
-        # Como en una sesion normal: show() consume las figuras. Sin esto, la
-        # siguiente llamada volveria a guardar las de antes.
-        plt.close("all")
-PYEOF
-
   cat > "$IVSCODE_DIR/manager.py" <<'PYEOF'
 import fcntl, hmac, json, os, pty, re, select, shlex, shutil, signal, socket
 import struct, subprocess, sys, termios, threading, time, urllib.parse
@@ -1011,71 +955,6 @@ def _tmux_conf():
 
 # portapapeles de archivos entre sesiones (host y maquinas del mismo PC)
 STAGE = os.path.expanduser("~/.ivscode/clipboard")
-
-# ---------- graficas de Python ----------
-#
-# Un script que corre aqui no tiene pantalla: plt.show() intenta abrir una
-# ventana de escritorio que no existe, y o falla o no hace nada. No hay ninguna
-# ventana que llevarle al iPad.
-#
-# Lo que si hay es el punto de extension de matplotlib: el backend. Con
-# MPLBACKEND apuntando al nuestro, matplotlib llama a NUESTRO show(), que en vez
-# de dibujar guarda la figura aqui. El iPad vigila esta carpeta.
-#
-# Es la via soportada y no un parche: no se toca matplotlib, no se reescribe
-# ningun script, y si matplotlib no esta instalado esto no se carga siquiera.
-PLOTS = os.path.expanduser("~/.ivscode/plots")
-
-
-def plots_list(after=0.0):
-    """Las graficas mas nuevas que `after`, de la mas antigua a la mas nueva."""
-    try:
-        nombres = os.listdir(PLOTS)
-    except OSError:
-        return []
-    salida = []
-    for nombre in nombres:
-        if nombre.startswith("."):
-            continue
-        ruta = os.path.join(PLOTS, nombre)
-        try:
-            m = os.path.getmtime(ruta)
-        except OSError:
-            continue
-        if m > after:
-            salida.append({"name": nombre, "path": ruta, "mtime": m,
-                           "size": os.path.getsize(ruta)})
-    salida.sort(key=lambda e: e["mtime"])
-    return salida
-
-
-def plots_wait(after, segundos):
-    """Espera a que aparezca una grafica nueva, o se rinde.
-
-    Es espera larga y no sondeo: el iPad pregunta una vez y se queda callado
-    hasta que hay algo. Sondear cada dos segundos con la pantalla encendida
-    gastaria bateria para no decir nada el 99% de las veces.
-    """
-    fin = time.time() + max(1.0, min(float(segundos), 60.0))
-    while True:
-        nuevas = plots_list(after)
-        if nuevas or time.time() >= fin:
-            return nuevas
-        time.sleep(0.4)
-
-
-def plots_purge(maximo=60):
-    """Deja solo las ultimas. Si no, la carpeta crece sin fin."""
-    try:
-        entradas = sorted(plots_list(0.0), key=lambda e: e["mtime"])
-    except OSError:
-        return
-    for e in entradas[:-maximo]:
-        try:
-            os.unlink(e["path"])
-        except OSError:
-            pass
-
 
 def clip_copy(path, machine):
     machine = valid_machine(machine)
@@ -2163,17 +2042,6 @@ class Handler(BaseHTTPRequestHandler):
                 q = urllib.parse.parse_qs(parsed.query)
                 self._send(200, sim_run_status((q.get("job") or [""])[0],
                                                int((q.get("from") or ["0"])[0])))
-            elif parsed.path == "/plots/wait":
-                # Espera larga: devuelve en cuanto haya una grafica nueva, o al
-                # agotarse el plazo con la lista vacia.
-                q = urllib.parse.parse_qs(parsed.query)
-                after = float((q.get("after") or ["0"])[0] or 0)
-                espera = float((q.get("timeout") or ["25"])[0] or 25)
-                self._send(200, {"plots": plots_wait(after, espera)})
-            elif parsed.path == "/plots/list":
-                q = urllib.parse.parse_qs(parsed.query)
-                after = float((q.get("after") or ["0"])[0] or 0)
-                self._send(200, {"plots": plots_list(after)})
             elif parsed.path == "/fs/list":
                 q = urllib.parse.parse_qs(parsed.query)
                 machine = (q.get("machine") or [""])[0]
@@ -2324,41 +2192,6 @@ class Handler(BaseHTTPRequestHandler):
 # crudos en ambos sentidos. Resize: frame de 10 bytes 0x00 'R' cccc rrrr.
 TERM_PORT = 39600
 
-def _tmux_env_args():
-    """`-e VAR=valor` por cada variable, para las sesiones NUEVAS.
-
-    Hace falta porque tmux es un servidor: una sesion nueva hereda el entorno
-    de cuando arranco EL SERVIDOR, no el del proceso que la pide. Exportar la
-    variable antes de lanzar tmux solo la veia el cliente, y el shell nacia sin
-    ella — que es por lo que las graficas no llegaban a guardarse.
-    """
-    args = []
-    for nombre, valor in plots_env():
-        args += ["-e", "%s=%s" % (nombre, valor)]
-    return args
-
-
-def plots_env():
-    """Entorno para que las graficas de Python lleguen al iPad.
-
-    Devuelve pares listos para `tmux new-session -e`, o vacio si no hay nada
-    que instalar.
-    """
-    carpeta = os.path.expanduser("~/.ivscode/pyplots")
-    if not os.path.isdir(carpeta):
-        return []
-    pares = []
-    # Un MPLBACKEND puesto a mano se respeta: quien elige backend sabe lo que
-    # hace y no hay que pisarselo.
-    if not os.environ.get("MPLBACKEND"):
-        pares.append(("MPLBACKEND", "module://ivscode_mpl"))
-    anterior = os.environ.get("PYTHONPATH", "")
-    if carpeta not in anterior.split(os.pathsep):
-        pares.append(("PYTHONPATH",
-                      carpeta + os.pathsep + anterior if anterior else carpeta))
-    return pares
-
-
 def _term_client(client):
     pid = None
     master = None
@@ -2426,25 +2259,19 @@ def _term_client(client):
                 ssh_cmd.append(ssh_target)
                 if shutil.which("tmux"):
                     _tmux_conf()
-                    argv = (["tmux", "-f", TMUX_CONF, "new-session", "-A"]
-                            + _tmux_env_args() + ["-s", tmux_name] + ssh_cmd)
+                    argv = ["tmux", "-f", TMUX_CONF, "new-session", "-A",
+                            "-s", tmux_name] + ssh_cmd
                 else:
                     argv = ssh_cmd
             elif shutil.which("tmux"):
                 _tmux_conf()
-                argv = (["tmux", "-f", TMUX_CONF, "new-session", "-A"]
-                        + _tmux_env_args() + ["-s", tmux_name])
+                argv = ["tmux", "-f", TMUX_CONF, "new-session", "-A", "-s", tmux_name]
             else:
                 argv = [os.environ.get("SHELL", "/bin/bash"), "-l"]
         pid, master = pty.fork()
         if pid == 0:
             os.environ["TERM"] = "xterm-256color"
             os.environ["LANG"] = os.environ.get("LANG", "C.UTF-8")
-            # Sin tmux el shell nace de aqui y basta con el entorno. Con tmux
-            # NO basta, y por eso ademas van por `-e` en la linea de ordenes:
-            # ver `_tmux_env_args`.
-            for nombre, valor in plots_env():
-                os.environ[nombre] = valor
             os.execvp(argv[0], argv)
             os._exit(1)
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
