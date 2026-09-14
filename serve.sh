@@ -31,6 +31,24 @@ while [ $# -gt 0 ]; do
 done
 
 # ---------- detectar plataforma ----------
+# Ejecuta algo con límite de tiempo, sin depender de `timeout`.
+#
+# `timeout` es de coreutils y en macOS no viene. Y hace falta en los dos sitios:
+# una orden que se cuelga dentro de un servicio no da la cara, solo deja de
+# avanzar.
+con_limite() {
+  local segundos="$1"; shift
+  "$@" &
+  local hijo=$!
+  ( sleep "$segundos"; kill -TERM "$hijo" 2>/dev/null ) &
+  local vigia=$!
+  wait "$hijo" 2>/dev/null
+  local rc=$?
+  kill "$vigia" 2>/dev/null
+  wait "$vigia" 2>/dev/null || true
+  return "$rc"
+}
+
 case "$(uname -s)" in
   Linux)  PLATFORM=linux ;;
   Darwin) PLATFORM=macos ;;
@@ -614,16 +632,31 @@ if [ -n "$TS" ]; then
   # tailscaled puede responder al status y no aceptar todavia un serve: se
   # reintenta unas cuantas veces antes de darlo por imposible.
   tries=0
-  while [ -n "$TS_DNS" ] && [ -z "$CANON_URL" ] && [ "$tries" -lt 10 ]; do
-    if "$TS" serve --bg --https="$HTTPS_PORT" "http://127.0.0.1:$PORT" >/dev/null 2>&1; then
-      CANON_URL="https://${TS_DNS}:${HTTPS_PORT}"
-    else
-      tries=$((tries + 1))
-      sleep 3
-    fi
+  SERVE_ERR=""
+  while [ -n "$TS_DNS" ] && [ -z "$CANON_URL" ] && [ "$tries" -lt 4 ]; do
+    # Con límite de tiempo, y no a secas.
+    #
+    # `serve --bg` devuelve enseguida cuando todo va bien, pero si la tailnet
+    # no tiene los certificados HTTPS activados se queda esperando a uno que no
+    # va a llegar. Sin límite, cada reintento cuelga y el arranque entero se
+    # para ahí: ni HTTPS, ni gestor, ni anuncio. Visto en un equipo real, con el
+    # servicio matando el tailscale colgado a SIGKILL al reiniciar.
+    SERVE_ERR="$(con_limite 25 "$TS" serve --bg --https="$HTTPS_PORT" \
+                                   "http://127.0.0.1:$PORT" 2>&1)" \
+      && CANON_URL="https://${TS_DNS}:${HTTPS_PORT}" \
+      || { tries=$((tries + 1)); sleep 3; }
   done
   if [ -z "$CANON_URL" ]; then
-    echo "⚠ No pude configurar tailscale serve (¿falta 'tailscale set --operator=$USER'?)."
+    # El motivo REAL, no una conjetura. Antes siempre culpaba al operador, que
+    # es solo una de las causas — y la menos probable si ya se ha configurado.
+    if [ -n "$SERVE_ERR" ]; then
+      echo "⚠ tailscale serve no pudo publicar. Dijo:"
+      printf '%s\n' "$SERVE_ERR" | head -4 | sed 's/^/    /'
+    else
+      echo "⚠ tailscale serve se quedó esperando y no publicó nada."
+      echo "    Suele ser que la tailnet no tiene certificados HTTPS activados:"
+      echo "    https://login.tailscale.com/admin/dns  ·  MagicDNS y HTTPS Certificates"
+    fi
     echo "  Sin HTTPS no hay notebooks, NI gestor de máquinas, NI terminal (⌃⌥T)."
   fi
 fi
