@@ -122,6 +122,13 @@ mano o algo falla.
 - Linux o macOS. Sin root y sin Docker para lo básico.
 - [Tailscale](https://tailscale.com/download) instalado y con sesión iniciada en
   el equipo **y** en el iPad.
+- **La misma cuenta de Tailscale en los dos.** No basta con que ambos tengan
+  Tailscale: dos cuentas son dos redes privadas distintas y no se ven entre sí.
+  Si el equipo es de un trabajo y el iPad es tuyo, comparte la máquina desde el
+  panel de Tailscale (*Share*) en vez de mover ninguno de los dos de cuenta.
+- **Serve habilitado en esa cuenta.** Viene apagado de fábrica, así que si la
+  cuenta es nueva hay que activarlo una vez. `setup.sh` lo detecta y te da el
+  enlace; ver abajo.
 
 ### 1. Tailscale
 
@@ -142,6 +149,28 @@ sudo tailscale set --operator=$USER
 dependen de Service Workers, y los navegadores se niegan a registrarlos sobre
 HTTP a secas. `serve.sh` usa `tailscale serve` para obtener un certificado real
 para tu nombre `*.ts.net`.
+
+#### Habilitar Serve la primera vez
+
+`tailscale serve` viene **deshabilitado** en toda cuenta nueva. La primera vez
+que instales esto en una cuenta recién creada verás algo así:
+
+```
+Serve is not enabled on your tailnet.
+To enable, visit:
+   https://login.tailscale.com/f/serve?node=…
+```
+
+Ese enlace lo genera el propio `tailscale` para *ese* equipo. Ábrelo, habilítalo
+y ya está: es un permiso de la **cuenta**, no del equipo, y se concede una sola
+vez para todas tus máquinas.
+
+`setup.sh` reconoce el caso, te enseña el enlace, espera a que lo pulses y
+reintenta solo. No puede hacerlo por ti: es un botón en el navegador.
+
+Si además ves `Access denied: serve config denied`, falta el operador —
+`setup.sh` lo configura él mismo, pero a mano es `sudo tailscale set
+--operator=$USER`.
 
 ### 2. Arrancar el servidor
 
@@ -432,6 +461,32 @@ cambien.
 ---
 
 ## Si algo va mal
+
+**El iPad no ve el equipo, ni aunque escribas la dirección a mano.** Lo primero
+que hay que descartar es que estén en **la misma tailnet**. Mira el nombre en
+los dos:
+
+```bash
+tailscale status --json | grep DNSName   # en el equipo
+```
+
+Si los sufijos no coinciden —`tailXXXX.ts.net` distinto— son dos redes privadas
+separadas y no hay dirección que valga. Comparte la máquina entre cuentas o pon
+las dos en la misma.
+
+**No hay dirección `https://`.** Comprueba qué publica el equipo:
+
+```bash
+tailscale serve status
+```
+
+Si sale vacío, Serve no está habilitado en esa cuenta: ver *Habilitar Serve la
+primera vez*, más arriba. Si sale la línea `https://…:9443`, la dirección para
+la app es exactamente esa.
+
+**No uses la IP de Tailscale en la app.** El certificado se emite para el nombre
+DNS, no para la IP, así que `https://100.x.y.z:9443` siempre falla. Tiene que
+ser `https://tu-equipo.tailXXXX.ts.net:9443`.
 
 **No se descubre el equipo.** El mDNS necesita quien lo publique: `avahi-daemon`
 en Linux o el `dns-sd` que trae macOS. `serve.sh` recurre a D-Bus y a `zeroconf`
