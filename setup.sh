@@ -101,6 +101,72 @@ if [ "${VER_PASSWORD:-0}" = 1 ]; then
   exit 0
 fi
 
+# Ejecuta algo con límite de tiempo, sin depender de `timeout`, que es de
+# coreutils y en macOS no viene. Hace falta porque `tailscale serve` se cuelga
+# esperando un certificado cuando la tailnet no lo va a emitir.
+con_limite() {
+  local segundos="$1"; shift
+  "$@" &
+  local hijo=$!
+  ( sleep "$segundos"; kill -TERM "$hijo" 2>/dev/null ) &
+  local vigia=$!
+  wait "$hijo" 2>/dev/null
+  local rc=$?
+  kill "$vigia" 2>/dev/null
+  wait "$vigia" 2>/dev/null || true
+  return "$rc"
+}
+
+# Deja el HTTPS de Tailscale publicando, guiando lo que no se puede automatizar.
+#
+# Habilitar Serve es un permiso de la CUENTA y se concede desde el navegador:
+# ningún script puede pulsar ese botón. Lo que sí puede es reconocer el caso,
+# dar el enlace exacto —que tailscale genera para este equipo— y esperar a que
+# se haga para reintentar solo, en vez de rendirse y dejar el servidor a medias.
+#
+# Se descubrió instalando en una tailnet recién creada: Serve viene apagado de
+# fábrica, así que le pasa a TODO el que empieza.
+asegurar_serve() {
+  local intentos=0 salida enlace
+  while [ "$intentos" -lt 4 ]; do
+    if salida="$(con_limite 25 "$TS" serve --bg --https=9443 \
+                             "http://127.0.0.1:${PUERTO_EDITOR:-8443}" 2>&1)"; then
+      ok "publicando por HTTPS"
+      return 0
+    fi
+
+    if printf '%s' "$salida" | grep -qi "serve is not enabled"; then
+      enlace="$(printf '%s' "$salida" \
+        | sed -n 's#.*\(https://login\.tailscale\.com/f/serve[^ ]*\).*#\1#p' | head -1)"
+      falta "Serve no está habilitado en esta cuenta de Tailscale"
+      nota "es un ajuste de la CUENTA, no de este equipo, y es un clic:"
+      [ -n "$enlace" ] && printf '\n      %s\n\n' "$enlace"
+      if [ -t 0 ] && [ -e /dev/tty ]; then
+        printf '    Ábrelo, habilítalo y pulsa Intro para reintentar (Ctrl-C para dejarlo): '
+        read -r _ </dev/tty || return 1
+      else
+        nota "vuelve a ejecutar ./setup.sh cuando lo hayas habilitado"
+        return 1
+      fi
+
+    elif printf '%s' "$salida" | grep -qiE "access denied|operator"; then
+      falta "tailscale no deja configurar serve a este usuario"
+      nota "se arregla una sola vez:  sudo tailscale set --operator=$(id -un)"
+      sudo "$TS" set --operator="$(id -un)" || return 1
+      ok "operador configurado"
+
+    else
+      falta "tailscale serve no pudo publicar"
+      printf '%s\n' "$salida" | head -4 | sed 's/^/      /'
+      nota "si insiste, revisa MagicDNS y HTTPS Certificates:"
+      nota "  https://login.tailscale.com/admin/dns"
+      return 1
+    fi
+    intentos=$((intentos + 1))
+  done
+  return 1
+}
+
 case "$(uname -s)" in
   Darwin) PLATAFORMA=macos ;;
   Linux)  PLATAFORMA=linux ;;
@@ -397,11 +463,20 @@ else
   gris "  · sin adb: no habrá Android (ver README si lo quieres)"
 fi
 
+titulo "5 · Publicación HTTPS"
+if [ "$SOLO_COMPROBAR" != 1 ]; then
+  URL_TS="$("$TS" serve status 2>/dev/null | sed -n 's#^\(https://[^ ]*\).*#\1#p' | head -1)"
+  if [ -n "$URL_TS" ]; then
+    ok "ya publicaba · $URL_TS"
+  else
+    asegurar_serve || nota "seguiré sin HTTPS: el editor funcionará, lo demás no"
+  fi
+fi
+
 if [ "$SOLO_COMPROBAR" = 1 ]; then
   # La pregunta que trae a cualquiera a `--check` es «¿puedo ya añadir este
-  # equipo, y con qué dirección?». Diagnosticar cuatro pasos y callar justo esa
-  # respuesta deja al usuario buscando en otro sitio lo único que quería.
-  titulo "5 · ¿Se puede añadir ya en la app?"
+  # equipo, y con qué dirección?». Diagnosticar y callar justo esa respuesta
+  # deja al usuario buscando en otro sitio lo único que quería.
   URL_TS="$("$TS" serve status 2>/dev/null | sed -n 's#^\(https://[^ ]*\).*#\1#p' | head -1)"
   if [ -n "$URL_TS" ]; then
     ok "sí · $URL_TS"
@@ -425,8 +500,8 @@ if [ "$SOLO_COMPROBAR" = 1 ]; then
   exit 0
 fi
 
-# ---------- 5. arrancar ----------
-titulo "5 · Arrancando"
+# ---------- 6. arrancar ----------
+titulo "6 · Arrancando"
 
 # Como servicio por defecto, y en primer plano solo si se pide.
 #
