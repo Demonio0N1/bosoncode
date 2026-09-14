@@ -73,9 +73,19 @@ if [ "${VER_PASSWORD:-0}" = 1 ]; then
   TS_DNS="${TS_DNS%.}"
   TS_NOMBRE="${TS_DNS%%.*}"
   TS_PUERTO="$("$TS_BIN" serve status 2>/dev/null | sed -n "s#^https://[^:]*:\([0-9]*\).*#\1#p" | head -1)"
-  case "$TS_PUERTO" in ''|*[!0-9]*) TS_PUERTO=9443 ;; esac
+  # Sin puerto publicado no hay dirección que dar. Poner 9443 «por si acaso»
+  # era peor que no poner nada: la app intentaba conectarse a algo que no
+  # existe y el fallo aparecía lejos de su causa.
+  PUBLICADO=1
+  case "$TS_PUERTO" in ''|*[!0-9]*) TS_PUERTO=""; PUBLICADO=0 ;; esac
   printf '\n  \033[1mPara añadir este equipo en BosonCode\033[0m\n\n'
-  [ -n "$TS_DNS" ] && printf '      Dirección:   \033[1;36mhttps://%s:%s\033[0m\n' "$TS_DNS" "$TS_PUERTO"
+  if [ "$PUBLICADO" = 0 ]; then
+    printf '      \033[1;33mDirección:   todavía no hay\033[0m\n'
+    printf '      \033[90mFalta el HTTPS de Tailscale. Ejecuta ./setup.sh --check\n'
+    printf '      para ver cómo arreglarlo; la contraseña de abajo ya vale.\033[0m\n'
+  fi
+  [ -n "$TS_DNS" ] && [ "$PUBLICADO" = 1 ] && \
+    printf '      Dirección:   \033[1;36mhttps://%s:%s\033[0m\n' "$TS_DNS" "$TS_PUERTO"
   [ -n "$TS_NOMBRE" ] && printf '      Nombre:      \033[1;36m%s\033[0m\n' "$TS_NOMBRE"
   printf '      Contraseña:  \033[1;36m%s\033[0m\n\n' "$(cat "$ARCHIVO")"
   printf '  \033[90mEn la app: Añadir → pega la dirección (o solo el nombre) → la contraseña.\n'
@@ -380,6 +390,28 @@ else
 fi
 
 if [ "$SOLO_COMPROBAR" = 1 ]; then
+  # La pregunta que trae a cualquiera a `--check` es «¿puedo ya añadir este
+  # equipo, y con qué dirección?». Diagnosticar cuatro pasos y callar justo esa
+  # respuesta deja al usuario buscando en otro sitio lo único que quería.
+  titulo "5 · ¿Se puede añadir ya en la app?"
+  URL_TS="$("$TS" serve status 2>/dev/null | sed -n 's#^\(https://[^ ]*\).*#\1#p' | head -1)"
+  if [ -n "$URL_TS" ]; then
+    ok "sí · $URL_TS"
+    nota "el nombre y la contraseña:  ./setup.sh --password"
+  else
+    falta "todavía no: falta el HTTPS de Tailscale"
+    nota "sin él la app no tiene notebooks, ni máquinas, ni terminal"
+    nota "prueba:  sudo tailscale set --operator=$(id -un)"
+    if [ "$PLATAFORMA" = linux ] && \
+       systemctl --user is-enabled ivscode.service >/dev/null 2>&1; then
+      nota "y luego:  systemctl --user restart ivscode"
+    else
+      nota "y luego:  ./setup.sh"
+    fi
+    nota "si insiste, activa MagicDNS y HTTPS Certificates en tu cuenta:"
+    nota "  https://login.tailscale.com/admin/dns"
+  fi
+
   titulo "Comprobación terminada"
   gris "No he tocado nada. Ejecuta ./setup.sh sin --check para instalar."
   exit 0
