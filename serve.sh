@@ -444,6 +444,20 @@ fi
 EXT_DIR="$IVSCODE_DIR/extensions"
 mkdir -p "$EXT_DIR"
 INSTALLED=$("$IVSCODE_DIR/current/bin/code-server" --extensions-dir "$EXT_DIR" --list-extensions 2>/dev/null || true)
+# Cuántas faltan, dicho ANTES de empezar.
+#
+# Son tres y pesadas —Jupyter y basedpyright rondan los cientos de megas—, así
+# que la primera vez esto tarda varios minutos sin dar señales. Sin avisar,
+# parece colgado y se interrumpe con Ctrl-C justo a mitad.
+PENDIENTES=0
+for ext in ms-toolsai.jupyter ms-python.python detachhead.basedpyright; do
+  echo "$INSTALLED" | grep -qi "^$ext$" || PENDIENTES=$((PENDIENTES + 1))
+done
+if [ "$PENDIENTES" -gt 0 ]; then
+  echo "→ Faltan $PENDIENTES extensiones. La primera vez tarda varios minutos;"
+  echo "  no hace falta esperar mirando, pero no lo cortes: si lo interrumpes"
+  echo "  se reanuda por donde iba la próxima vez que ejecutes esto."
+fi
 for ext in ms-toolsai.jupyter ms-python.python detachhead.basedpyright; do
   echo "$INSTALLED" | grep -qi "^$ext$" && continue
   echo "→ Instalando extensión ${ext}…"

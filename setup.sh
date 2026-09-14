@@ -222,8 +222,33 @@ if [ -z "$TS" ]; then
     case "${respuesta:-s}" in
       [nN]*) nota "de acuerdo; instálalo a mano y vuelve a ejecutar esto"; exit 1 ;;
     esac
-    curl -fsSL https://tailscale.com/install.sh | sh
+    # `|| true` no es descuido: este script corre con `set -e`, y sin eso el
+    # fallo del instalador lo mataba AQUÍ MISMO, sin imprimir nada. Quien lo
+    # ejecutaba volvía al prompt sin un solo mensaje y sin saber qué pasó.
+    curl -fsSL https://tailscale.com/install.sh | sh || RC_TS=$?
     TS="$(buscar_tailscale || true)"
+
+    if [ -z "$TS" ] && command -v apt-get >/dev/null 2>&1; then
+      # El instalador de Tailscale hace `apt-get update` y aborta si falla.
+      # Y falla por cualquier repositorio ajeno que esté roto —un PPA viejo,
+      # uno que ya no publica Release—, aunque no tenga nada que ver con
+      # Tailscale. Es la causa más común de que esto no funcione, y el mensaje
+      # del instalador no lo dice.
+      roto="$(sudo apt-get update 2>&1 | sed -n "s/^E: The repository '\([^ ]*\).*/\1/p" | head -3)"
+      if [ -n "$roto" ]; then
+        falta "el instalador se detuvo porque apt no puede actualizar"
+        nota "hay repositorios rotos en este equipo, ajenos a BosonCode:"
+        printf '%s\n' "$roto" | sed 's/^/      /'
+        nota "quítalos y vuelve a intentarlo:"
+        nota "  sudo add-apt-repository --remove <el-de-arriba>"
+        nota "o instala Tailscale sin pasar por su script:"
+        nota "  sudo apt install tailscale"
+      else
+        falta "el instalador de Tailscale terminó sin dejarlo instalado"
+        nota "prueba directamente:  sudo apt install tailscale"
+      fi
+      exit 1
+    fi
   fi
 fi
 
