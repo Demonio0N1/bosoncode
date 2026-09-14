@@ -80,7 +80,9 @@ los sortee:
 
 ## Preparar el equipo
 
-### Un solo comando
+### Instalación
+
+Tres líneas en el ordenador:
 
 ```bash
 git clone https://github.com/Demonio0N1/bosoncode.git
@@ -88,10 +90,49 @@ cd bosoncode
 ./setup.sh
 ```
 
-Eso instala Tailscale si falta, comprueba que la sesión esté iniciada, instala
-code-server, deja el servidor instalado como servicio y anuncia el equipo. Al
-terminar imprime la dirección y la contraseña, y tu equipo aparece solo en la
-app.
+Y una cosa en el iPad o el iPhone: instalar
+[Tailscale](https://apps.apple.com/app/tailscale/id1470499037) y entrar con **la
+misma cuenta**. Es el paso que más gente se salta, y su ausencia se manifiesta
+como *«mi equipo no aparece»*, que manda a buscar el problema donde no está.
+
+**Sin `sudo` delante.** El script lo pide él solo en el momento que hace falta.
+Ejecutarlo entero como root dejaría el editor, sus ajustes y los archivos que
+crees siendo de root — y a partir de ahí todo pide permisos que no deberían
+hacer falta.
+
+#### Lo que te va a preguntar
+
+La primera vez, y solo la primera:
+
+1. **Iniciar sesión en Tailscale.** Abre una página, entras con tu cuenta.
+2. **Habilitar Serve**, si la cuenta es nueva. Otro enlace, un clic. Es un
+   permiso de la cuenta y vale para todas tus máquinas.
+3. **La contraseña de `sudo`**, para dejar que tu usuario publique el HTTPS.
+
+Lo demás va solo: descarga code-server, instala las extensiones, publica el
+equipo y lo deja arrancando al encender. La primera vez tarda unos minutos
+descargando; no hace falta mirar, y si lo cortas se reanuda por donde iba.
+
+#### Y al terminar
+
+```
+  ┌─ Para añadir este equipo en BosonCode ──────────────────────────
+  │  Dirección:   https://tu-equipo.tailXXXX.ts.net:9443
+  │  Nombre:      tu-equipo
+  │  Contraseña:  ················
+  └──────────────────────────────────────────────────────────────────
+```
+
+Eso es lo que se escribe en la app. En ZeroSpin: barra lateral → **Add a
+Computer…** → pegas la dirección → la contraseña → **Connect**. Si el iPad está
+en la misma red, el equipo aparece solo en *Found on your network* y solo hay
+que poner la contraseña.
+
+Se guarda en el Llavero y no vuelve a pedirse.
+
+Si pierdes ese recuadro, lo recuperas con `./setup.sh --password`.
+
+---
 
 Queda puesto para siempre: sobrevive a cerrar la terminal y vuelve solo al
 encender el equipo. Es lo que hace falta para que el iPad no se quede sin
@@ -107,12 +148,6 @@ La contraseña se genera una vez y se enseña al arrancar el servidor. Ese momen
 suele quedar semanas antes de que vuelva a hacer falta —añadir otro iPad,
 reinstalar la app—, así que `--password` la imprime cuando quieras. También está
 en `~/.ivscode/password`.
-
-**Instala Tailscale también en el iPad**, con la misma cuenta —
-[App Store](https://apps.apple.com/app/tailscale/id1470499037). Es el paso que
-más gente se salta, y su ausencia se manifiesta como *«mi equipo no aparece»*,
-que manda a buscar el problema donde no está. Las dos puntas o nada: es lo que
-sustituye a abrir un puerto.
 
 El resto de esta sección es lo que hace `setup.sh`, por si prefieres hacerlo a
 mano o algo falla.

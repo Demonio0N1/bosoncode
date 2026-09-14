@@ -77,7 +77,9 @@ code gets around them:
 
 ## Host setup
 
-### One command
+### Installing
+
+Three lines on the computer:
 
 ```bash
 git clone https://github.com/Demonio0N1/bosoncode.git
@@ -85,10 +87,51 @@ cd bosoncode
 ./setup.sh
 ```
 
-That installs Tailscale if it is missing, checks you are signed in, installs
-code-server, installs the backend as a service and announces the machine. When
-it finishes it prints the URL and the password, and your machine shows up in the
-app on its own.
+And one thing on the tablet or phone: install
+[Tailscale](https://apps.apple.com/app/tailscale/id1470499037) and sign in with
+**the same account**. This is the step most people skip, and its absence shows
+up as *"my computer doesn't appear"*, which sends you looking for the problem in
+the wrong place.
+
+**No `sudo` in front.** The script asks for it itself, at the one moment it is
+needed. Running the whole thing as root would leave the editor, its settings and
+every file you create owned by root — and from then on everything asks for
+permissions that should not be needed.
+
+#### What it will ask you
+
+The first time, and only the first time:
+
+1. **Sign in to Tailscale.** It opens a page; you sign in with your account.
+2. **Enable Serve**, if the account is new. Another link, one click. It is a
+   permission on the account and covers all of your machines.
+3. **Your `sudo` password**, so your user is allowed to publish the HTTPS.
+
+The rest runs on its own: it downloads code-server, installs the extensions,
+publishes the machine and leaves it starting on boot. The first run spends a few
+minutes downloading; you do not have to watch it, and if you interrupt it, it
+picks up where it left off.
+
+#### And when it finishes
+
+```
+  ┌─ To add this computer in BosonCode ─────────────────────────────
+  │  Address:    https://your-host.tailXXXX.ts.net:9443
+  │  Name:       your-host
+  │  Password:   ················
+  └──────────────────────────────────────────────────────────────────
+```
+
+That is what you type into the app. In ZeroSpin: sidebar → **Add a Computer…** →
+paste the address → the password → **Connect**. If the tablet is on the same
+network the computer shows up by itself under *Found on your network*, and all
+you need is the password.
+
+It is kept in the Keychain and never asked for again.
+
+If you lose that box, `./setup.sh --password` brings it back.
+
+---
 
 It stays put: it survives closing the terminal and comes back on boot. That is
 what keeps the iPad from losing its server because a window was closed.
