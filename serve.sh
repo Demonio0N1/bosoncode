@@ -649,7 +649,18 @@ if [ -n "$TS" ]; then
   if [ -z "$CANON_URL" ]; then
     # El motivo REAL, no una conjetura. Antes siempre culpaba al operador, que
     # es solo una de las causas — y la menos probable si ya se ha configurado.
-    if [ -n "$SERVE_ERR" ]; then
+    if printf '%s' "$SERVE_ERR" | grep -qi "serve is not enabled"; then
+      # El caso más común en una tailnet nueva, y el más fácil de arreglar: hay
+      # que habilitar Serve una vez, con un enlace que el propio tailscale
+      # genera para ESE equipo. Antes el script mandaba a la página de MagicDNS
+      # y certificados, que es otra cosa — quien seguía el consejo no encontraba
+      # nada que tocar allí.
+      enlace="$(printf '%s' "$SERVE_ERR" | sed -n 's#.*\(https://login\.tailscale\.com/f/serve[^ ]*\).*#\1#p' | head -1)"
+      echo "⚠ Serve no está habilitado en tu tailnet. Es un clic:"
+      [ -n "$enlace" ] && echo "    $enlace"
+      echo "    Ábrelo, habilítalo, y vuelve a arrancar el servidor."
+      echo "    (es un ajuste de la CUENTA de Tailscale, no de este equipo)"
+    elif [ -n "$SERVE_ERR" ]; then
       echo "⚠ tailscale serve no pudo publicar. Dijo:"
       printf '%s\n' "$SERVE_ERR" | head -4 | sed 's/^/    /'
     else
