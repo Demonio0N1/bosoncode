@@ -79,17 +79,25 @@ if [ "${VER_PASSWORD:-0}" = 1 ]; then
   PUBLICADO=1
   case "$TS_PUERTO" in ''|*[!0-9]*) TS_PUERTO=""; PUBLICADO=0 ;; esac
   printf '\n  \033[1mPara añadir este equipo en BosonCode\033[0m\n\n'
-  if [ "$PUBLICADO" = 0 ]; then
-    printf '      \033[1;33mDirección:   todavía no hay\033[0m\n'
-    printf '      \033[90mFalta el HTTPS de Tailscale. Ejecuta ./setup.sh --check\n'
-    printf '      para ver cómo arreglarlo; la contraseña de abajo ya vale.\033[0m\n'
-  fi
-  [ -n "$TS_DNS" ] && [ "$PUBLICADO" = 1 ] && \
+  # Los tres campos SEGUIDOS, y la explicación después.
+  #
+  # La nota de «todavía no hay» se colaba entre la dirección y el nombre, y
+  # partía en dos la única tabla que se viene a leer.
+  if [ "$PUBLICADO" = 1 ] && [ -n "$TS_DNS" ]; then
     printf '      Dirección:   \033[1;36mhttps://%s:%s\033[0m\n' "$TS_DNS" "$TS_PUERTO"
+  else
+    printf '      Dirección:   \033[1;33mtodavía no hay\033[0m\n'
+  fi
   [ -n "$TS_NOMBRE" ] && printf '      Nombre:      \033[1;36m%s\033[0m\n' "$TS_NOMBRE"
   printf '      Contraseña:  \033[1;36m%s\033[0m\n\n' "$(cat "$ARCHIVO")"
-  printf '  \033[90mEn la app: Añadir → pega la dirección (o solo el nombre) → la contraseña.\n'
-  printf '  Se guarda en el Llavero del iPad y no vuelve a pedirse.\033[0m\n\n'
+
+  if [ "$PUBLICADO" = 0 ]; then
+    printf '  \033[90mLa contraseña ya vale; lo que falta es el HTTPS de Tailscale.\n'
+    printf '  Para ver por qué:  ./setup.sh --check\033[0m\n\n'
+  else
+    printf '  \033[90mEn la app: Añadir → pega la dirección (o solo el nombre) → la contraseña.\n'
+    printf '  Se guarda en el Llavero del iPad y no vuelve a pedirse.\033[0m\n\n'
+  fi
   exit 0
 fi
 
