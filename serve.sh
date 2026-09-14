@@ -149,7 +149,19 @@ bosoncode_block() {
     echo "  │"
     echo "  │  Arréglalo así:"
     echo "  │     sudo tailscale set --operator=$(id -un)"
-    echo "  │     ./serve.sh"
+    # Cómo volver a intentarlo depende de si esto ya quedó instalado como
+    # servicio. Decir «./serve.sh» cuando el servicio ya corre levanta un
+    # SEGUNDO servidor peleando por el mismo puerto, y el script se queda
+    # mudo: pasó tal cual en un equipo recién instalado.
+    if [ "$PLATFORM" = linux ] && \
+       systemctl --user is-enabled ivscode.service >/dev/null 2>&1; then
+      echo "  │     systemctl --user restart ivscode"
+    elif [ "$PLATFORM" = macos ] && \
+         [ -f "$HOME/Library/LaunchAgents/com.ivscode.serve.plist" ]; then
+      echo "  │     launchctl kickstart -k gui/\$(id -u)/com.ivscode.serve"
+    else
+      echo "  │     ./serve.sh"
+    fi
     echo "  │"
     echo "  │  Si sigue fallando, activa MagicDNS y HTTPS Certificates en"
     echo "  │  https://login.tailscale.com/admin/dns"
