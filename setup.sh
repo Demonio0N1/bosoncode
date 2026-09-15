@@ -517,7 +517,9 @@ if [ "$EN_PRIMER_PLANO" = 1 ]; then
   nota "en primer plano: se para al cerrar esta terminal"
   nota "para dejarlo permanente:  ./setup.sh"
   echo ""
-  exec ./serve.sh
+  # Ya avisado: que serve.sh no repita el recuadro ni se niegue a arrancar si
+  # hay servicio (con --foreground se quiere ver los registros igualmente).
+  IVSCODE_FOREGROUND=1 exec ./serve.sh
 fi
 
 # systemd de usuario no está en todas partes: WSL sin systemd es el caso
@@ -536,5 +538,6 @@ else
   nota "en WSL: pon systemd=true en /etc/wsl.conf, y luego  wsl --shutdown"
   nota "mientras tanto arranca en primer plano: NO cierres esta terminal"
   echo ""
-  exec ./serve.sh
+  # Aquí ./setup.sh no puede dejarlo permanente: que serve.sh no lo aconseje.
+  IVSCODE_FOREGROUND=1 exec ./serve.sh
 fi

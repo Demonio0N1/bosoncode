@@ -586,6 +586,47 @@ fi
 # ---------- contraseña persistente por equipo ----------
 ensure_password
 
+# ---------- ¿a mano, en una terminal? ----------
+#
+# `./serve.sh` a secas corre en PRIMER PLANO: vive lo que viva esta terminal.
+# Pasó así en un equipo: se conectaba desde el iPad, se cerraba la terminal y la
+# conexión moría, sin que nada lo hubiera advertido. Y si el servicio ya estaba
+# instalado, arrancar esto a mano levantaba una SEGUNDA copia en el puerto
+# siguiente («8443 ocupado, pruebo 8444») que no sirve para nada.
+#
+# `-t 1` distingue a una persona de un servicio: systemd y launchd no tienen
+# terminal.
+if [ -t 1 ] && [ "${IVSCODE_FOREGROUND:-}" != 1 ]; then
+  servicio_activo=0
+  if [ "$PLATFORM" = linux ] && systemctl --user is-active --quiet ivscode.service 2>/dev/null; then
+    servicio_activo=1
+    reiniciar="systemctl --user restart ivscode"
+  elif [ "$PLATFORM" = macos ] && launchctl list 2>/dev/null | grep -q "com.ivscode.serve"; then
+    servicio_activo=1
+    reiniciar="launchctl kickstart -k gui/$(id -u)/com.ivscode.serve"
+  fi
+  if [ "$servicio_activo" = 1 ]; then
+    echo ""
+    echo "✔ BosonCode ya está corriendo como servicio en este equipo."
+    echo "  No hace falta arrancarlo a mano ni dejar ninguna terminal abierta."
+    bosoncode_block
+    echo ""
+    echo "  Reiniciarlo:    $reiniciar"
+    echo "  Comprobarlo:    ./setup.sh --check"
+    exit 0
+  fi
+  echo ""
+  echo "  ┌─ OJO: esto corre DENTRO de esta terminal ───────────────────────"
+  echo "  │  Si la cierras o pulsas Ctrl-C, el servidor se detiene y la app"
+  echo "  │  pierde la conexión."
+  echo "  │"
+  echo "  │  Para dejarlo permanente (sigue al cerrar la terminal y arranca"
+  echo "  │  solo al encender el equipo), párala con Ctrl-C y ejecuta:"
+  echo "  │     ./setup.sh"
+  echo "  └──────────────────────────────────────────────────────────────────"
+  echo ""
+fi
+
 # ---------- buscar puerto libre ----------
 port_busy() {
   if command -v ss >/dev/null 2>&1; then
