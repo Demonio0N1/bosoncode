@@ -495,6 +495,17 @@ for ext in ms-toolsai.jupyter ms-python.python detachhead.basedpyright; do
     || echo "⚠ No pude instalar $ext (sin internet?); instálala luego desde la UI."
 done
 
+# «Python Environments» llega como acompañante de la extensión de Python, y la
+# versión de Open VSX no trae su buscador nativo (`pet`). Sin él se queda en
+# «Discovering Global Python Environments» reintentando unos dos minutos antes
+# de rendirse, y mientras tanto no hay intérprete ni se puede ejecutar nada. La
+# extensión de Python busca sola sin ella (ver `python.locator` más abajo).
+if echo "$INSTALLED" | grep -qi "^ms-python.vscode-python-envs$" \
+   || ls "$EXT_DIR" 2>/dev/null | grep -qi "^ms-python.vscode-python-envs-"; then
+  "$IVSCODE_DIR/current/bin/code-server" --extensions-dir "$EXT_DIR" \
+    --uninstall-extension ms-python.vscode-python-envs >/dev/null 2>&1 || true
+fi
+
 # ---------- ajustes por defecto (sin Restricted Mode) ----------
 # En modo restringido code-server desactiva Jupyter y los notebooks no abren.
 # Es tu propia máquina: se desactiva el workspace trust.
@@ -517,6 +528,19 @@ cfg.setdefault("security.workspace.trust.startupPrompt", "never")
 cfg.setdefault("security.workspace.trust.untrustedFiles", "open")
 cfg.setdefault("extensions.ignoreRecommendations", True)
 cfg.setdefault("window.autoDetectColorScheme", True)
+# El panel de chat de la derecha se abre solo en cada carpeta nueva. En un
+# teléfono ocupa media pantalla y cerrarlo exige arrastrar la división hasta que
+# aparece su X. Quien lo quiera lo abre con un clic; ocultarlo no quita nada.
+cfg.setdefault("workbench.secondarySideBar.defaultVisibility", "hidden")
+# El buscador de intérpretes en JavaScript, que no necesita el binario `pet`.
+# «native» solo se respeta si `pet` existe: sin él ese modo no encuentra nada y
+# deja el editor sin intérprete. Donde sí está, manda lo que haya elegido cada uno.
+import glob, os
+pet = glob.glob(os.path.expanduser("~/.ivscode/extensions/ms-python.python-*/python-env-tools/bin/pet"))
+if cfg.get("python.locator") == "native" and not pet:
+    cfg["python.locator"] = "js"
+cfg.setdefault("python.locator", "js")
+cfg.setdefault("python.useEnvironmentsExtension", False)
 p.write_text(json.dumps(cfg, indent=2))
 
 # ---------- ⌃+ y ⌃− para el tamaño de letra ----------
@@ -875,6 +899,9 @@ with open(SETTINGS_FILE, "w") as _f:
         "security.workspace.trust.untrustedFiles": "open",
         "extensions.ignoreRecommendations": True,
         "window.autoDetectColorScheme": True,
+        "workbench.secondarySideBar.defaultVisibility": "hidden",
+        "python.locator": "js",
+        "python.useEnvironmentsExtension": False,
     }, _f)
 
 def _docker_running():
@@ -1019,6 +1046,14 @@ def _tmux_conf():
                 "set -sg escape-time 10\n"
                 "set -g default-terminal 'xterm-256color'\n"
                 "set -ga terminal-overrides ',*256col*:Tc'\n"
+                # Buscar en el historial. La manda el botón flotante de la app
+                # como la secuencia de F20, que ningún teclado envía. tmux solo
+                # conoce hasta F12, así que se declara como tecla de usuario.
+                # Entra en modo copia y pide qué buscar hacia atrás, sin
+                # depender del prefijo que tenga configurado cada uno.
+                "set -s user-keys[0] \"\\e[34~\"\n"
+                "bind-key -n User0 copy-mode \\; command-prompt -p 'Search:' "
+                "'send-keys -X search-backward \"%%\"'\n"
             )
     except Exception:
         pass
@@ -1163,6 +1198,100 @@ def fs_op(machine, op, path, target=""):
         rc, out, err = sh(*cmds[op])
     if rc != 0:
         raise RuntimeError((err or out)[-200:])
+
+# ---- Ejecutar un script: con qué intérprete ------------------------------
+#
+# El explorador del iPad ejecuta scripts en ESTA máquina y tiene que ofrecer
+# los intérpretes que hay de verdad: el .venv del proyecto, cada entorno de
+# conda, las versiones de pyenv, el python del sistema… No se llama a `conda env
+# list` (tarda segundos): se miran las carpetas donde viven, que es lo mismo
+# que hace conda. Va en sh y no en Python para poder correrlo igual dentro de
+# una máquina Docker.
+DETECT_ENVS = r"""
+dir="$1"; ext="$2"; H="$HOME"
+out() { [ -x "$3" ] && printf '%s|%s|%s\n' "$1" "$2" "$3"; }
+python_envs() {
+  d="$dir"
+  while [ -n "$d" ] && [ "$d" != "/" ]; do
+    for n in .venv venv env .env; do out venv "$n  ·  $d" "$d/$n/bin/python"; done
+    d=$(dirname "$d")
+  done
+  for c in "$CONDA_EXE" "$(command -v conda 2>/dev/null)" "$H/miniconda3/bin/conda" "$H/anaconda3/bin/conda" \
+           "$H/miniforge3/bin/conda" "$H/mambaforge/bin/conda" "$H/micromamba/bin/conda" \
+           /opt/conda/bin/conda /opt/miniconda3/bin/conda /opt/anaconda3/bin/conda \
+           /opt/homebrew/Caskroom/miniconda/base/bin/conda /opt/homebrew/Caskroom/miniforge/base/bin/conda \
+           /usr/local/Caskroom/miniconda/base/bin/conda /usr/local/anaconda3/bin/conda; do
+    [ -n "$c" ] && [ -x "$c" ] || continue
+    base=$(dirname "$(dirname "$c")")
+    out conda "base" "$base/bin/python"
+    for e in "$base"/envs/*; do out conda "$(basename "$e")" "$e/bin/python"; done
+  done
+  [ -f "$H/.conda/environments.txt" ] && while IFS= read -r e; do
+    [ -n "$e" ] && out conda "$(basename "$e")" "$e/bin/python"; done < "$H/.conda/environments.txt"
+  for e in "$H"/.pyenv/versions/*; do out pyenv "$(basename "$e")" "$e/bin/python"; done
+  for e in "$H"/.virtualenvs/* "$H"/.local/share/virtualenvs/*; do out venv "$(basename "$e")" "$e/bin/python"; done
+  for p in "$(command -v python3 2>/dev/null)" /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+    [ -n "$p" ] && out system "python3  ·  $(dirname "$p")" "$p"; done
+}
+bin() { k="$1"; shift; for p in "$@"; do [ -n "$p" ] && out "$k" "$(basename "$p")" "$p"; done; }
+case "$ext" in
+  py) python_envs ;;
+  jl) bin julia "$(command -v julia 2>/dev/null)" "$H/.juliaup/bin/julia" /usr/local/bin/julia /opt/homebrew/bin/julia ;;
+  r)  bin r "$(command -v Rscript 2>/dev/null)" /usr/bin/Rscript /usr/local/bin/Rscript /opt/homebrew/bin/Rscript ;;
+  js) bin node "$(command -v node 2>/dev/null)" /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node ;;
+  ts) bin node "$(command -v npx 2>/dev/null)" /usr/local/bin/npx /opt/homebrew/bin/npx ;;
+  rb) bin ruby "$(command -v ruby 2>/dev/null)" /usr/bin/ruby ;;
+  sh|bash) bin shell /bin/bash ;;
+  zsh) bin shell /bin/zsh /usr/bin/zsh ;;
+esac
+true
+"""
+
+def run_envs(machine, path):
+    """Intérpretes con los que se puede ejecutar `path` en la máquina."""
+    machine = valid_machine(machine)
+    if not path.startswith("/"):
+        raise ValueError("ruta invalida")
+    ext = os.path.splitext(path)[1].lstrip(".").lower()
+    folder = os.path.dirname(path) or "/"
+    if machine:
+        rc, out, err = sh("docker", "exec", "ivsc_" + machine, "sh", "-c", DETECT_ENVS,
+                          "detect", folder, ext, timeout=20)
+    else:
+        env = dict(os.environ)
+        env.setdefault("HOME", os.path.expanduser("~"))
+        p = subprocess.run(["sh", "-c", DETECT_ENVS, "detect", folder, ext],
+                           capture_output=True, text=True, timeout=20, env=env)
+        out = p.stdout
+    envs, seen = [], set()
+    for line in out.splitlines():
+        parts = line.split("|", 2)
+        if len(parts) != 3:
+            continue
+        kind, label, exe = parts
+        # Una misma instalación aparece por varios caminos (conda la lista en
+        # su carpeta y en environments.txt; el python del sistema puede ser el
+        # de conda base). Manda la ruta real, y gana el primero: el más
+        # específico, por el orden en que se buscan.
+        key = os.path.realpath(exe) if not machine else exe
+        if key in seen:
+            continue
+        seen.add(key)
+        q = shlex.quote(exe)
+        if kind == "conda":
+            prefix = os.path.dirname(os.path.dirname(exe))
+            # PATH y CONDA_PREFIX como haría `conda activate`: sin ellos, lo
+            # que el script llame por su nombre (ffmpeg, nvcc…) sale del sistema.
+            command = "env PATH=%s:\"$PATH\" CONDA_PREFIX=%s %s -u" % (
+                shlex.quote(prefix + "/bin"), shlex.quote(prefix), q)
+        elif kind in ("venv", "pyenv", "system"):
+            command = "%s -u" % q
+        elif kind == "node" and exe.endswith("npx"):
+            command = "%s --yes tsx" % q
+        else:
+            command = q
+        envs.append({"kind": kind, "label": label, "path": exe, "command": command})
+    return {"folder": folder, "envs": envs}
 
 def mount(name, port):
     sh("tailscale", "serve", "--bg", "--https=%d" % HTTPS_PORT,
@@ -2112,6 +2241,10 @@ class Handler(BaseHTTPRequestHandler):
                 q = urllib.parse.parse_qs(parsed.query)
                 self._send(200, sim_run_status((q.get("job") or [""])[0],
                                                int((q.get("from") or ["0"])[0])))
+            elif parsed.path == "/run/envs":
+                q = urllib.parse.parse_qs(parsed.query)
+                self._send(200, run_envs((q.get("machine") or [""])[0],
+                                         (q.get("path") or [""])[0]))
             elif parsed.path == "/fs/list":
                 q = urllib.parse.parse_qs(parsed.query)
                 machine = (q.get("machine") or [""])[0]
