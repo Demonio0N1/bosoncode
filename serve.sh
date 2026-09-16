@@ -541,6 +541,16 @@ if cfg.get("python.locator") == "native" and not pet:
     cfg["python.locator"] = "js"
 cfg.setdefault("python.locator", "js")
 cfg.setdefault("python.useEnvironmentsExtension", False)
+# Un editor que se lee en una tableta. Las pistas de tipo de basedpyright
+# («: Any», «field=») salen encendidas de fábrica y llenan cada línea de texto
+# gris; el modo «recommended» marca cientos de avisos en un script normal; y
+# el minimapa es una columna de píxeles ilegible que cuesta dibujar. Nada de
+# esto se impone: son valores por defecto, y cada uno los cambia en Ajustes.
+cfg.setdefault("editor.inlayHints.enabled", "offUnlessPressed")
+cfg.setdefault("basedpyright.analysis.typeCheckingMode", "standard")
+cfg.setdefault("editor.minimap.enabled", False)
+cfg.setdefault("editor.smoothScrolling", True)
+cfg.setdefault("workbench.list.smoothScrolling", True)
 p.write_text(json.dumps(cfg, indent=2))
 
 # ---------- ⌃+ y ⌃− para el tamaño de letra ----------
@@ -943,6 +953,11 @@ with open(SETTINGS_FILE, "w") as _f:
         "workbench.secondarySideBar.defaultVisibility": "hidden",
         "python.locator": "js",
         "python.useEnvironmentsExtension": False,
+        "editor.inlayHints.enabled": "offUnlessPressed",
+        "basedpyright.analysis.typeCheckingMode": "standard",
+        "editor.minimap.enabled": False,
+        "editor.smoothScrolling": True,
+        "workbench.list.smoothScrolling": True,
     }, _f)
 
 def _docker_running():
