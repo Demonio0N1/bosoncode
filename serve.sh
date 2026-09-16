@@ -581,6 +581,15 @@ nuestros = [
     {"key": "ctrl+numpad_add",      "command": "editor.action.fontZoomIn"},
     {"key": "ctrl+numpad_subtract", "command": "editor.action.fontZoomOut"},
     {"key": "ctrl+0",     "command": "editor.action.fontZoomReset"},
+    # Y con ⌘, que es lo que uno pulsa en un Mac o en un iPad con teclado. En
+    # la web esas teclas no hacían nada: el zoom con ⌘ es de la ventana del
+    # VS Code de escritorio.
+    {"key": "cmd+=",       "command": "editor.action.fontZoomIn"},
+    {"key": "cmd+shift+=", "command": "editor.action.fontZoomIn"},
+    {"key": "cmd+-",       "command": "editor.action.fontZoomOut"},
+    {"key": "cmd+numpad_add",      "command": "editor.action.fontZoomIn"},
+    {"key": "cmd+numpad_subtract", "command": "editor.action.fontZoomOut"},
+    {"key": "cmd+0",       "command": "editor.action.fontZoomReset"},
 ]
 # Lo que el usuario haya puesto para esas teclas manda: solo se añade lo que
 # falta, y nunca se pisa una asignación suya.
