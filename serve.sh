@@ -549,8 +549,12 @@ cfg.setdefault("python.useEnvironmentsExtension", False)
 cfg.setdefault("editor.inlayHints.enabled", "offUnlessPressed")
 cfg.setdefault("basedpyright.analysis.typeCheckingMode", "standard")
 cfg.setdefault("editor.minimap.enabled", False)
-cfg.setdefault("editor.smoothScrolling", True)
-cfg.setdefault("workbench.list.smoothScrolling", True)
+# El desplazamiento animado (`editor.smoothScrolling`) se probó y se quitó:
+# con un trackpad, que ya trae su propia inercia, la animación se la come y
+# el editor parece frenarse en seco al soltar los dedos.
+for viejo in ("editor.smoothScrolling", "workbench.list.smoothScrolling"):
+    if cfg.get(viejo) is True:
+        cfg.pop(viejo)
 p.write_text(json.dumps(cfg, indent=2))
 
 # ---------- ⌃+ y ⌃− para el tamaño de letra ----------
@@ -564,6 +568,12 @@ p.write_text(json.dumps(cfg, indent=2))
 # Se dejan las dos formas de la tecla: en un teclado la misma posición manda
 # `=` o `+` según se pulse Mayúsculas, y quien busca «hacer la letra más
 # grande» la pulsa de las dos maneras sin pensarlo.
+#
+# Las del teclado numérico no son solo para quien lo tiene: son las que usa
+# la app. VS Code resuelve los atajos por la tecla FÍSICA según la
+# distribución que detecta, y «=» no está en el mismo sitio en un teclado
+# español que en uno US; las teclas del numérico son iguales en todas las
+# distribuciones, así que los botones de + y − de la app mandan esas.
 k = p.parent / "keybindings.json"
 try:
     atajos = json.loads(k.read_text()) if k.exists() else []
@@ -581,6 +591,7 @@ nuestros = [
     {"key": "ctrl+numpad_add",      "command": "editor.action.fontZoomIn"},
     {"key": "ctrl+numpad_subtract", "command": "editor.action.fontZoomOut"},
     {"key": "ctrl+0",     "command": "editor.action.fontZoomReset"},
+    {"key": "ctrl+numpad0", "command": "editor.action.fontZoomReset"},
     # Y con ⌘, que es lo que uno pulsa en un Mac o en un iPad con teclado. En
     # la web esas teclas no hacían nada: el zoom con ⌘ es de la ventana del
     # VS Code de escritorio.
@@ -590,6 +601,16 @@ nuestros = [
     {"key": "cmd+numpad_add",      "command": "editor.action.fontZoomIn"},
     {"key": "cmd+numpad_subtract", "command": "editor.action.fontZoomOut"},
     {"key": "cmd+0",       "command": "editor.action.fontZoomReset"},
+    {"key": "cmd+numpad0", "command": "editor.action.fontZoomReset"},
+    # Teclas de función para los botones de + y − de la app. Un atajo CON
+    # MODIFICADOR fabricado por la app no lo resuelve WebKit (le falta el mapa
+    # de teclado de `navigator.keyboard`), pero una tecla de función sin
+    # modificador sí. La app manda F18/F17/F16 al tocar +, − y restablecer, y
+    # F15 al buscar. El usuario no las pulsa nunca a mano.
+    {"key": "f18", "command": "editor.action.fontZoomIn"},
+    {"key": "f17", "command": "editor.action.fontZoomOut"},
+    {"key": "f16", "command": "editor.action.fontZoomReset"},
+    {"key": "f15", "command": "actions.find"},
 ]
 # Lo que el usuario haya puesto para esas teclas manda: solo se añade lo que
 # falta, y nunca se pisa una asignación suya.
@@ -965,8 +986,6 @@ with open(SETTINGS_FILE, "w") as _f:
         "editor.inlayHints.enabled": "offUnlessPressed",
         "basedpyright.analysis.typeCheckingMode": "standard",
         "editor.minimap.enabled": False,
-        "editor.smoothScrolling": True,
-        "workbench.list.smoothScrolling": True,
     }, _f)
 
 def _docker_running():
