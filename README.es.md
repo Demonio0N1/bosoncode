@@ -132,6 +132,81 @@ Se guarda en el Llavero y no vuelve a pedirse.
 
 Si pierdes ese recuadro, lo recuperas con `./setup.sh --password`.
 
+#### Opcional: Claude Sessions Monitor
+
+Con el editor ya en marcha, el script ofrece una cosa más:
+[Claude Sessions Monitor](https://github.com/Demonio0N1/claude-sessions-monitor),
+un panel web con las sesiones de Claude Code de todas tus máquinas en una sola
+página, que además deja contestarles desde el móvil. BosonCode no lo necesita.
+
+Si dices que sí, se descarga en `~/.ivscode/csm` y se ejecuta **su propio**
+instalador, que pregunta si este equipo tendrá su panel o si se suma al de otra
+máquina (te enseña los que encuentre en tu tailnet). Necesita Node, Go y tmux, y
+los instala si faltan, así que puede pedir `sudo`. Al terminar, el resumen
+imprime la dirección del panel; ábrela una vez en cada dispositivo: el enlace
+lleva el token de emparejamiento.
+
+Si ya está instalado y corriendo, no se reinstala nada. Si su instalación falla,
+el editor no se ve afectado: se dice el motivo y el comando para reintentar.
+
+#### Opcional: un asistente de IA en el editor
+
+Por último, pregunta qué asistente añadir a code-server:
+
+```
+      [1] Continue        (por defecto)
+      [2] GitHub Copilot
+      [3] ninguno
+```
+
+- **Continue** se instala desde Open VSX y se le deja una configuración base en
+  `~/.continue/config.yaml`: **Claude Opus 5.5** (`claude-opus-5-5`) para chat y
+  edición, y para autocompletar, que tiene que ser rápido, un modelo **local**
+  si en el equipo corre Ollama (uno con «coder» en el nombre si lo hay) o, si
+  no, **Claude Haiku 4.5** (`claude-haiku-4-5-20251001`). Los identificadores son
+  los de la [tabla de modelos de Anthropic](https://platform.claude.com/docs/en/about-claude/models/overview).
+  En el propio archivo quedan escritas dos advertencias sobre Haiku para
+  autocompletar: la documentación de Continue dice que los modelos de chat como
+  Claude no se entrenan con el formato de relleno (FIM) que usa el
+  autocompletado (recomienda QwenCoder con Ollama, o Codestral), y Anthropic
+  anuncia la retirada de Haiku 4.5 *no antes del 15 de octubre de 2026*. Un
+  `config.yaml` que ya existiera no se toca nunca.
+
+  **Claude en Continue usa una clave de API de Anthropic, que se paga por uso**
+  con créditos prepago. **No** es tu suscripción de Claude: Pro, Max y Team no
+  incluyen la API ([centro de ayuda de Claude](https://support.claude.com/en/articles/9876003-i-have-a-paid-claude-subscription-pro-max-team-or-enterprise-plans-why-do-i-have-to-pay-separately-to-use-the-claude-api-and-console)).
+  La clave se crea en la Claude Console, en
+  [Settings → API keys](https://platform.claude.com/settings/keys), y se pone en
+  `~/.continue/.env` como `ANTHROPIC_API_KEY=sk-ant-…` — nunca en `config.yaml`.
+  Ese archivo queda con permisos 600. Los modelos locales de Ollama no necesitan
+  clave ni cuestan nada.
+- **GitHub Copilot** no necesita instalar nada en un code-server actual: desde que
+  VS Code abrió Copilot Chat, code-server lo trae integrado. Se entra desde el
+  chat con un código de un solo uso en `github.com/login/device`. Solo en un
+  code-server viejo que no lo trae se descarga del Marketplace de Microsoft —
+  ver las advertencias de abajo.
+
+Si ya hay un asistente, no se reinstala nada. Si el paso falla, el editor sigue
+funcionando y se imprime el comando para reintentar. En un equipo recién
+preparado, el paso espera a que el servicio termine de montar code-server, que
+la primera vez tarda unos minutos.
+
+**Qué se comprobó y en qué versiones** (septiembre de 2026):
+
+| | code-server 4.133 / 4.134 (VS Code 1.133 / 1.135) | code-server anterior a 4.108 |
+|---|---|---|
+| Continue 2.0 | Se instala desde Open VSX, se activa y carga la configuración base; el YAML generado se validó con y sin Ollama | Igual (pide VS Code ≥ 1.70); no probado |
+| Copilot | Integrado (Copilot Chat 0.61 / 0.63). El chat se abre y el inicio de sesión ofrece el código de dispositivo, que es el flujo que funciona en un editor web | Se baja del Marketplace: Copilot Chat + Copilot, las más nuevas compatibles (0.35.3 + 1.388.0 en la 4.107.1). El chat se activa y pide iniciar sesión; el registro dice *Copilot extension not found* |
+
+Sin comprobar: respuestas de Claude con una clave real, o de Copilot con una
+cuenta con sesión iniciada — las dos cosas necesitan tus credenciales.
+
+**Sobre instalar Copilot a mano** en un code-server viejo: es una zona gris de
+licencia —las condiciones del Marketplace reservan sus extensiones a los
+productos de Microsoft, y code-server no lo es— y, según la versión, el chat
+puede instalarse y aun así no funcionar. Lo limpio es actualizar code-server,
+que ya lo trae dentro.
+
 ---
 
 Queda puesto para siempre: sobrevive a cerrar la terminal y vuelve solo al
@@ -142,7 +217,20 @@ servidor por haber cerrado una ventana.
 ./setup.sh --check        # solo diagnostica, no toca nada
 ./setup.sh --foreground   # lo arranca atado a esta terminal (para depurar)
 ./setup.sh --password     # vuelve a enseñar la contraseña de este equipo
+./setup.sh --csm          # instala Claude Sessions Monitor sin preguntar
+./setup.sh --no-csm       # se salta ese paso
+./setup.sh -y             # sí a todo: Claude Sessions Monitor y Continue
+./setup.sh --ai continue  # añade Continue sin preguntar (o: --ai copilot)
+./setup.sh --no-ai        # se salta el paso del asistente de IA
+./setup.sh --uninstall    # quita todo lo que instaló este script…
+./setup.sh --uninstall --csm   # …y también Claude Sessions Monitor
 ```
+
+`--uninstall` no toca Claude Sessions Monitor salvo que añadas `--csm`: es una
+instalación aparte que puede estar sirviendo el panel de otras máquinas. Con
+`--csm` usa los desinstaladores del propio CSM y conserva su token, para que
+reinstalar no obligue a emparejar otra vez los dispositivos; `--purge` se lo
+lleva también.
 
 La contraseña se genera una vez y se enseña al arrancar el servidor. Ese momento
 suele quedar semanas antes de que vuelva a hacer falta —añadir otro iPad,
