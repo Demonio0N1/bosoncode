@@ -611,6 +611,16 @@ nuestros = [
     {"key": "f17", "command": "editor.action.fontZoomOut"},
     {"key": "f16", "command": "editor.action.fontZoomReset"},
     {"key": "f15", "command": "actions.find"},
+    # Atajos que iPadOS le quita a la página antes de que llegue a verlos
+    # (⌘W, ⌘N, ⌘T…): la app los captura y los manda como estas teclas de
+    # función, por lo mismo que el zoom. Son los comandos que esas teclas hacen
+    # en el VS Code de escritorio del Mac.
+    {"key": "f13", "command": "workbench.action.closeActiveEditor"},
+    {"key": "f14", "command": "workbench.action.files.newUntitledFile"},
+    {"key": "f19", "command": "workbench.action.showAllSymbols"},
+    {"key": "f21", "command": "workbench.action.reopenClosedEditor"},
+    {"key": "f22", "command": "editor.action.outdentLines", "when": "editorTextFocus && !editorReadonly"},
+    {"key": "f23", "command": "editor.action.indentLines", "when": "editorTextFocus && !editorReadonly"},
 ]
 # Lo que el usuario haya puesto para esas teclas manda: solo se añade lo que
 # falta, y nunca se pisa una asignación suya.
