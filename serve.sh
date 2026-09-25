@@ -946,7 +946,8 @@ SETUPEOF
   chmod +x "$IVSCODE_DIR/setup-machine.sh"
   cat > "$IVSCODE_DIR/manager.py" <<'PYEOF'
 import fcntl, hmac, json, os, pty, re, select, shlex, shutil, signal, socket
-import struct, subprocess, sys, termios, threading, time, urllib.parse
+import struct, subprocess, sys, tarfile, termios, threading, time, urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # OJO: aqui habia `signal.signal(signal.SIGCHLD, signal.SIG_IGN)` para que los
@@ -2234,6 +2235,255 @@ def sim_run_cancel(job):
             pass
 
 
+# ---------- Copilot para el editor nativo de la app ----------
+#
+# El editor de código de ZeroSpin (el nativo, no BosonCode) pide sugerencias
+# a GitHub Copilot a traves de este equipo. Aqui corre el servidor de lenguaje
+# OFICIAL de Copilot (@github/copilot-language-server), con el Node que ya
+# trae code-server, y la app habla con el por /copilot/*.
+#
+# No se instala nada hasta que se usa: la primera peticion lo descarga del
+# registro de npm en ~/.ivscode/copilot. La sesion de Copilot la inicia el
+# propio servidor con su codigo de GitHub (la de la app no le vale a
+# Copilot) y la guarda en ~/.config/github-copilot, como cualquier editor.
+COPILOT_DIR = os.path.expanduser("~/.ivscode/copilot")
+COPILOT_VERSION = "1.551.0"
+
+
+class Copilot:
+    def __init__(self):
+        self.lock = threading.Lock()          # escribir en el proceso
+        self.arranque = threading.Lock()      # arrancarlo una sola vez
+        self.proc = None
+        self.siguiente = 0
+        self.pendientes = {}                  # id -> [Event, respuesta]
+        self.docs = {}                        # uri -> version
+        self.estado = {}                      # el ultimo didChangeStatus
+        self.instalando = False
+        self.fallo = ""
+
+    # -- instalar y arrancar ------------------------------------------------
+
+    def _js(self):
+        return os.path.join(COPILOT_DIR, "package", "dist", "language-server.js")
+
+    def instalado(self):
+        return os.path.exists(self._js())
+
+    def _instalar(self):
+        os.makedirs(COPILOT_DIR, exist_ok=True)
+        url = ("https://registry.npmjs.org/@github/copilot-language-server/-/"
+               "copilot-language-server-%s.tgz" % COPILOT_VERSION)
+        tmp = os.path.join(COPILOT_DIR, "paquete.tgz")
+        urllib.request.urlretrieve(url, tmp)
+        destino = os.path.join(COPILOT_DIR, "nuevo")
+        shutil.rmtree(destino, ignore_errors=True)
+        with tarfile.open(tmp) as t:
+            try:
+                t.extractall(destino, filter="data")
+            except TypeError:                 # python < 3.12
+                t.extractall(destino)
+        os.remove(tmp)
+        shutil.rmtree(os.path.join(COPILOT_DIR, "package"), ignore_errors=True)
+        os.rename(os.path.join(destino, "package"), os.path.join(COPILOT_DIR, "package"))
+        shutil.rmtree(destino, ignore_errors=True)
+
+    def instalar_en_segundo_plano(self):
+        if self.instalado() or self.instalando:
+            return
+        self.instalando = True
+        self.fallo = ""
+
+        def trabajo():
+            try:
+                self._instalar()
+            except Exception as e:
+                self.fallo = "No pude descargar Copilot: %s" % e
+            finally:
+                self.instalando = False
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _node(self):
+        # El de code-server (Node 20+), el mismo en todos los equipos.
+        for n in (os.path.expanduser("~/.ivscode/current/lib/node"), shutil.which("node")):
+            if n and os.path.exists(n):
+                return n
+        raise RuntimeError("no encuentro Node (ni el de code-server ni otro)")
+
+    def _vivo(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def arrancar(self):
+        with self.arranque:
+            if self._vivo():
+                return
+            if not self.instalado():
+                raise RuntimeError("Copilot todavia se esta descargando")
+            self.proc = subprocess.Popen(
+                [self._node(), self._js(), "--stdio"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                cwd=os.path.expanduser("~"))
+            self.docs = {}
+            threading.Thread(target=self._lector, args=(self.proc,), daemon=True).start()
+            self._pedir("initialize", {
+                "processId": os.getpid(),
+                "workspaceFolders": None,
+                "capabilities": {
+                    "workspace": {"workspaceFolders": True, "configuration": True},
+                    # Que el enlace de github.com/login/device nos lo pase a
+                    # nosotros: si no, intentaria abrir un navegador EN ESTE
+                    # equipo, que no es donde esta la persona.
+                    "window": {"showDocument": {"support": True}},
+                },
+                "initializationOptions": {
+                    "editorInfo": {"name": "ZeroSpin", "version": "1"},
+                    "editorPluginInfo": {"name": "ZeroSpin Copilot", "version": "1"},
+                },
+            }, espera=90)
+            self._avisar("initialized", {})
+            self._avisar("workspace/didChangeConfiguration", {"settings": {}})
+
+    # -- el protocolo (LSP por stdio) ---------------------------------------
+
+    def _escribir(self, msg):
+        cuerpo = json.dumps(msg).encode()
+        with self.lock:
+            self.proc.stdin.write(b"Content-Length: %d\r\n\r\n" % len(cuerpo) + cuerpo)
+            self.proc.stdin.flush()
+
+    def _lector(self, proc):
+        f = proc.stdout
+        while True:
+            largo = 0
+            while True:
+                linea = f.readline()
+                if not linea:
+                    return                    # el proceso termino
+                linea = linea.strip()
+                if not linea:
+                    break
+                if linea.lower().startswith(b"content-length:"):
+                    largo = int(linea.split(b":", 1)[1])
+            try:
+                msg = json.loads(f.read(largo))
+            except Exception:
+                continue
+            if "id" in msg and ("result" in msg or "error" in msg) and "method" not in msg:
+                p = self.pendientes.pop(msg["id"], None)
+                if p:
+                    p[1] = msg
+                    p[0].set()
+            elif "method" in msg and "id" in msg:
+                # Peticiones del servidor al cliente: configuracion, mostrar
+                # un enlace, un mensaje… se contestan sin hacer nada.
+                resultado = None
+                if msg["method"] == "workspace/configuration":
+                    resultado = [None] * len((msg.get("params") or {}).get("items") or [])
+                elif msg["method"] == "window/showDocument":
+                    resultado = {"success": True}
+                self._escribir({"jsonrpc": "2.0", "id": msg["id"], "result": resultado})
+            elif msg.get("method") == "didChangeStatus":
+                self.estado = msg.get("params") or {}
+
+    def _pedir(self, metodo, params, espera=20):
+        with self.lock:
+            self.siguiente += 1
+            ident = self.siguiente
+        hecho = [threading.Event(), None]
+        self.pendientes[ident] = hecho
+        self._escribir({"jsonrpc": "2.0", "id": ident, "method": metodo, "params": params})
+        if not hecho[0].wait(espera):
+            self.pendientes.pop(ident, None)
+            raise TimeoutError("Copilot no contesto a tiempo")
+        r = hecho[1]
+        if "error" in r:
+            raise RuntimeError((r["error"] or {}).get("message", "error de Copilot"))
+        return r.get("result")
+
+    def _avisar(self, metodo, params):
+        self._escribir({"jsonrpc": "2.0", "method": metodo, "params": params})
+
+    # -- lo que usa la app --------------------------------------------------
+
+    def estado_actual(self):
+        if not self.instalado():
+            self.instalar_en_segundo_plano()
+            return {"state": "installing" if self.instalando else "error",
+                    "message": self.fallo or "Descargando Copilot…"}
+        self.arrancar()
+        r = self._pedir("checkStatus", {}) or {}
+        # OK / NotSignedIn / NotAuthorized (sin suscripcion) / …
+        return {"state": r.get("status", ""), "user": r.get("user", ""),
+                "message": (self.estado or {}).get("message", "")}
+
+    def entrar(self):
+        self.arrancar()
+        r = self._pedir("signIn", {}) or {}
+        orden = r.get("command")
+        if orden:
+            # Terminar el Device Flow se queda esperando a que la persona
+            # escriba el codigo: en su propio hilo, y la app pregunta el
+            # estado hasta que diga OK.
+            def terminar():
+                try:
+                    self._pedir("workspace/executeCommand",
+                                {"command": orden.get("command"),
+                                 "arguments": orden.get("arguments") or []}, espera=900)
+                except Exception:
+                    pass
+            threading.Thread(target=terminar, daemon=True).start()
+        return {"userCode": r.get("userCode", ""),
+                "verificationUri": r.get("verificationUri", "https://github.com/login/device"),
+                "state": r.get("status", "")}
+
+    def salir(self):
+        self.arrancar()
+        self._pedir("signOut", {})
+        return {"ok": True}
+
+    def sugerir(self, d):
+        self.arrancar()
+        uri = d.get("uri") or "file:///zerospin/sin-nombre"
+        texto = d.get("text", "")
+        version = self.docs.get(uri)
+        if version is None:
+            version = 1
+            self._avisar("textDocument/didOpen", {"textDocument": {
+                "uri": uri, "languageId": d.get("languageId", "plaintext"),
+                "version": version, "text": texto}})
+        else:
+            version += 1
+            self._avisar("textDocument/didChange", {
+                "textDocument": {"uri": uri, "version": version},
+                "contentChanges": [{"text": texto}]})
+        self.docs[uri] = version
+        r = self._pedir("textDocument/inlineCompletion", {
+            "textDocument": {"uri": uri, "version": version},
+            "position": {"line": int(d.get("line", 0)), "character": int(d.get("character", 0))},
+            "context": {"triggerKind": 2},
+            "formattingOptions": {"tabSize": int(d.get("tabSize", 4)),
+                                  "insertSpaces": bool(d.get("insertSpaces", True))},
+        }, espera=15)
+        items = r.get("items", []) if isinstance(r, dict) else (r or [])
+        return {"items": [{"text": i.get("insertText", ""), "range": i.get("range"),
+                           "command": i.get("command")} for i in items]}
+
+    def aceptada(self, orden):
+        # Contarle a Copilot que se acepto (lo usa para mejorar y para su
+        # cuota); si falla no importa.
+        if orden and self._vivo():
+            try:
+                self._pedir("workspace/executeCommand",
+                            {"command": orden.get("command"),
+                             "arguments": orden.get("arguments") or []}, espera=5)
+            except Exception:
+                pass
+        return {"ok": True}
+
+
+COPILOT = Copilot()
+
+
 class Handler(BaseHTTPRequestHandler):
     timeout = 30
 
@@ -2345,6 +2595,8 @@ class Handler(BaseHTTPRequestHandler):
                 path = (q.get("path") or ["~"])[0]
                 resolved, entries = fs_list(machine, path)
                 self._send(200, {"path": resolved, "entries": entries})
+            elif parsed.path == "/copilot/status":
+                self._send(200, COPILOT.estado_actual())
             else:
                 self._send(404, {"error": "no existe"})
         except Exception as e:
@@ -2354,6 +2606,19 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             return
         try:
+            if self.path.startswith("/copilot/"):
+                data = json.loads(self._body() or b"{}")
+                if self.path == "/copilot/complete":
+                    self._send(200, COPILOT.sugerir(data))
+                elif self.path == "/copilot/signin":
+                    self._send(200, COPILOT.entrar())
+                elif self.path == "/copilot/signout":
+                    self._send(200, COPILOT.salir())
+                elif self.path == "/copilot/accepted":
+                    self._send(200, COPILOT.aceptada(data.get("command")))
+                else:
+                    self._send(404, {"error": "no existe"})
+                return
             if self.path.startswith("/sim/"):
                 data = json.loads(self._body() or b"{}")
                 kind = data.get("kind", "ios")
