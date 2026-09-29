@@ -784,6 +784,7 @@ if [ -n "$TS" ]; then
       echo "    https://login.tailscale.com/admin/dns  ·  MagicDNS y HTTPS Certificates"
     fi
     echo "  Sin HTTPS no hay notebooks, NI gestor de máquinas, NI terminal (⌃⌥T)."
+    echo "  Se sigue reintentando en segundo plano durante una hora."
   fi
 fi
 
@@ -877,6 +878,7 @@ else
   echo "  Puedes conectarte por IP igualmente (URLs abajo)."
 fi
 MGR_PID=""
+PUB_PID=""
 cleanup() {
   [ -n "$MDNS_PID" ] && kill "$MDNS_PID" 2>/dev/null || true
   # Red de seguridad: bash aplaza los traps mientras hay un hijo en primer
@@ -888,6 +890,7 @@ cleanup() {
   pkill -f "[a]vahi-publish -s $NAME" 2>/dev/null || true
   pkill -f "[a]nnounce_dbus.py $NAME" 2>/dev/null || true
   pkill -f "[a]nnounce.py $NAME" 2>/dev/null || true
+  [ -n "$PUB_PID" ] && kill "$PUB_PID" 2>/dev/null || true   # reintentos de publicar
   if [ -n "$MGR_PID" ]; then
     kill "$MGR_PID" 2>/dev/null || true          # supervisor
     pkill -f "[m]anager\.py" 2>/dev/null || true # y el python que supervisa
@@ -903,7 +906,13 @@ trap cleanup EXIT INT TERM HUP QUIT
 # Pedir docker dejaba sin terminal a cualquier equipo que no lo tuviera —o
 # donde el servicio no lo viera— y la app respondía "Connection refused".
 # Los endpoints de máquinas se degradan solos si docker falta.
-if [ -n "$CANON_URL" ] && command -v python3 >/dev/null 2>&1; then
+# El gestor y el terminal escuchan SOLO en local, así que arrancan siempre. Antes
+# dependían de que la publicación en Tailscale saliera a la primera: al
+# arrancar el equipo, este script le gana la carrera a tailscaled, la
+# publicación fallaba y el gestor no llegaba a arrancar NUNCA — días sin
+# archivos, terminal ni Copilot de ese equipo, con el editor funcionando como
+# si nada (Tailscale conserva la publicación antigua y respondía 502).
+if command -v python3 >/dev/null 2>&1; then
   MGR_LOCAL=39500
   # setup-machine: disponible como comando dentro de cada máquina
   cat > "$IVSCODE_DIR/setup-machine.sh" <<'SETUPEOF'
@@ -2926,21 +2935,54 @@ threading.Thread(target=term_server, daemon=True).start()
 
 ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 PYEOF
-  if "$TS" serve --bg --https=$MGR_HTTPS_PORT "http://127.0.0.1:$MGR_LOCAL" >/dev/null 2>&1; then
-    pkill -f "[m]anager\.py $TS_DNS" 2>/dev/null || true
-    sleep 0.3
-    ( while true; do
-        python3 "$IVSCODE_DIR/manager.py" "$TS_DNS" "$MGR_LOCAL" "$HTTPS_PORT" \
-          >>"$IVSCODE_DIR/manager.log" 2>&1
-        echo "[$(date '+%F %T')] gestor caído, reiniciando…" >>"$IVSCODE_DIR/manager.log"
-        sleep 3
-      done ) &
-    MGR_PID=$!
+  # El nombre en la tailnet lo lee el supervisor de un archivo en cada
+  # arranque del gestor: así, si se conoce más tarde, basta con reiniciar el
+  # gestor para que lo use (solo lo necesita para las URLs de las máquinas).
+  if [ -n "${TS_DNS:-}" ]; then printf '%s' "$TS_DNS" > "$IVSCODE_DIR/ts_dns"; fi
+  pkill -f "[m]anager\.py " 2>/dev/null || true
+  sleep 0.3
+  # `|| true`: el script corre con `set -e`, y sin él el bucle del supervisor
+  # moría con el primer fallo del gestor — no lo relanzaba NUNCA (en el
+  # registro no había ni un «gestor caído»).
+  ( while true; do
+      dns="$(cat "$IVSCODE_DIR/ts_dns" 2>/dev/null || true)"
+      python3 "$IVSCODE_DIR/manager.py" "${dns:-localhost}" "$MGR_LOCAL" "${HTTPS_PORT:-0}" \
+        >>"$IVSCODE_DIR/manager.log" 2>&1 || true
+      echo "[$(date '+%F %T')] gestor caído, reiniciando…" >>"$IVSCODE_DIR/manager.log"
+      sleep 3
+    done ) &
+  MGR_PID=$!
+
+  # Publicar el gestor (HTTPS 9500) y el canal PTY del terminal (TCP 39600).
+  publicar_gestor() {
+    "$TS" serve --bg --https=$MGR_HTTPS_PORT "http://127.0.0.1:$MGR_LOCAL" >/dev/null 2>&1 || return 1
+    "$TS" serve --bg --tcp=39600 "tcp://127.0.0.1:39600" >/dev/null 2>&1 || return 1
+  }
+  if [ -n "$CANON_URL" ] && publicar_gestor; then
     echo "→ Gestor de máquinas Docker: https://${TS_DNS}:9500"
-    # canal PTY de la terminal flotante (TCP crudo dentro de la tailnet)
-    "$TS" serve --bg --tcp=39600 "tcp://127.0.0.1:39600" >/dev/null 2>&1 \
-      && echo "→ Terminal PTY: puerto 39600 (tailnet)" \
-      || echo "⚠ No pude exponer el puerto 39600 (terminal flotante no disponible)"
+    echo "→ Terminal PTY: puerto 39600 (tailnet)"
+  elif [ -n "$TS" ]; then
+    # Tailscale aún no está listo (lo normal justo al encender el equipo): el
+    # gestor ya corre en local y la publicación se reintenta cada 10 s durante
+    # una hora, en vez de rendirse y dejar el equipo a medias hasta el próximo
+    # reinicio del servicio.
+    echo "→ Tailscale no está listo: el gestor ya corre y la publicación se reintenta en segundo plano."
+    ( for _ in $(seq 1 360); do
+        sleep 10
+        dns=$("$TS" status --json 2>/dev/null \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' \
+          2>/dev/null || true)
+        [ -n "$dns" ] || continue
+        con_limite 25 "$TS" serve --bg --https="$HTTPS_PORT" "http://127.0.0.1:$PORT" >/dev/null 2>&1 || continue
+        publicar_gestor || continue
+        printf '%s' "$dns" > "$IVSCODE_DIR/ts_dns"
+        # El supervisor lo vuelve a lanzar con el nombre ya conocido.
+        pkill -f "[m]anager\.py " 2>/dev/null || true
+        echo "[$(date '+%F %T')] Tailscale listo: editor, gestor y terminal publicados en https://$dns" \
+          >>"$IVSCODE_DIR/manager.log"
+        break
+      done ) &
+    PUB_PID=$!
   fi
 fi
 
