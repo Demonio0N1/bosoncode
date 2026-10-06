@@ -318,11 +318,19 @@ Options:
 ./serve.sh --password "…"             # default: generated once, kept on disk
 ./serve.sh --install-service          # start automatically on boot
 ./serve.sh --install-idb              # (macOS) touch in the iOS Simulator
+./serve.sh --no-linkspace             # skip Link_space (one-time download links from the app)
 ./serve.sh --help
 ```
 
 `--install-service` installs a systemd **user** service on Linux (with lingering
 enabled, so it survives logout) or a LaunchAgent on macOS.
+
+By default `serve.sh` also installs [Link_space](https://github.com/Demonio0N1/Link_space)
+into `~/.ivscode/linkspace`, without root. It is what the app uses for
+"Share with Link_space…": a public, one-time download link for any file or
+folder on this computer, served through Tailscale Funnel. The first link needs
+Funnel enabled in your tailnet; if it isn't, the app shows you the link to turn
+it on. `--no-linkspace` skips it; `--install-service` keeps it up to date.
 
 ### 3. Your password
 

@@ -6,6 +6,7 @@
 # Uso:  ./serve.sh [--port N] [--name "Mi PC"] [--password PASS]
 #       ./serve.sh --install-service   # deja el backend arrancando solo al encender
 #       ./serve.sh --install-idb       # (macOS) toques en el simulador de iOS
+#       ./serve.sh --no-linkspace      # sin Link_space (enlaces de descarga desde la app)
 #                                      # (systemd de usuario en Linux, LaunchAgent en macOS)
 
 set -euo pipefail
@@ -15,6 +16,7 @@ NAME="${NAME:-$(hostname -s 2>/dev/null || hostname)}"
 PASSWORD="${PASSWORD:-}"
 IVSCODE_DIR="$HOME/.ivscode"
 INSTALL_SERVICE=0
+LINKSPACE="${LINKSPACE:-1}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -23,6 +25,7 @@ while [ $# -gt 0 ]; do
     --password) PASSWORD="$2"; shift 2 ;;
     --install-service) INSTALL_SERVICE=1; shift ;;
     --install-idb) INSTALL_IDB=1; shift ;;
+    --no-linkspace) LINKSPACE=0; shift ;;
     -h|--help)
       grep '^# ' "$0" | sed 's/^# //'
       exit 0 ;;
@@ -59,6 +62,54 @@ case "$(uname -m)" in
   aarch64|arm64) ARCH=arm64 ;;
   *) echo "arquitectura no soportada: $(uname -m)"; exit 1 ;;
 esac
+
+# ---------- Link_space: enlaces de descarga para la app ----------
+# La app ofrece «Share with Link_space…» sobre cualquier archivo o carpeta de
+# este equipo: un enlace público de un solo uso, por Tailscale Funnel, que crea
+# aquí mismo el CLI de Link_space (https://github.com/Demonio0N1/Link_space).
+# Se deja una copia del repositorio en ~/.ivscode/linkspace y la app lo ejecuta
+# desde ahí: sin root y sin tocar /usr/local/bin, como todo lo demás de este
+# script. Al arrancar solo se instala si falta; --install-service lo actualiza.
+LINKSPACE_DIR="$IVSCODE_DIR/linkspace"
+LINKSPACE_REPO="https://github.com/Demonio0N1/Link_space"
+instalar_linkspace() {
+  # $1 = "actualizar": trae la última versión si ya estaba.
+  [ "$LINKSPACE" = 1 ] || return 0
+  if [ -x "$LINKSPACE_DIR/carpeta-share/bin/carpeta-share" ]; then
+    if [ "${1:-}" = actualizar ] && [ -d "$LINKSPACE_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+      if git -C "$LINKSPACE_DIR" pull --ff-only -q 2>/dev/null; then
+        echo "→ Link_space actualizado."
+      else
+        echo "⚠ No pude actualizar Link_space (sin red, o con cambios locales); sigue la versión de antes."
+      fi
+    fi
+    return 0
+  fi
+  echo "→ Instalando Link_space (enlaces de descarga desde la app)…"
+  mkdir -p "$IVSCODE_DIR"
+  # ${VAR:?}: si la variable estuviera vacía, el rm se niega en vez de borrar
+  # otra cosa.
+  rm -rf "${LINKSPACE_DIR:?}.tmp"
+  if command -v git >/dev/null 2>&1 \
+     && git clone -q --depth 1 "$LINKSPACE_REPO.git" "$LINKSPACE_DIR.tmp" 2>/dev/null; then
+    :
+  elif curl -fsSL "$LINKSPACE_REPO/archive/refs/heads/main.tar.gz" -o "$IVSCODE_DIR/linkspace.tar.gz" 2>/dev/null \
+       && mkdir -p "$LINKSPACE_DIR.tmp" \
+       && tar -xzf "$IVSCODE_DIR/linkspace.tar.gz" -C "$LINKSPACE_DIR.tmp" --strip-components=1; then
+    rm -f "${IVSCODE_DIR:?}/linkspace.tar.gz"
+  else
+    rm -rf "${LINKSPACE_DIR:?}.tmp" "${IVSCODE_DIR:?}/linkspace.tar.gz"
+    echo "⚠ No pude descargar Link_space: la app no podrá crear enlaces de descarga desde este equipo."
+    echo "  Vuelve a ejecutar este script con red, o instálalo a mano desde $LINKSPACE_REPO"
+    return 0
+  fi
+  rm -rf "${LINKSPACE_DIR:?}"
+  mv "$LINKSPACE_DIR.tmp" "$LINKSPACE_DIR"
+  chmod +x "$LINKSPACE_DIR"/carpeta-share/bin/* 2>/dev/null || true
+  echo "→ Link_space instalado en $LINKSPACE_DIR"
+  echo "  El primer enlace necesita Tailscale Funnel habilitado en tu tailnet; si no lo está,"
+  echo "  la app te enseña el enlace para activarlo."
+}
 
 # ---------- --install-idb: toques en el simulador de iOS ----------
 # Aparte y explícito, no dentro del arranque normal.
@@ -315,6 +366,7 @@ PLIST
 if [ "$INSTALL_SERVICE" = 1 ]; then
   SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
   ensure_password
+  instalar_linkspace actualizar
   if [ "$PLATFORM" = linux ]; then
     mkdir -p "$HOME/.config/systemd/user"
     cat > "$HOME/.config/systemd/user/ivscode.service" <<EOF
@@ -443,6 +495,7 @@ if [ ! -x "$IVSCODE_DIR/current/bin/code-server" ]; then
   ln -sfn "$IVSCODE_DIR/code-server-${VERSION}-${PLATFORM}-${ARCH}" "$IVSCODE_DIR/current"
   echo "→ Instalado code-server v${VERSION} en $IVSCODE_DIR"
 fi
+instalar_linkspace
 
 # ---------- code-server linux para los contenedores (solo host macOS) ----------
 # Las máquinas Docker son Linux y montan el code-server del host en
