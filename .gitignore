@@ -8,3 +8,8 @@ backend/workspace/
 
 # macOS
 .DS_Store
+
+# Link_space (linkspace/): la extensión de VS Code se compila al instalar
+linkspace/vscode-extension/node_modules/
+linkspace/vscode-extension/out/
+linkspace/vscode-extension/*.vsix

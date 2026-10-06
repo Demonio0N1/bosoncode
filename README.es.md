@@ -219,6 +219,7 @@ servidor por haber cerrado una ventana.
 ./setup.sh --password     # vuelve a enseñar la contraseña de este equipo
 ./setup.sh --csm          # instala Claude Sessions Monitor sin preguntar
 ./setup.sh --no-csm       # se salta ese paso
+./setup.sh --no-linkspace # sin Link_space (enlaces para compartir, ver linkspace/)
 ./setup.sh -y             # sí a todo: Claude Sessions Monitor y Continue
 ./setup.sh --ai continue  # añade Continue sin preguntar (o: --ai copilot)
 ./setup.sh --no-ai        # se salta el paso del asistente de IA
@@ -323,13 +324,14 @@ Opciones:
 *linger* activado, para que sobreviva al cierre de sesión) o un LaunchAgent en
 macOS.
 
-Por defecto `serve.sh` instala también [Link_space](https://github.com/Demonio0N1/Link_space)
-en `~/.ivscode/linkspace`, sin root. Es lo que usa la app para «Share with
-Link_space…»: un enlace público de un solo uso para descargar cualquier archivo
-o carpeta de este equipo, servido por Tailscale Funnel. El primer enlace
-necesita Funnel habilitado en tu tailnet; si no lo está, la app te enseña el
-enlace para activarlo. `--no-linkspace` lo deja fuera; `--install-service` lo
-mantiene al día.
+[Link_space](linkspace/) viene dentro de este repositorio. `serve.sh` lo copia
+a `~/.ivscode/linkspace`, sin root: es lo que usa la app para «Share with
+Link_space…», un enlace público de un solo uso para descargar cualquier archivo
+o carpeta de este equipo, servido por Tailscale Funnel. `./setup.sh` instala
+además sus comandos (`linkspace`, `carpeta-share`) y el clic derecho de tu
+gestor de archivos. El primer enlace necesita Funnel habilitado en tu tailnet;
+si no lo está, la app te enseña el enlace para activarlo. `--no-linkspace` lo
+deja fuera en los dos scripts.
 
 ### 3. Tu contraseña
 

@@ -1,0 +1,51 @@
+{
+  "name": "carpeta-share",
+  "displayName": "Carpeta Share",
+  "description": "Comparte carpetas con un enlace: VS Code web, VS Code de escritorio (SSH/Tailscale) o solo descarga (usa el CLI carpeta-share)",
+  "version": "1.4.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "carpetaShare.compartir",
+        "title": "Compartir carpeta…"
+      },
+      {
+        "command": "carpetaShare.descarga",
+        "title": "Compartir enlace de descarga…"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "carpetaShare.compartir",
+          "when": "explorerResourceIsFolder",
+          "group": "7_modification"
+        },
+        {
+          "command": "carpetaShare.descarga",
+          "when": "!explorerResourceIsFolder",
+          "group": "7_modification"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.4.0"
+  }
+}

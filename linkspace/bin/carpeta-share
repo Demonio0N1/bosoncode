@@ -1,0 +1,1886 @@
+#!/usr/bin/env bash
+# =============================================================================
+# carpeta-share — comparte carpetas de esta máquina con invitados mediante
+# SSH + Tailscale, generando enlaces vscode:// que abren VS Code Remote-SSH.
+#
+# Diseño de seguridad (el porqué de cada pieza):
+#   * Cada invitado es un usuario real del sistema, SIN contraseña utilizable,
+#     SIN sudo, autenticado únicamente por llave pública SSH. Así el sistema
+#     operativo (permisos POSIX + ACLs) es quien confina, no un túnel mágico.
+#   * Un bloque "Match User" en sshd_config le prohíbe contraseña, X11 y
+#     agent-forwarding, pero le PERMITE TcpForwarding porque Remote-SSH y
+#     Jupyter lo necesitan para funcionar.
+#   * El invitado recibe lectura/escritura SOLO sobre la carpeta compartida
+#     (ACLs con herencia) y solo-lectura sobre la instalación de conda.
+#     Los directorios padres solo reciben permiso de "tránsito" (--x/search),
+#     que permite atravesarlos pero NO listar su contenido.
+#   * Dos modos de compartir: "con llave" (el invitado ya te dio su llave
+#     pública) y "sin llave" (generamos aquí el par de llaves y te damos un
+#     paquete para enviárselo). Nunca hay acceso por contraseña.
+# =============================================================================
+set -euo pipefail
+
+VERSION="1.4.0"
+PREFIJO="cs-"                      # prefijo de los usuarios invitados del sistema
+SSHD_CONFIG="/etc/ssh/sshd_config"
+
+SO="$(uname -s)"
+es_macos() { [[ "$SO" == "Darwin" ]]; }
+
+command -v python3 >/dev/null 2>&1 || { echo "✗ carpeta-share necesita python3 (en macOS: xcode-select --install)" >&2; exit 1; }
+
+# --- Usuario "real" (anfitrión), aunque estemos corriendo con sudo/root -------
+# Todo el estado (estado.json, paquetes de acceso) vive en el HOME del
+# anfitrión, no en el de root; por eso lo resolvemos explícitamente.
+USUARIO_REAL="${CS_USUARIO:-${SUDO_USER:-$(id -un)}}"
+if es_macos; then
+  HOME_REAL="$(dscl . -read "/Users/$USUARIO_REAL" NFSHomeDirectory 2>/dev/null | awk '{print $2}' || true)"
+else
+  HOME_REAL="$(getent passwd "$USUARIO_REAL" 2>/dev/null | cut -d: -f6 || true)"
+fi
+HOME_REAL="${HOME_REAL:-$HOME}"
+
+CONFIG_DIR="$HOME_REAL/.config/carpeta-share"
+ESTADO="$CONFIG_DIR/estado.json"
+ACCESOS_DIR="$HOME_REAL/CarpetaShare-Accesos"
+
+# --- Flags globales -----------------------------------------------------------
+GUI=0; SI=0; JSON=0
+ARGS_ORIGINALES=("$@")   # para re-ejecutarnos con root si hace falta
+
+# =============================================================================
+# Utilidades básicas
+# =============================================================================
+info() { if [[ $JSON -eq 0 ]]; then printf '• %s\n' "$*"; fi; }
+ok()   { if [[ $JSON -eq 0 ]]; then printf '\033[32m✓ %s\033[0m\n' "$*"; fi; }
+aviso(){ printf '\033[33m! %s\033[0m\n' "$*" >&2; }
+err()  { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+
+# realpath no existe en macOS viejo y readlink -f tampoco: usamos python3.
+ruta_absoluta() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
+
+codificar_ruta() { python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
+
+fecha_hoy() { date "+%Y-%m-%d %H:%M"; }
+
+usuario_existe() { id -u "$1" >/dev/null 2>&1; }
+
+home_de() {
+  # HOME de un usuario cualquiera, de forma portable (getent no existe en macOS)
+  if es_macos; then
+    dscl . -read "/Users/$1" NFSHomeDirectory 2>/dev/null | awk '{print $2}'
+  else
+    getent passwd "$1" | cut -d: -f6
+  fi
+}
+
+otros_tienen_x() {
+  # ¿El último dígito octal del modo (permisos de "otros") incluye x?
+  local m
+  if es_macos; then m="$(stat -f %Lp "$1")"; else m="$(stat -c %a "$1")"; fi
+  case "${m: -1}" in 1|3|5|7) return 0;; *) return 1;; esac
+}
+
+portapapeles() {
+  if es_macos; then
+    printf '%s' "$1" | pbcopy
+  elif command -v wl-copy >/dev/null 2>&1; then
+    printf '%s' "$1" | wl-copy
+  elif command -v xclip >/dev/null 2>&1; then
+    printf '%s' "$1" | xclip -selection clipboard
+  else
+    return 1
+  fi
+}
+
+confirmar() {
+  # Toda acción destructiva pasa por aquí; --si la salta.
+  local pregunta="$1"
+  if [[ $SI -eq 1 ]]; then return 0; fi
+  if [[ $GUI -eq 1 ]]; then gui_confirmar "$pregunta"; return $?; fi
+  local resp
+  read -r -p "$pregunta [s/N] " resp
+  [[ "$resp" =~ ^[sS] ]]
+}
+
+# --- Escalada a root ----------------------------------------------------------
+# Solo la pedimos cuando de verdad hace falta (crear/borrar usuarios, tocar
+# sshd_config). Con terminal usamos sudo; sin terminal (Finder / extensión de
+# VS Code) usamos el diálogo gráfico de administrador del sistema.
+asegurar_root() {
+  if [[ $EUID -eq 0 ]]; then return 0; fi
+  # CS_CONTRASENA viaja por entorno (no por argumentos) para que una
+  # contraseña personalizada no quede visible en la lista de procesos.
+  if [[ -t 0 ]]; then
+    info "Se necesitan permisos de administrador…"
+    exec sudo env CS_USUARIO="$USUARIO_REAL" CS_CONTRASENA="${CS_CONTRASENA:-}" "$0" ${ARGS_ORIGINALES[@]+"${ARGS_ORIGINALES[@]}"}
+  fi
+  if es_macos; then
+    local cmd esc
+    cmd="CS_USUARIO=$(printf %q "$USUARIO_REAL") CS_CONTRASENA=$(printf %q "${CS_CONTRASENA:-}") $(printf '%q ' "$0" ${ARGS_ORIGINALES[@]+"${ARGS_ORIGINALES[@]}"})"
+    esc="${cmd//\\/\\\\}"; esc="${esc//\"/\\\"}"
+    exec osascript -e "do shell script \"$esc\" with administrator privileges"
+  elif command -v pkexec >/dev/null 2>&1; then
+    exec pkexec env CS_USUARIO="$USUARIO_REAL" CS_CONTRASENA="${CS_CONTRASENA:-}" DISPLAY="${DISPLAY:-}" XAUTHORITY="${XAUTHORITY:-}" "$0" ${ARGS_ORIGINALES[@]+"${ARGS_ORIGINALES[@]}"}
+  fi
+  err "Necesito permisos de administrador: ejecuta este comando con sudo desde una terminal."
+}
+
+# =============================================================================
+# GUI (osascript en macOS, zenity en Linux) — para el clic derecho de Finder
+# =============================================================================
+osa_esc() { local s="${1//\\/\\\\}"; printf '%s' "${s//\"/\\\"}"; }
+
+gui_notificar() {
+  if es_macos; then
+    osascript -e "display notification \"$(osa_esc "$1")\" with title \"carpeta-share\"" >/dev/null 2>&1 || true
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send "carpeta-share" "$1" || true
+  fi
+}
+
+gui_dialogo() {
+  if es_macos; then
+    osascript -e "display dialog \"$(osa_esc "$1")\" with title \"carpeta-share\" buttons {\"OK\"} default button \"OK\"" >/dev/null 2>&1 || true
+  elif command -v zenity >/dev/null 2>&1; then
+    zenity --info --title "carpeta-share" --text "$1" 2>/dev/null || true
+  fi
+}
+
+gui_confirmar() {
+  if es_macos; then
+    osascript -e "display dialog \"$(osa_esc "$1")\" with title \"carpeta-share\" buttons {\"Cancelar\",\"Sí\"} default button \"Sí\" cancel button \"Cancelar\"" >/dev/null 2>&1
+  elif command -v zenity >/dev/null 2>&1; then
+    zenity --question --title "carpeta-share" --text "$1" 2>/dev/null
+  else
+    return 1
+  fi
+}
+
+gui_elegir() {
+  # $1: título; resto: opciones. Imprime la elegida o devuelve 1 si canceló.
+  local titulo="$1"; shift
+  if es_macos; then
+    local items="" it res
+    for it in "$@"; do items="$items\"$(osa_esc "$it")\","; done
+    items="${items%,}"
+    res="$(osascript -e "choose from list {$items} with prompt \"$(osa_esc "$titulo")\" with title \"carpeta-share\"" 2>/dev/null || true)"
+    if [[ -z "$res" || "$res" == "false" ]]; then return 1; fi
+    printf '%s\n' "$res"
+  elif command -v zenity >/dev/null 2>&1; then
+    zenity --list --title "carpeta-share" --text "$titulo" --column "Opción" "$@" 2>/dev/null
+  else
+    return 1
+  fi
+}
+
+# =============================================================================
+# Estado (~/.config/carpeta-share/estado.json), manipulado con python3 para
+# no reinventar un parser JSON en bash. Los datos siempre entran por argv,
+# nunca interpolados en el código python (evita inyecciones con rutas raras).
+# NOTA: los fragmentos python usan SOLO comillas dobles (van dentro de
+# comillas simples de bash).
+# =============================================================================
+estado_init() {
+  mkdir -p "$CONFIG_DIR"
+  if [[ ! -f "$ESTADO" ]]; then
+    printf '{"invitados": {}, "carpetas": [], "config": {}}\n' > "$ESTADO"
+  fi
+  # 600 porque el estado puede contener contraseñas de enlaces web.
+  chmod 600 "$ESTADO" 2>/dev/null || true
+  arreglar_dueno
+}
+
+arreglar_dueno() {
+  # Si corrimos con sudo, los archivos de estado deben seguir siendo del anfitrión.
+  if [[ $EUID -eq 0 ]]; then
+    chown -R "$USUARIO_REAL" "$CONFIG_DIR" 2>/dev/null || true
+    if [[ -d "$ACCESOS_DIR" ]]; then chown -R "$USUARIO_REAL" "$ACCESOS_DIR" 2>/dev/null || true; fi
+  fi
+}
+
+estado_py() {
+  # $1: código python que modifica el dict `e`; args extra llegan en `arg`.
+  local codigo="$1"; shift
+  estado_init
+  python3 - "$ESTADO" "$@" <<PY
+import json, sys
+ruta = sys.argv[1]; arg = sys.argv[2:]
+with open(ruta) as f:
+    e = json.load(f)
+${codigo}
+with open(ruta, "w") as f:
+    json.dump(e, f, indent=2, ensure_ascii=False)
+PY
+  arreglar_dueno
+}
+
+estado_leer() {
+  local codigo="$1"; shift
+  if [[ ! -f "$ESTADO" ]]; then return 0; fi
+  python3 - "$ESTADO" "$@" <<PY
+import json, sys
+ruta = sys.argv[1]; arg = sys.argv[2:]
+with open(ruta) as f:
+    e = json.load(f)
+${codigo}
+PY
+}
+
+config_leer() { estado_leer 'print(e["config"].get(arg[0], ""))' "$1"; }
+config_guardar() { estado_py 'e["config"][arg[0]] = arg[1]' "$1" "$2"; }
+
+# =============================================================================
+# Tailscale
+# =============================================================================
+ts_bin() {
+  if command -v tailscale >/dev/null 2>&1; then echo "tailscale"; return 0; fi
+  if [[ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]]; then
+    echo "/Applications/Tailscale.app/Contents/MacOS/Tailscale"; return 0
+  fi
+  return 1
+}
+
+ts_host() {
+  local tsb host
+  tsb="$(ts_bin)" || err "Tailscale no está instalado. Corre setup.sh o instálalo desde https://tailscale.com/download"
+  host="$("$tsb" status --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("Self",{}).get("DNSName") or "").rstrip("."))' 2>/dev/null || true)"
+  if [[ -z "$host" ]]; then
+    host="$("$tsb" ip -4 2>/dev/null | head -n1 || true)"
+  fi
+  [[ -n "$host" ]] || err "No pude obtener el nombre de Tailscale. ¿Está encendido? Prueba: tailscale up"
+  printf '%s\n' "$host"
+}
+
+# =============================================================================
+# sshd: bloque Match por invitado, delimitado con marcadores para poder
+# quitarlo de forma idempotente. Lo añadimos al FINAL del archivo porque un
+# bloque Match se extiende hasta el siguiente Match o el fin del archivo:
+# ponerlo en un drop-in incluido al principio contaminaría el resto de la
+# configuración.
+# =============================================================================
+recargar_sshd() {
+  if ! sshd -t 2>/dev/null; then
+    err "sshd_config quedó inválido; revisa $SSHD_CONFIG antes de continuar."
+  fi
+  if es_macos; then
+    launchctl kickstart -k system/com.openssh.sshd 2>/dev/null || true
+  else
+    systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || service ssh reload 2>/dev/null || true
+  fi
+}
+
+sshd_agregar_bloque() {
+  local u="$1"
+  if grep -qF "# >>> carpeta-share: $u >>>" "$SSHD_CONFIG"; then return 0; fi
+  cat >> "$SSHD_CONFIG" <<EOF
+
+# >>> carpeta-share: $u >>>
+# Bloque generado por carpeta-share. El invitado solo entra con su llave:
+#  - sin contraseña ni desafío interactivo (nunca hay contraseña que adivinar)
+#  - sin X11 ni agent-forwarding (no puede usar tus llaves ni tu pantalla)
+#  - CON TcpForwarding: lo necesitan VS Code Remote-SSH y Jupyter
+Match User $u
+    PasswordAuthentication no
+    ChallengeResponseAuthentication no
+    PubkeyAuthentication yes
+    X11Forwarding no
+    AllowAgentForwarding no
+    AllowStreamLocalForwarding no
+    PermitTunnel no
+    AllowTcpForwarding yes
+    PermitTTY yes
+# <<< carpeta-share: $u <<<
+EOF
+  recargar_sshd
+}
+
+sshd_quitar_bloque() {
+  local u="$1"
+  if ! grep -qF "# >>> carpeta-share: $u >>>" "$SSHD_CONFIG" 2>/dev/null; then return 0; fi
+  # sed -i no es portable entre GNU y BSD: editamos con python3.
+  python3 - "$SSHD_CONFIG" "$u" <<'PY'
+import sys
+ruta, u = sys.argv[1], sys.argv[2]
+ini = "# >>> carpeta-share: " + u + " >>>"
+fin = "# <<< carpeta-share: " + u + " <<<"
+with open(ruta) as f:
+    lineas = f.readlines()
+salida, dentro = [], False
+for l in lineas:
+    if l.strip() == ini:
+        dentro = True
+        if salida and salida[-1].strip() == "":
+            salida.pop()
+        continue
+    if l.strip() == fin:
+        dentro = False
+        continue
+    if not dentro:
+        salida.append(l)
+with open(ruta, "w") as f:
+    f.writelines(salida)
+PY
+  recargar_sshd
+}
+
+# =============================================================================
+# ACLs — el confinamiento real
+# =============================================================================
+conda_base() {
+  # Detecta (y cachea) la instalación de conda del anfitrión.
+  local c d
+  c="$(config_leer conda_base || true)"
+  if [[ -n "$c" && -d "$c" ]]; then printf '%s\n' "$c"; return 0; fi
+  for d in "$HOME_REAL/miniconda3" "$HOME_REAL/anaconda3" "$HOME_REAL/miniforge3" \
+           "$HOME_REAL/mambaforge" "$HOME_REAL/opt/miniconda3" "$HOME_REAL/opt/anaconda3" \
+           /opt/miniconda3 /opt/anaconda3 /usr/local/anaconda3 /usr/local/miniconda3; do
+    if [[ -d "$d/etc/profile.d" ]]; then config_guardar conda_base "$d"; printf '%s\n' "$d"; return 0; fi
+  done
+  if [[ $EUID -eq 0 ]]; then
+    c="$(sudo -u "$USUARIO_REAL" bash -lc 'conda info --base' 2>/dev/null | tail -n1 || true)"
+  else
+    c="$(bash -lc 'conda info --base' 2>/dev/null | tail -n1 || true)"
+  fi
+  if [[ -n "$c" && -d "$c" ]]; then config_guardar conda_base "$c"; printf '%s\n' "$c"; return 0; fi
+  printf '\n'
+}
+
+# --- macOS: chmod +a (sintaxis propia de ACLs de macOS) -----------------------
+# Los permisos de directorio y de archivo usan palabras distintas, y las
+# banderas de herencia solo tienen sentido en directorios, así que aplicamos
+# ACEs distintas con find en lugar de un único chmod -R.
+ace_dir_rw()  { printf '%s' "$1 allow list,add_file,search,add_subdirectory,delete_child,delete,readattr,writeattr,readextattr,writeextattr,readsecurity,file_inherit,directory_inherit"; }
+ace_arch_rw() { printf '%s' "$1 allow read,write,append,execute,delete,readattr,writeattr,readextattr,writeextattr,readsecurity"; }
+ace_dir_ro()  { printf '%s' "$1 allow list,search,readattr,readextattr,readsecurity,file_inherit,directory_inherit"; }
+ace_arch_ro() { printf '%s' "$1 allow read,execute,readattr,readextattr,readsecurity"; }
+
+acl_ya_aplicada() {
+  local u="$1" ruta="$2"
+  if es_macos; then
+    /bin/ls -led "$ruta" 2>/dev/null | grep -q "user:$u allow"
+  else
+    getfacl -p "$ruta" 2>/dev/null | grep -q "^user:$u:"
+  fi
+}
+
+acl_aplicar() {
+  # acl_aplicar <usuario> <ruta> <rw|ro>
+  local u="$1" ruta="$2" modo="$3"
+  if acl_ya_aplicada "$u" "$ruta"; then info "ACLs ya presentes en $ruta (nada que hacer)"; return 0; fi
+  if es_macos; then
+    if [[ "$modo" == "rw" ]]; then
+      find "$ruta" -type d -exec chmod +a "$(ace_dir_rw "$u")" {} +
+      find "$ruta" -type f -exec chmod +a "$(ace_arch_rw "$u")" {} +
+    else
+      find "$ruta" -type d -exec chmod +a "$(ace_dir_ro "$u")" {} +
+      find "$ruta" -type f -exec chmod +a "$(ace_arch_ro "$u")" {} +
+    fi
+  else
+    if [[ "$modo" == "rw" ]]; then
+      # ACL efectiva + ACL default (herencia para archivos nuevos)
+      setfacl -R -m "u:$u:rwX" "$ruta"
+      setfacl -R -d -m "u:$u:rwX" "$ruta"
+    else
+      setfacl -R -m "u:$u:rX" "$ruta"
+      setfacl -R -d -m "u:$u:rX" "$ruta"
+    fi
+  fi
+}
+
+acl_quitar() {
+  # Elimina TODAS las ACEs del usuario bajo la ruta (incluidas heredadas).
+  local u="$1" ruta="$2"
+  if [[ ! -e "$ruta" ]]; then return 0; fi
+  if es_macos; then
+    local f idx
+    find "$ruta" -print0 | while IFS= read -r -d '' f; do
+      while :; do
+        idx="$(/bin/ls -led "$f" 2>/dev/null | awk -v u="user:$u " 'index($0, u) { sub(":", "", $1); print $1; exit }')"
+        if [[ -z "$idx" ]]; then break; fi
+        chmod -a# "$idx" "$f" 2>/dev/null || break
+      done
+    done
+  else
+    setfacl -R -x "u:$u" "$ruta" 2>/dev/null || true
+    setfacl -R -d -x "u:$u" "$ruta" 2>/dev/null || true
+  fi
+}
+
+# --- Tránsito por los padres --------------------------------------------------
+# Para llegar a ~/Proyectos/X el invitado debe poder ATRAVESAR ~/ y
+# ~/Proyectos, pero sin poder listarlos. Eso es exactamente el bit x sin r:
+# "--x" en POSIX, "search" en las ACLs de macOS. Solo lo aplicamos a padres
+# que no sean ya transitables por "otros" (p. ej. /Users ya es 755).
+transito_aplicar() {
+  local u="$1" objetivo="$2" p
+  p="$(dirname "$objetivo")"
+  while [[ -n "$p" && "$p" != "/" ]]; do
+    if ! otros_tienen_x "$p"; then
+      if es_macos; then
+        chmod +a "$u allow search" "$p" 2>/dev/null || aviso "No pude dar tránsito en $p"
+      else
+        # Si el invitado ya tiene una ACL aquí (p. ej. la carpeta también está
+        # compartida), no la degradamos a --x.
+        if ! getfacl -p "$p" 2>/dev/null | grep -q "^user:$u:"; then
+          setfacl -m "u:$u:--x" "$p" 2>/dev/null || aviso "No pude dar tránsito en $p"
+        fi
+      fi
+    fi
+    p="$(dirname "$p")"
+  done
+}
+
+transito_quitar() {
+  local u="$1" objetivo="$2" p
+  p="$(dirname "$objetivo")"
+  while [[ -n "$p" && "$p" != "/" ]]; do
+    if es_macos; then
+      chmod -a "$u allow search" "$p" 2>/dev/null || true
+    else
+      if getfacl -p "$p" 2>/dev/null | grep -q "^user:$u:--x"; then
+        setfacl -x "u:$u" "$p" 2>/dev/null || true
+      fi
+    fi
+    p="$(dirname "$p")"
+  done
+}
+
+conda_dar_acceso() {
+  # Solo-lectura sobre conda. Si la instalación ya es legible por "otros"
+  # (lo normal con umask 022) basta con el tránsito; si no, aplicamos ACLs
+  # recursivas (puede tardar en instalaciones grandes).
+  local u="$1" cb
+  cb="$(conda_base)"
+  if [[ -z "$cb" ]]; then info "No detecté conda; el invitado tendrá terminal pero sin conda."; return 0; fi
+  transito_aplicar "$u" "$cb/."
+  if ! otros_tienen_x "$cb" || ! [[ -r "$cb/bin/conda" ]]; then
+    info "Aplicando ACLs de solo-lectura sobre conda ($cb)… puede tardar."
+    acl_aplicar "$u" "$cb" ro
+  fi
+}
+
+conda_quitar_acceso() {
+  local u="$1" cb
+  cb="$(conda_base)"
+  if [[ -z "$cb" ]]; then return 0; fi
+  if acl_ya_aplicada "$u" "$cb"; then acl_quitar "$u" "$cb"; fi
+  transito_quitar "$u" "$cb/."
+}
+
+recomputar_transitos() {
+  # Tras quitar un share, re-aplica el tránsito de las carpetas que el
+  # invitado conserva (por si compartían padres con la carpeta eliminada).
+  local u="$1" nombre="$2" r cb
+  while IFS= read -r r; do
+    if [[ -n "$r" && -d "$r" ]]; then transito_aplicar "$u" "$r"; fi
+  done < <(estado_leer 'print("\n".join(c["ruta"] for c in e["carpetas"] if c["invitado"] == arg[0]))' "$nombre")
+  cb="$(conda_base)"
+  if [[ -n "$cb" ]]; then
+    if estado_leer 'print("si" if any(c["invitado"] == arg[0] for c in e["carpetas"]) else "")' "$nombre" | grep -q si; then
+      transito_aplicar "$u" "$cb/."
+    fi
+  fi
+}
+
+# =============================================================================
+# Invitados
+# =============================================================================
+invitado_crear() {
+  # invitado_crear <nombre> <llave-publica> <modo: clave|generada>
+  local nombre="$1" llave="$2" modo="$3"
+  local u="${PREFIJO}${nombre}" hinv cb
+
+  if es_macos; then hinv="/var/carpeta-share/$u"; else hinv="/home/$u"; fi
+
+  if ! usuario_existe "$u"; then
+    info "Creando usuario del sistema $u…"
+    if es_macos; then
+      # Contraseña aleatoria que nadie conoce + Password '*' en OpenDirectory.
+      # La entrada por contraseña queda doblemente muerta: no existe una
+      # contraseña válida Y sshd la rechaza por el bloque Match.
+      local pw
+      pw="$(openssl rand -base64 24)"
+      sysadminctl -addUser "$u" -fullName "carpeta-share: $nombre" \
+        -password "$pw" -home "$hinv" -shell /bin/zsh >/dev/null 2>&1
+      dscl . -create "/Users/$u" IsHidden 1          # no aparece en la pantalla de login
+      dscl . -create "/Users/$u" Password '*'        # hash imposible: sin contraseña válida
+      mkdir -p "$hinv"
+      chown "$u:staff" "$hinv"
+    else
+      # Sin ":" en el comentario: el campo GECOS de /etc/passwd usa los dos
+      # puntos como separador y useradd los rechaza.
+      useradd --create-home --home-dir "$hinv" --shell /bin/bash \
+        --comment "carpeta-share $nombre" "$u"
+      passwd -l "$u" >/dev/null                      # bloquea la contraseña (la llave sigue valiendo)
+    fi
+    chmod 700 "$hinv"                                # su home es privado, ni siquiera legible por otros
+  else
+    info "El usuario $u ya existe; actualizo su llave y configuración."
+  fi
+
+  # Llave SSH del invitado (única forma de entrar). Los invitados de modo
+  # "web" no tienen llave: su usuario existe solo para confinar code-server
+  # y no reciben acceso SSH en absoluto.
+  if [[ -n "$llave" ]]; then
+    mkdir -p "$hinv/.ssh"
+    printf '%s\n' "$llave" > "$hinv/.ssh/authorized_keys"
+    chmod 700 "$hinv/.ssh"
+    chmod 600 "$hinv/.ssh/authorized_keys"
+    if es_macos; then chown -R "$u:staff" "$hinv/.ssh"; else chown -R "$u:$u" "$hinv/.ssh"; fi
+  fi
+
+  # Shell del invitado: conda del anfitrión en solo-lectura, pero sus envs y
+  # paquetes se crean en SU home (CONDA_ENVS_PATH/CONDA_PKGS_DIRS), así puede
+  # crear entornos propios sin poder tocar los tuyos.
+  cb="$(conda_base)"
+  {
+    echo "# Generado por carpeta-share — no editar a mano"
+    echo 'export CONDA_ENVS_PATH="$HOME/.conda/envs"'
+    echo 'export CONDA_PKGS_DIRS="$HOME/.conda/pkgs"'
+    if [[ -n "$cb" ]]; then
+      echo "if [ -f \"$cb/etc/profile.d/conda.sh\" ]; then . \"$cb/etc/profile.d/conda.sh\"; fi"
+    fi
+  } > "$hinv/.bashrc"
+  cp "$hinv/.bashrc" "$hinv/.zshrc"
+  printf '[ -f ~/.bashrc ] && . ~/.bashrc\n' > "$hinv/.bash_profile"
+  mkdir -p "$hinv/.conda/envs" "$hinv/.conda/pkgs"
+  if es_macos; then chown -R "$u:staff" "$hinv"; else chown -R "$u:$u" "$hinv"; fi
+
+  if [[ -n "$llave" ]]; then sshd_agregar_bloque "$u"; fi
+  conda_dar_acceso "$u"
+
+  estado_py 'e["invitados"][arg[0]] = {"usuario": arg[1], "modo": arg[2], "creado": arg[3], "suspendido": False}' \
+    "$nombre" "$u" "$modo" "$(fecha_hoy)"
+}
+
+cmd_invitado_agregar() {
+  local nombre="${1:-}" llave="${2:-}" gh_usuario
+  if [[ -z "$nombre" || -z "$llave" ]]; then
+    err 'Uso: carpeta-share invitado agregar <nombre> "<llave-publica-ssh>"  (o: <nombre> --github <usuario>)'
+  fi
+  [[ "$nombre" =~ ^[a-z][a-z0-9-]{0,20}$ ]] || err "Nombre inválido: usa minúsculas, números y guiones (ej.: ana)"
+  if [[ "$llave" == "--github" ]]; then
+    # El invitado no tiene que mandarte nada: usamos las llaves públicas que
+    # ya tiene en su cuenta de GitHub (https://github.com/<usuario>.keys).
+    gh_usuario="${3:-}"
+    [[ "$gh_usuario" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]] || err "Usuario de GitHub inválido: '$gh_usuario'"
+    llave="$(curl -fsSL --max-time 15 "https://github.com/$gh_usuario.keys" 2>/dev/null || true)"
+    [[ -n "$llave" ]] || err "No pude obtener llaves de github.com/$gh_usuario: ¿existe la cuenta y tiene llaves SSH cargadas?"
+    info "github.com/$gh_usuario: $(printf '%s\n' "$llave" | grep -c .) llave/s pública/s. Quien controle esa cuenta podrá entrar."
+  fi
+  if ! printf '%s' "$llave" | grep -Eq '^(ssh-(ed25519|rsa)|ecdsa-sha2|sk-ssh)'; then
+    err "Eso no parece una llave pública SSH (debe empezar con ssh-ed25519, ssh-rsa…). Pídele al invitado: ssh-keygen -t ed25519"
+  fi
+  asegurar_root
+  invitado_crear "$nombre" "$llave" "clave"
+  ok "Invitado '$nombre' listo (usuario del sistema: ${PREFIJO}${nombre})."
+  info "Ahora comparte una carpeta: carpeta-share compartir <carpeta> --con $nombre"
+}
+
+cmd_invitado_suspender() {
+  local nombre="${1:-}"; [[ -n "$nombre" ]] || err "Uso: carpeta-share invitado suspender <nombre>"
+  local u="${PREFIJO}${nombre}" h
+  usuario_existe "$u" || err "No existe el invitado '$nombre'."
+  asegurar_root
+  h="$(home_de "$u")"
+  # Retirar la llave corta el ÚNICO camino de entrada; pkill tira las
+  # sesiones que ya estuvieran abiertas.
+  if [[ -f "$h/.ssh/authorized_keys" ]]; then
+    mv "$h/.ssh/authorized_keys" "$h/.ssh/authorized_keys.suspendida"
+  fi
+  pkill -u "$u" 2>/dev/null || true
+  estado_py 'e["invitados"].setdefault(arg[0], {"usuario": arg[1]})["suspendido"] = True' "$nombre" "$u"
+  ok "Invitado '$nombre' suspendido (llave retirada y sesiones cerradas)."
+}
+
+cmd_invitado_reactivar() {
+  local nombre="${1:-}"; [[ -n "$nombre" ]] || err "Uso: carpeta-share invitado reactivar <nombre>"
+  local u="${PREFIJO}${nombre}" h
+  usuario_existe "$u" || err "No existe el invitado '$nombre'."
+  asegurar_root
+  h="$(home_de "$u")"
+  if [[ -f "$h/.ssh/authorized_keys.suspendida" ]]; then
+    mv "$h/.ssh/authorized_keys.suspendida" "$h/.ssh/authorized_keys"
+  fi
+  estado_py 'e["invitados"].setdefault(arg[0], {"usuario": arg[1]})["suspendido"] = False' "$nombre" "$u"
+  ok "Invitado '$nombre' reactivado."
+}
+
+cmd_invitado_eliminar() {
+  local nombre="${1:-}"; [[ -n "$nombre" ]] || err "Uso: carpeta-share invitado eliminar <nombre>"
+  local u="${PREFIJO}${nombre}" r
+  confirmar "¿Eliminar al invitado '$nombre'? Se cierran sus sesiones, se borra su usuario y se retiran todas sus ACLs." \
+    || err "Cancelado."
+  asegurar_root
+  # 1) Limpiar ACLs de todas sus carpetas y de conda ANTES de borrar el
+  #    usuario (después quedarían ACEs huérfanas apuntando a un UID muerto).
+  while IFS= read -r r; do
+    if [[ -n "$r" && -e "$r" ]]; then
+      info "Retirando ACLs de $r…"
+      acl_quitar "$u" "$r"
+      transito_quitar "$u" "$r"
+    fi
+  done < <(estado_leer 'print("\n".join(c["ruta"] for c in e["carpetas"] if c["invitado"] == arg[0]))' "$nombre")
+  conda_quitar_acceso "$u"
+  # 2) Despublicar sus enlaces web (Funnel) si los tenía.
+  local wpl2 wpp2
+  while IFS='|' read -r wpl2 wpp2; do
+    if [[ -n "$wpl2" ]]; then funnel_desactivar "$wpp2" "$wpl2"; fi
+  done < <(estado_leer '
+for w in e.get("web", []):
+    if w["invitado"] == arg[0]:
+        print(str(w["puerto_local"]) + "|" + str(w["puerto_publico"]))
+' "$nombre")
+  # 3) Cerrar sesiones/procesos (incluye code-server) y borrar usuario + sshd.
+  pkill -u "$u" 2>/dev/null || true
+  sshd_quitar_bloque "$u"
+  if usuario_existe "$u"; then
+    local h; h="$(home_de "$u")"
+    if es_macos; then
+      sysadminctl -deleteUser "$u" >/dev/null 2>&1 || dscl . -delete "/Users/$u" || true
+      if [[ -n "$h" && -d "$h" && "$h" == /var/carpeta-share/* ]]; then rm -rf "$h"; fi
+    else
+      userdel -r -f "$u" 2>/dev/null || userdel "$u"
+    fi
+  fi
+  estado_py '
+e["invitados"].pop(arg[0], None)
+e["carpetas"] = [c for c in e["carpetas"] if c["invitado"] != arg[0]]
+e["web"] = [w for w in e.get("web", []) if w["invitado"] != arg[0]]
+' "$nombre"
+  ok "Invitado '$nombre' eliminado por completo."
+}
+
+# =============================================================================
+# Compartir / dejar de compartir
+# =============================================================================
+nombre_libre() {
+  local i=1
+  while usuario_existe "${PREFIJO}acceso$i"; do i=$((i + 1)); done
+  printf 'acceso%d\n' "$i"
+}
+
+generar_acceso_sin_llave() {
+  # Modo "sin llave": generamos NOSOTROS el par de llaves y dejamos un
+  # paquete en ~/CarpetaShare-Accesos/<nombre>/ para enviárselo al invitado.
+  # Es menos seguro que el modo con llave (la privada viaja por tu canal de
+  # envío), pero no requiere que el invitado sepa generar llaves.
+  local nombre="$1" dir="$ACCESOS_DIR/$1"
+  mkdir -p "$dir"
+  if [[ ! -f "$dir/clave_carpeta_share" ]]; then
+    ssh-keygen -t ed25519 -N "" -C "carpeta-share:$nombre" -f "$dir/clave_carpeta_share" >/dev/null
+  fi
+  invitado_crear "$nombre" "$(cat "$dir/clave_carpeta_share.pub")" "generada"
+  arreglar_dueno
+  printf '%s\n' "$dir"
+}
+
+# =============================================================================
+# Modo web: code-server (VS Code en el navegador) + Tailscale Funnel.
+# El invitado NO instala nada: abre una URL https en cualquier navegador.
+# Precisamente porque esa URL es pública en internet, el enlace se comparte
+# CON contraseña (recomendado) o SIN contraseña — esa es la elección que
+# ofrece siempre el flujo de compartir.
+# =============================================================================
+code_server_bin() {
+  if command -v code-server >/dev/null 2>&1; then command -v code-server; return 0; fi
+  local c
+  for c in /opt/homebrew/bin/code-server /usr/local/bin/code-server; do
+    if [[ -x "$c" ]]; then echo "$c"; return 0; fi
+  done
+  return 1
+}
+
+nombre_libre_web() {
+  local i=1
+  while usuario_existe "${PREFIJO}web$i"; do i=$((i + 1)); done
+  printf 'web%d\n' "$i"
+}
+
+puerto_local_libre() {
+  # Busca un puerto libre en loopback a partir de 13380 (o de $1).
+  local p="${1:-13380}"
+  while (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; do
+    exec 3>&- 2>/dev/null || true
+    p=$((p + 1))
+  done
+  printf '%d\n' "$p"
+}
+
+puerto_publico_libre() {
+  # Funnel solo puede publicar en 443, 8443 y 10000 → máximo 3 shares web.
+  local usados p
+  usados="$(estado_leer 'print("\n".join(str(w["puerto_publico"]) for w in e.get("web", [])))')"
+  for p in 443 8443 10000; do
+    if ! printf '%s\n' "$usados" | grep -qx "$p"; then printf '%d\n' "$p"; return 0; fi
+  done
+  err "Ya hay 3 enlaces web activos (límite de Tailscale Funnel). Cierra alguno con dejar-de-compartir."
+}
+
+generar_contrasena() { python3 -c 'import secrets; print(secrets.token_urlsafe(9))'; }
+
+funnel_activar() {
+  # $1 puerto público  $2 puerto local  [$3 ruta de montaje; por defecto /].
+  # Publica https://<host>[:puerto]/ → 127.0.0.1:puerto_local SIN abrir
+  # puertos en el router: el tráfico entra por los relés de Tailscale con TLS
+  # del propio tailnet.
+  local tsb salida
+  tsb="$(ts_bin)" || err "Tailscale no está instalado."
+  if ! salida="$("$tsb" funnel --bg --https="$1" ${3:+--set-path="$3"} "http://127.0.0.1:$2" 2>&1)"; then
+    # En Linux, sin ser root ni "operator" de Tailscale, el CLI lo rechaza:
+    # reintentamos como administrador (el modo web ya llega aquí como root).
+    if [[ $EUID -ne 0 ]] && printf '%s' "$salida" | grep -qi 'access denied'; then asegurar_root; fi
+    printf '%s\n' "$salida" >&2
+    err "No pude activar Tailscale Funnel. Normalmente hay que habilitarlo UNA vez en tu tailnet (el mensaje de arriba trae el enlace) y tener HTTPS y MagicDNS activos en el panel de Tailscale."
+  fi
+}
+
+funnel_desactivar() {
+  # $1 puerto público  $2 puerto local  [$3 ruta de montaje; por defecto /].
+  # Siempre con --set-path: un 'off' a secas borra TODOS los montajes del
+  # puerto, y las descargas (/dl) pueden convivir ahí con un enlace web.
+  local tsb salida m="${3:-/}"
+  tsb="$(ts_bin)" || return 0
+  if salida="$("$tsb" funnel --https="$1" --set-path="$m" off 2>&1 </dev/null)"; then return 0; fi
+  if [[ $EUID -ne 0 ]] && printf '%s' "$salida" | grep -qi 'access denied'; then asegurar_root; fi
+  "$tsb" funnel --https="$1" --set-path="$m" "http://127.0.0.1:$2" off >/dev/null 2>&1 </dev/null || true
+}
+
+web_iniciar() {
+  # web_iniciar <usuario> <carpeta> <puerto_local> <contraseña|"">
+  # Lanza code-server COMO EL USUARIO INVITADO (mismo confinamiento que el
+  # modo SSH: sin sudo, ACLs, conda en solo-lectura) y solo en loopback:
+  # desde fuera únicamente se llega a través de Funnel.
+  local u="$1" carpeta="$2" pl="$3" pw="$4" csb hinv
+  csb="$(code_server_bin)" \
+    || err "Falta code-server (necesario para el modo web). Instálalo: macOS 'brew install code-server' · Linux 'curl -fsSL https://code-server.dev/install.sh | sh'"
+  hinv="$(home_de "$u")"
+  pkill -u "$u" -f "bind-addr 127.0.0.1:$pl" 2>/dev/null || true
+  sleep 1
+  if [[ -n "$pw" ]]; then
+    sudo -u "$u" -H env PASSWORD="$pw" nohup "$csb" --auth password \
+      --bind-addr "127.0.0.1:$pl" --disable-telemetry --disable-update-check \
+      "$carpeta" >> "$hinv/code-server.log" 2>&1 &
+  else
+    sudo -u "$u" -H nohup "$csb" --auth none \
+      --bind-addr "127.0.0.1:$pl" --disable-telemetry --disable-update-check \
+      "$carpeta" >> "$hinv/code-server.log" 2>&1 &
+  fi
+  disown 2>/dev/null || true
+  local i=0
+  until (exec 3<>"/dev/tcp/127.0.0.1/$pl") 2>/dev/null; do
+    i=$((i + 1))
+    if [[ $i -gt 30 ]]; then
+      tail -n 20 "$hinv/code-server.log" >&2 2>/dev/null || true
+      err "code-server no arrancó (mira el log de arriba)."
+    fi
+    sleep 0.5
+  done
+  exec 3>&- 2>/dev/null || true
+}
+
+compartir_web() {
+  # compartir_web <carpeta> <con> <conpw> <sinpw> [contraseña-personalizada]
+  local carpeta="$1" con="$2" conpw="$3" sinpw="$4" pwpersonal="${5:-}"
+  local nombre usuario existente pl pp pw host url resto
+  asegurar_root
+
+  # Invitado dedicado por carpeta (web1, web2…) o el que diga --con. No
+  # tiene llave SSH: su usuario existe solo para confinar code-server.
+  existente="$(estado_leer '
+w = next((w for w in e.get("web", []) if w["ruta"] == arg[0]), None)
+print((w["invitado"] + "|" + str(w["puerto_local"]) + "|" + str(w["puerto_publico"]) + "|" + w.get("contrasena", "")) if w else "")
+' "$carpeta")"
+  if [[ -n "$con" ]]; then
+    nombre="$con"
+  elif [[ -n "$existente" ]]; then
+    nombre="${existente%%|*}"
+  else
+    nombre="$(nombre_libre_web)"
+  fi
+  usuario="${PREFIJO}${nombre}"
+  if ! usuario_existe "$usuario"; then
+    invitado_crear "$nombre" "" "web"
+  fi
+
+  info "Aplicando permisos para $usuario sobre $carpeta…"
+  acl_aplicar "$usuario" "$carpeta" rw
+  transito_aplicar "$usuario" "$carpeta"
+  conda_dar_acceso "$usuario"
+  estado_py '
+c = {"ruta": arg[0], "invitado": arg[1], "desde": arg[2]}
+if not any(x["ruta"] == arg[0] and x["invitado"] == arg[1] for x in e["carpetas"]):
+    e["carpetas"].append(c)
+' "$carpeta" "$nombre" "$(fecha_hoy)"
+
+  # Puertos y contraseña: se reutilizan los del share previo (idempotencia).
+  if [[ -n "$existente" ]]; then
+    resto="${existente#*|}"
+    pl="${resto%%|*}"; resto="${resto#*|}"
+    pp="${resto%%|*}"; pw="${resto#*|}"
+  else
+    pl="$(puerto_local_libre)"
+    pp="$(puerto_publico_libre)"
+    pw=""
+  fi
+  if [[ $sinpw -eq 1 ]]; then
+    pw=""
+    aviso "Enlace SIN contraseña: cualquiera que consiga la URL podrá entrar."
+  elif [[ -n "$pwpersonal" ]]; then
+    if [[ ${#pwpersonal} -lt 8 ]]; then err "La contraseña debe tener al menos 8 caracteres."; fi
+    pw="$pwpersonal"
+  elif [[ -z "$pw" ]]; then
+    pw="$(generar_contrasena)"
+  fi
+
+  web_iniciar "$usuario" "$carpeta" "$pl" "$pw"
+  funnel_activar "$pp" "$pl"
+
+  host="$(ts_host)"
+  if [[ "$pp" == "443" ]]; then url="https://$host/"; else url="https://$host:$pp/"; fi
+
+  estado_py '
+e.setdefault("web", [])
+e["web"] = [w for w in e["web"] if w["ruta"] != arg[0]]
+e["web"].append({"ruta": arg[0], "invitado": arg[1], "puerto_local": int(arg[2]), "puerto_publico": int(arg[3]), "contrasena": arg[4], "desde": arg[5]})
+' "$carpeta" "$nombre" "$pl" "$pp" "$pw" "$(fecha_hoy)"
+
+  if portapapeles "$url"; then ok "Enlace web copiado al portapapeles."; fi
+
+  if [[ $JSON -eq 1 ]]; then
+    python3 -c 'import json,sys; print(json.dumps({"modo": "web", "invitado": sys.argv[1], "usuario": sys.argv[2], "host": sys.argv[3], "enlace": sys.argv[4], "contrasena": sys.argv[5] or None, "paquete": None}))' \
+      "$nombre" "$usuario" "$host" "$url" "$pw"
+  elif [[ $GUI -eq 1 ]]; then
+    if [[ -n "$pw" ]]; then
+      gui_dialogo "Enlace web listo (ya en tu portapapeles): $url — Contraseña: $pw — Consejo: envía la contraseña por un canal distinto al del enlace."
+    else
+      gui_dialogo "Enlace web SIN contraseña listo (ya en tu portapapeles): $url — Cualquiera con la URL puede entrar."
+    fi
+    gui_notificar "Enlace web copiado al portapapeles."
+  else
+    printf '\n'
+    ok "Carpeta compartida por la web: $carpeta"
+    printf '  El invitado NO instala nada: abre la URL en cualquier navegador.\n\n'
+    printf '  Enlace (ya en tu portapapeles):\n  %s\n\n' "$url"
+    if [[ -n "$pw" ]]; then
+      printf '  Contraseña: %s\n' "$pw"
+      printf '  (envíasela por un canal distinto al del enlace)\n'
+    else
+      printf '  SIN contraseña: cualquiera con la URL entra. Úsalo solo para cosas no sensibles.\n'
+    fi
+    printf '\n  Si reinicias el equipo, repite este mismo comando para relanzar el\n  servidor (los permisos se conservan).\n'
+  fi
+}
+
+# =============================================================================
+# Modo solo descarga: un enlace único con token por archivo o carpeta. Quien
+# lo abre solo puede BAJAR eso (la carpeta llega como .zip): no hay editor,
+# terminal ni usuario invitado. Un único servidor local (carpeta-share-
+# descargas: corre como el anfitrión, solo en loopback, y solo sabe leer lo
+# registrado en estado.json) atiende todos los tokens. Se publica en la RUTA
+# /dl del mismo Funnel que usa el modo web, así que convive en el puerto de
+# un enlace web y no gasta ninguno de los 3 puertos de Funnel.
+# Cada enlace puede caducar (--expira), tener un máximo de descargas
+# (--max-descargas / --una-vez) y pedir contraseña; el servidor relee esas
+# condiciones en cada petición y lleva la cuenta de descargas completadas.
+# =============================================================================
+MONTAJE_DESCARGAS="/dl"
+PUERTO_BASE_DESCARGAS=13480        # rango propio: no se cruza con code-server (13380…)
+
+generar_token() { python3 -c 'import secrets; print(secrets.token_urlsafe(24))'; }
+
+descargas_bin() {
+  # El servidor vive junto al CLI (en el repo y ya instalado). Si un setup.sh
+  # anterior actualizó sin copiarlo, lo tomamos del repositorio.
+  local d rp
+  d="$(cd "$(dirname "$0")" && pwd)/carpeta-share-descargas"
+  if [[ -f "$d" ]]; then printf '%s\n' "$d"; return 0; fi
+  if [[ -f "$CONFIG_DIR/ruta_instalacion" ]]; then
+    rp="$(cat "$CONFIG_DIR/ruta_instalacion")"
+    if [[ -f "$rp/bin/carpeta-share-descargas" ]]; then printf '%s\n' "$rp/bin/carpeta-share-descargas"; return 0; fi
+  fi
+  return 1
+}
+
+descargas_vivo() {
+  # ¿Corre NUESTRO servidor en ese puerto? (que el puerto responda no basta)
+  pgrep -f "carpeta-share-descargas.*--puerto $1\$" >/dev/null 2>&1
+}
+
+descargas_iniciar() {
+  # descargas_iniciar <puerto_local> — no hace nada si ya está corriendo.
+  local pl="$1" bin log="$CONFIG_DIR/descargas.log" i=0
+  if descargas_vivo "$pl"; then return 0; fi
+  bin="$(descargas_bin)" || err "No encuentro carpeta-share-descargas (el servidor del modo descarga). Reinstala con setup.sh."
+  estado_init
+  # 600: el registro lleva nombres de archivo e IPs de quien descarga.
+  touch "$log"; chmod 600 "$log"; arreglar_dueno
+  # Siempre como el anfitrión, jamás como root: solo necesita LEER lo que tú
+  # ya puedes leer.
+  if [[ $EUID -eq 0 ]]; then
+    sudo -u "$USUARIO_REAL" -H nohup python3 "$bin" --estado "$ESTADO" --puerto "$pl" >> "$log" 2>&1 </dev/null &
+  else
+    nohup python3 "$bin" --estado "$ESTADO" --puerto "$pl" >> "$log" 2>&1 </dev/null &
+  fi
+  disown 2>/dev/null || true
+  until (exec 3<>"/dev/tcp/127.0.0.1/$pl") 2>/dev/null; do
+    i=$((i + 1))
+    if [[ $i -gt 30 ]]; then
+      tail -n 20 "$log" >&2 2>/dev/null || true
+      return 1
+    fi
+    sleep 0.5
+  done
+  exec 3>&- 2>/dev/null || true
+}
+
+descargas_puerto_publico() {
+  # Las descargas cuelgan de una RUTA (/dl), no de un puerto propio. Usamos
+  # un puerto donde ya publique un enlace web nuestro (Funnel ya está abierto
+  # ahí) y, si no hay, uno de los tres de Funnel que Tailscale no use para
+  # nada más. Jamás montamos sobre un 'serve' ajeno: activar Funnel en ese
+  # puerto expondría también ese servicio a internet.
+  local pp tsb nuestros ocupados p
+  pp="$(config_leer descargas_puerto_publico || true)"
+  if [[ -n "$pp" ]]; then printf '%s\n' "$pp"; return 0; fi
+  nuestros="$(estado_leer 'print("\n".join(str(w["puerto_publico"]) for w in e.get("web", [])))')"
+  for p in 443 8443 10000; do
+    if printf '%s\n' "$nuestros" | grep -qx "$p"; then printf '%s\n' "$p"; return 0; fi
+  done
+  tsb="$(ts_bin)" || err "Tailscale no está instalado. Corre setup.sh o instálalo desde https://tailscale.com/download"
+  ocupados="$("$tsb" serve status --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+puertos = set((d.get("TCP") or {}).keys())
+puertos.update(hp.rsplit(":", 1)[-1] for hp in (d.get("Web") or {}))
+print("\n".join(["ok"] + sorted(puertos)))
+' 2>/dev/null || true)"
+  if [[ "${ocupados%%$'\n'*}" != "ok" ]]; then
+    err "No pude leer la configuración de Tailscale ('tailscale serve status'). ¿Está encendido? Prueba: tailscale up"
+  fi
+  for p in 443 8443 10000; do
+    if ! printf '%s\n' "$ocupados" | grep -qx "$p"; then printf '%s\n' "$p"; return 0; fi
+  done
+  err "Los tres puertos de Funnel (443, 8443, 10000) ya los usa otro servicio de Tailscale. Mira: tailscale serve status"
+}
+
+descargas_url() {
+  # descargas_url <host> <puerto_publico> <token>
+  if [[ "$2" == "443" ]]; then
+    printf 'https://%s%s/%s\n' "$1" "$MONTAJE_DESCARGAS" "$3"
+  else
+    printf 'https://%s:%s%s/%s\n' "$1" "$2" "$MONTAJE_DESCARGAS" "$3"
+  fi
+}
+
+duracion_a_segundos() {
+  # "30m", "24h", "7d" → segundos (nada si el formato no vale).
+  if [[ "$1" =~ ^([1-9][0-9]*)([mhd])$ ]]; then
+    case "${BASH_REMATCH[2]}" in
+      m) echo $((BASH_REMATCH[1] * 60));;
+      h) echo $((BASH_REMATCH[1] * 3600));;
+      d) echo $((BASH_REMATCH[1] * 86400));;
+    esac
+  fi
+}
+
+tiempo_restante() {
+  # Segundos → "45 min", "5 h", "3 d".
+  local s="$1"
+  if [[ $s -lt 3600 ]]; then printf '%d min\n' $(( (s + 59) / 60 ))
+  elif [[ $s -lt 172800 ]]; then printf '%d h\n' $(( (s + 1800) / 3600 ))
+  else printf '%d d\n' $(( (s + 43200) / 86400 )); fi
+}
+
+tamano_humano() {
+  awk -v b="$1" 'BEGIN { split("B KB MB GB TB", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ }
+    if (i == 1) printf "%d %s\n", b, u[i]; else printf "%.1f %s\n", b, u[i] }'
+}
+
+descargas_filas() {
+  # Una línea por enlace:
+  #   ruta|tipo|token|desde|usados|max|expira|vida|ocultos|última|contraseña
+  # vida = vivo, caducado o agotado; max y expira valen 0 si no hay límite.
+  # Los contadores salen del archivo que lleva el servidor. La contraseña va
+  # al final porque puede contener "|".
+  estado_leer '
+import time
+try:
+    with open(arg[0]) as f:
+        usos = json.load(f)
+except (OSError, ValueError):
+    usos = {}
+for d in e.get("descargas", []):
+    u = usos.get(d["token"], {})
+    n, mx, ex = int(u.get("n", 0)), int(d.get("max") or 0), int(d.get("expira") or 0)
+    vida = "caducado" if ex and time.time() >= ex else ("agotado" if mx and n >= mx else "vivo")
+    print("|".join([d["ruta"], d.get("tipo", "?"), d["token"], d.get("desde", "?"), str(n), str(mx), str(ex), vida,
+                    "1" if d.get("ocultos", True) else "0", u.get("ultima", ""), d.get("contrasena") or ""]))
+' "$CONFIG_DIR/descargas-usos.json"
+}
+
+descarga_resumen() {
+  # descarga_resumen <tipo> <usados> <max> <expira> <vida> <última> <contraseña>
+  # → "carpeta · 2/3 descargas · caduca en 5 h · contraseña: xxxx"
+  local s="$1"
+  if [[ "$3" != "0" ]]; then s="$s · $2/$3 descargas"; else s="$s · $2 descarga/s"; fi
+  case "$5" in
+    caducado) s="$s · CADUCADO";;
+    agotado)  s="$s · AGOTADO";;
+    *) if [[ "$4" != "0" ]]; then s="$s · caduca en $(tiempo_restante $(( $4 - $(date +%s) )))"; fi;;
+  esac
+  if [[ -n "$6" ]]; then s="$s · última: $6"; fi
+  if [[ -n "$7" ]]; then s="$s · contraseña: $7"; fi
+  printf '%s\n' "$s"
+}
+
+compartir_descarga() {
+  # compartir_descarga <ruta> <expira-seg> <max> <conpw> <sinpw> <contraseña> <con-ocultos>
+  # Una opción vacía (o en 0) significa "no se pidió": un enlace nuevo nace
+  # sin caducidad, límite ni contraseña, y uno que ya existe conserva lo que
+  # tuviera.
+  local ruta="$1" expira="$2" maxd="$3" conpw="$4" sinpw="$5" pwpersonal="$6" conocultos="$7"
+  local tipo que bin token="" nuevo=0 pl pp host url directo nombre
+  local r t tk d n m e vida o u p pw_previa="" ocultos="0"
+  local a_exp="=" a_max="=" a_pw="=" a_ocu="=" pw="" medida narch tam omitidos ejemplos
+  if [[ -d "$ruta" ]]; then tipo="carpeta"; que="esta carpeta (como .zip)"; else tipo="archivo"; que="este archivo"; fi
+  [[ -r "$ruta" ]] || err "No puedo leer '$ruta'."
+  bin="$(descargas_bin)" || err "No encuentro carpeta-share-descargas (el servidor del modo descarga). Reinstala con setup.sh."
+
+  host="$(ts_host)"
+  pp="$(descargas_puerto_publico)"
+  pl="$(config_leer descargas_puerto_local || true)"
+  if [[ -z "$pl" ]] || ! descargas_vivo "$pl"; then pl="$(puerto_local_libre "$PUERTO_BASE_DESCARGAS")"; fi
+
+  # Primero Funnel y después el servidor: si Funnel falla (o hay que
+  # re-ejecutarse como administrador) no queda ningún proceso suelto.
+  funnel_activar "$pp" "$pl" "$MONTAJE_DESCARGAS"
+  if ! descargas_iniciar "$pl"; then
+    funnel_desactivar "$pp" "$pl" "$MONTAJE_DESCARGAS"
+    err "El servidor de descargas no arrancó (mira el log de arriba)."
+  fi
+  config_guardar descargas_puerto_local "$pl"
+  config_guardar descargas_puerto_publico "$pp"
+
+  # Un token por ruta. Si ya hay un enlace VIVO se conserva (repetir el
+  # comando devuelve el MISMO enlace y solo cambia lo que pidas); si caducó
+  # o se agotó, se sustituye por uno nuevo.
+  while IFS='|' read -r r t tk d n m e vida o u p; do
+    if [[ "$r" == "$ruta" && "$vida" == "vivo" ]]; then token="$tk"; ocultos="$o"; pw_previa="$p"; fi
+  done < <(descargas_filas)
+  if [[ -z "$token" ]]; then
+    token="$(generar_token)"; nuevo=1
+    a_exp=""; a_max=""; a_pw="1"; a_ocu="0"
+  fi
+  if [[ -n "$expira" ]]; then a_exp=$(( $(date +%s) + expira )); fi
+  if [[ -n "$maxd" ]]; then a_max="$maxd"; fi
+  if [[ $sinpw -eq 1 ]]; then a_pw="1"; pw=""
+  elif [[ -n "$pwpersonal" ]]; then a_pw="1"; pw="$pwpersonal"
+  elif [[ $conpw -eq 1 ]]; then a_pw="1"; pw="${pw_previa:-$(generar_contrasena)}"
+  fi
+  if [[ $conocultos -eq 1 ]]; then a_ocu="1"; fi
+  if [[ "$a_ocu" != "=" ]]; then ocultos="$a_ocu"; fi
+
+  # Qué se va a entregar, medido con las mismas reglas que usa el servidor.
+  if [[ "$ocultos" == "1" ]]; then
+    medida="$(python3 "$bin" --medir "$ruta" --con-ocultos)"
+  else
+    medida="$(python3 "$bin" --medir "$ruta")"
+  fi
+  IFS='|' read -r narch tam omitidos ejemplos <<< "$medida"
+
+  estado_py '
+ds = e.setdefault("descargas", [])
+i = next((k for k, x in enumerate(ds) if x["ruta"] == arg[0]), None)
+d = dict(ds[i]) if i is not None and arg[11] != "1" else {"desde": arg[3]}
+d.update({"ruta": arg[0], "tipo": arg[1], "token": arg[2], "tamano": int(arg[9]), "archivos": int(arg[10])})
+if arg[4] != "=": d["expira"] = int(arg[4]) if arg[4] else None
+if arg[5] != "=": d["max"] = int(arg[5]) if arg[5] else None
+if arg[6] != "=": d["contrasena"] = arg[7]
+if arg[8] != "=": d["ocultos"] = arg[8] == "1"
+if i is None: ds.append(d)
+else: ds[i] = d
+' "$ruta" "$tipo" "$token" "$(fecha_hoy)" "$a_exp" "$a_max" "$a_pw" "$pw" "$a_ocu" "${tam:-0}" "${narch:-0}" "$nuevo"
+
+  # Condiciones con las que quedó el enlace (las pedidas o las que ya tenía).
+  local f_n=0 f_m=0 f_e=0 f_p=""
+  while IFS='|' read -r r t tk d n m e vida o u p; do
+    if [[ "$r" == "$ruta" ]]; then f_n="$n"; f_m="$m"; f_e="$e"; f_p="$p"; fi
+  done < <(descargas_filas)
+
+  nombre="$(basename "$ruta")"
+  if [[ "$tipo" == "carpeta" ]]; then nombre="$nombre.zip"; fi
+  url="$(descargas_url "$host" "$pp" "$token")"
+  directo="$url/$(codificar_ruta "$nombre")"
+
+  if portapapeles "$url"; then ok "Enlace de descarga copiado al portapapeles."; fi
+
+  if [[ $JSON -eq 1 ]]; then
+    python3 -c 'import json,sys; a = sys.argv; print(json.dumps({"modo": "descarga", "tipo": a[1], "invitado": None, "usuario": None, "host": a[2], "enlace": a[3], "directo": a[4], "expira": int(a[5]) or None, "max": int(a[6]) or None, "contrasena": a[7] or None, "omitidos": int(a[8]), "paquete": None}))' \
+      "$tipo" "$host" "$url" "$directo" "$f_e" "$f_m" "$f_p" "${omitidos:-0}"
+  elif [[ $GUI -eq 1 ]]; then
+    local extra=""
+    if [[ "$f_e" != "0" ]]; then extra="$extra Caduca en $(tiempo_restante $(( f_e - $(date +%s) )))."; fi
+    if [[ "$f_m" != "0" ]]; then extra="$extra Máximo de descargas: $f_m."; fi
+    if [[ -n "$f_p" ]]; then extra="$extra Contraseña: $f_p (envíala por otro canal)."; else extra="$extra Cualquiera con el enlace puede descargar: trátalo como una contraseña."; fi
+    gui_dialogo "Enlace de SOLO DESCARGA listo (ya en tu portapapeles): $url — Quien lo abra solo puede bajar $que; no entra a tu equipo.$extra"
+    gui_notificar "Enlace de descarga copiado al portapapeles."
+  else
+    printf '\n'
+    ok "Enlace de solo descarga listo: $ruta"
+    printf '  Quien lo abra SOLO puede bajar %s: sin editor, sin terminal,\n  sin instalar nada.\n' "$que"
+    if [[ "$tipo" == "carpeta" ]]; then
+      printf '  Contenido: %s archivo/s · %s sin comprimir.\n' "${narch:-0}" "$(tamano_humano "${tam:-0}")"
+      if [[ "${omitidos:-0}" != "0" ]]; then
+        printf '  Se dejan fuera %s elemento/s oculto/s (%s). Para incluirlos: --con-ocultos\n' "$omitidos" "$ejemplos"
+      fi
+    fi
+    printf '\n  Enlace (ya en tu portapapeles):\n  %s\n' "$url"
+    if [[ -n "$f_p" ]]; then
+      printf '\n  Contraseña: %s\n  (envíasela por un canal distinto al del enlace)\n' "$f_p"
+      printf '  Con curl:  curl -OJ -d clave=… %s\n' "$directo"
+    else
+      printf '  Directo, para curl/wget:\n  %s\n' "$directo"
+    fi
+    printf '\n'
+    if [[ "$f_e" != "0" ]]; then printf '  Caduca en %s.\n' "$(tiempo_restante $(( f_e - $(date +%s) )))"; fi
+    if [[ "$f_m" != "0" ]]; then printf '  Máximo de descargas: %s (lleva %s).\n' "$f_m" "$f_n"; fi
+    if [[ "$f_e" == "0" && "$f_m" == "0" ]]; then
+      printf '  Sin caducidad ni límite: funciona hasta que lo revoques\n  (puedes ponerlos con --expira 24h, --max-descargas 3 o --una-vez).\n'
+    fi
+    if [[ -z "$f_p" ]]; then printf '  Cualquiera con el enlace puede descargar: trátalo como una contraseña.\n'; fi
+    printf '  Revocarlo:  carpeta-share dejar-de-compartir "%s" --descarga\n' "$ruta"
+    printf '\n  Si reinicias el equipo, repite este mismo comando para relanzar el\n  servidor (los enlaces se conservan).\n'
+  fi
+}
+
+descarga_revocar() {
+  # descarga_revocar <ruta> — el enlace muere al instante (el servidor relee
+  # el estado en cada petición). Si era el último, no dejamos nada publicado
+  # ni corriendo. Funnel va ANTES de tocar el estado: si hay que re-ejecutarse
+  # como administrador, la segunda pasada encuentra todo tal cual.
+  local ruta="$1" quedan pl pp
+  quedan="$(estado_leer 'print(len([d for d in e.get("descargas", []) if d["ruta"] != arg[0]]))' "$ruta")"
+  if [[ "${quedan:-0}" == "0" ]]; then
+    pl="$(config_leer descargas_puerto_local || true)"
+    pp="$(config_leer descargas_puerto_publico || true)"
+    if [[ -n "$pl" && -n "$pp" ]]; then funnel_desactivar "$pp" "$pl" "$MONTAJE_DESCARGAS"; fi
+    if [[ -n "$pl" ]]; then pkill -f "carpeta-share-descargas.*--puerto $pl\$" 2>/dev/null || true; fi
+    estado_py '
+e["config"].pop("descargas_puerto_local", None)
+e["config"].pop("descargas_puerto_publico", None)
+'
+    rm -f "$CONFIG_DIR/descargas-usos.json"
+  fi
+  estado_py 'e["descargas"] = [d for d in e.get("descargas", []) if d["ruta"] != arg[0]]' "$ruta"
+  ok "Enlace de descarga revocado: $ruta"
+}
+
+cmd_compartir() {
+  local carpeta="" con="" sinclave=0 nombre_nuevo="" paquete="" web=0 conpw=0 sinpw=0 descarga=0
+  local expira="" expira_seg="" maxd="" conocultos=0
+  local pwpersonal="${CS_CONTRASENA:-}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --con) con="${2:-}"; shift 2 || err "Falta el nombre tras --con";;
+      --sin-clave)
+        sinclave=1; shift
+        if [[ $# -gt 0 && "${1:-}" != --* ]]; then nombre_nuevo="$1"; shift; fi;;
+      --web) web=1; shift;;
+      --con-contrasena) conpw=1; shift;;
+      --sin-contrasena) sinpw=1; shift;;
+      --contrasena) pwpersonal="${2:-}"; shift 2 || err "Falta el valor tras --contrasena";;
+      --descarga) descarga=1; shift;;
+      --expira) expira="${2:-}"; shift 2 || err "Falta la duración tras --expira (ej.: 24h)";;
+      --max-descargas) maxd="${2:-}"; shift 2 || err "Falta el número tras --max-descargas";;
+      --una-vez) maxd=1; shift;;
+      --con-ocultos) conocultos=1; shift;;
+      --gui|--si|--json) shift;;
+      -*) err "Opción desconocida: $1";;
+      *) carpeta="$1"; shift;;
+    esac
+  done
+  # Las opciones de contraseña valen para el modo web y para --descarga; sin
+  # --descarga implican modo web.
+  if [[ $descarga -eq 0 && ( $conpw -eq 1 || $sinpw -eq 1 || -n "$pwpersonal" ) ]]; then web=1; fi
+  if [[ $descarga -eq 1 && ( $web -eq 1 || $sinclave -eq 1 || -n "$con" ) ]]; then
+    err "--descarga es un modo aparte: no se combina con --web, --con ni --sin-clave."
+  fi
+  if [[ $descarga -eq 0 && ( -n "$expira" || -n "$maxd" || $conocultos -eq 1 ) ]]; then
+    err "--expira, --max-descargas, --una-vez y --con-ocultos solo valen junto a --descarga."
+  fi
+  if [[ -n "$expira" ]]; then
+    expira_seg="$(duracion_a_segundos "$expira")"
+    [[ -n "$expira_seg" ]] || err "Duración inválida: '$expira'. Usa un número y m, h o d (ej.: 30m, 24h, 7d)."
+  fi
+  if [[ -n "$maxd" ]] && ! [[ "$maxd" =~ ^[1-9][0-9]*$ ]]; then
+    err "--max-descargas necesita un número entero mayor que 0."
+  fi
+  [[ -n "$carpeta" ]] || err "Uso: carpeta-share compartir <carpeta> [--web … | --con <invitado> | --sin-clave [nombre] | --descarga]"
+  carpeta="$(ruta_absoluta "$carpeta")"
+  if [[ $descarga -eq 1 ]]; then
+    # El modo solo descarga es el único que acepta también un archivo suelto.
+    [[ -f "$carpeta" || -d "$carpeta" ]] || err "No es un archivo ni una carpeta: $carpeta"
+  else
+    [[ -d "$carpeta" ]] || err "No es una carpeta: $carpeta (para un archivo suelto usa --descarga)"
+  fi
+  case "$carpeta" in
+    "$HOME_REAL"|/|/Users|/home|/etc|/var|/usr)
+      err "Por seguridad no comparto '$carpeta' completo; elige una subcarpeta.";;
+  esac
+
+  # --- ¿Cómo compartir? El enlace siempre ofrece las opciones: web con o
+  #     sin contraseña (el invitado no instala nada), solo descarga (.zip),
+  #     o VS Code de escritorio con llave (invitado existente) / sin llave
+  #     (paquete).
+  if [[ $GUI -eq 1 && -z "$con" && $sinclave -eq 0 && $web -eq 0 && $descarga -eq 0 ]]; then
+    local lista opciones=() eleccion n
+    opciones+=("Enlace web CON contraseña — el invitado no instala nada")
+    opciones+=("Enlace web SIN contraseña — el invitado no instala nada")
+    opciones+=("Enlace de SOLO DESCARGA (.zip) — no entra a tu equipo")
+    opciones+=("Enlace de SOLO DESCARGA de un solo uso — caduca en 24 h")
+    lista="$(estado_leer 'print("\n".join(n for n, d in e["invitados"].items() if d.get("modo") != "web"))')"
+    while IFS= read -r n; do
+      if [[ -n "$n" ]]; then opciones+=("$n  (VS Code escritorio, con su llave)"); fi
+    done <<< "$lista"
+    opciones+=("Nuevo acceso sin llave (VS Code escritorio, te doy un paquete)")
+    eleccion="$(gui_elegir "¿Cómo compartir '$(basename "$carpeta")'?" "${opciones[@]}")" \
+      || { info "Cancelado."; exit 0; }
+    case "$eleccion" in
+      "Enlace web CON contraseña"*) web=1; conpw=1;;
+      "Enlace web SIN contraseña"*) web=1; sinpw=1;;
+      "Enlace de SOLO DESCARGA de un solo uso"*) descarga=1; maxd=1; expira="24h"; expira_seg=86400;;
+      "Enlace de SOLO DESCARGA"*) descarga=1;;
+      "Nuevo acceso sin llave"*) sinclave=1;;
+      *) con="${eleccion%%  (*}";;
+    esac
+  fi
+
+  if [[ $descarga -eq 0 && $web -eq 0 && $sinclave -eq 0 && -z "$con" ]]; then
+    # Sin GUI: si hay exactamente un invitado SSH, --con es opcional.
+    local cuantos
+    cuantos="$(estado_leer 'print(len([n for n, d in e["invitados"].items() if d.get("modo") != "web"]))')"
+    cuantos="${cuantos:-0}"
+    if [[ "$cuantos" == "1" ]]; then
+      con="$(estado_leer 'print([n for n, d in e["invitados"].items() if d.get("modo") != "web"][0])')"
+      info "Único invitado registrado: $con"
+    elif [[ "$cuantos" == "0" ]]; then
+      err "No hay invitados. Crea uno con 'carpeta-share invitado agregar' o usa --sin-clave."
+    else
+      err "Hay varios invitados; indica --con <nombre> (o --sin-clave). Mira: carpeta-share estado"
+    fi
+  fi
+
+  # Reconstruimos los argumentos ya resueltos para que, si hay que escalar a
+  # root, el proceso hijo no vuelva a preguntar nada.
+  ARGS_ORIGINALES=(compartir "$carpeta")
+  if [[ -n "$con" ]]; then ARGS_ORIGINALES+=(--con "$con"); fi
+  if [[ $sinclave -eq 1 ]]; then
+    ARGS_ORIGINALES+=(--sin-clave)
+    if [[ -n "$nombre_nuevo" ]]; then ARGS_ORIGINALES+=("$nombre_nuevo"); fi
+  fi
+  if [[ $web -eq 1 ]]; then ARGS_ORIGINALES+=(--web); fi
+  if [[ $conpw -eq 1 ]]; then ARGS_ORIGINALES+=(--con-contrasena); fi
+  if [[ $sinpw -eq 1 ]]; then ARGS_ORIGINALES+=(--sin-contrasena); fi
+  if [[ $descarga -eq 1 ]]; then ARGS_ORIGINALES+=(--descarga); fi
+  if [[ -n "$expira" ]]; then ARGS_ORIGINALES+=(--expira "$expira"); fi
+  if [[ -n "$maxd" ]]; then ARGS_ORIGINALES+=(--max-descargas "$maxd"); fi
+  if [[ $conocultos -eq 1 ]]; then ARGS_ORIGINALES+=(--con-ocultos); fi
+  if [[ $GUI -eq 1 ]]; then ARGS_ORIGINALES+=(--gui); fi
+  if [[ $JSON -eq 1 ]]; then ARGS_ORIGINALES+=(--json); fi
+  ARGS_ORIGINALES+=(--si)
+
+  if [[ $descarga -eq 1 ]]; then
+    if [[ -n "$pwpersonal" && ${#pwpersonal} -lt 8 ]]; then
+      err "La contraseña debe tener al menos 8 caracteres."
+    fi
+    # Igual que en el modo web: la contraseña personalizada viaja por entorno
+    # hacia la posible re-ejecución con root, nunca por argumentos.
+    export CS_CONTRASENA="$pwpersonal"
+    compartir_descarga "$carpeta" "$expira_seg" "$maxd" "$conpw" "$sinpw" "$pwpersonal" "$conocultos"
+    return
+  fi
+
+  if [[ $web -eq 1 ]]; then
+    # Validamos ANTES de escalar a root para no pedir permisos en vano.
+    if [[ -n "$pwpersonal" && ${#pwpersonal} -lt 8 ]]; then
+      err "La contraseña debe tener al menos 8 caracteres."
+    fi
+    # La contraseña personalizada viaja por entorno hacia la posible
+    # re-ejecución con root (asegurar_root), nunca por argumentos.
+    export CS_CONTRASENA="$pwpersonal"
+    compartir_web "$carpeta" "$con" "$conpw" "$sinpw" "$pwpersonal"
+    return
+  fi
+
+  local nombre usuario
+  if [[ $sinclave -eq 1 ]]; then
+    asegurar_root                                   # crear el usuario requiere root
+    nombre="${nombre_nuevo:-$(nombre_libre)}"
+    [[ "$nombre" =~ ^[a-z][a-z0-9-]{0,20}$ ]] || err "Nombre inválido: $nombre"
+    paquete="$(generar_acceso_sin_llave "$nombre" | tail -n1)"
+  else
+    nombre="$con"
+    usuario="$(estado_leer 'print(e["invitados"].get(arg[0], {}).get("usuario", ""))' "$nombre")"
+    if [[ -z "$usuario" ]] || ! usuario_existe "$usuario"; then
+      err "El invitado '$nombre' no existe. Créalo con: carpeta-share invitado agregar $nombre \"<su llave>\""
+    fi
+  fi
+  usuario="${PREFIJO}${nombre}"
+
+  # --- ACLs: rw sobre la carpeta, tránsito por los padres, conda en ro.
+  info "Aplicando permisos para $usuario sobre $carpeta…"
+  acl_aplicar "$usuario" "$carpeta" rw
+  transito_aplicar "$usuario" "$carpeta"
+  conda_dar_acceso "$usuario"
+
+  # Aviso de higiene: si tu home es legible por "otros", el invitado podría
+  # curiosear más allá del tránsito. No lo cambiamos sin permiso.
+  if es_macos; then :; fi
+  local mh
+  if es_macos; then mh="$(stat -f %Lp "$HOME_REAL")"; else mh="$(stat -c %a "$HOME_REAL")"; fi
+  case "${mh: -1}" in
+    0|1) : ;;
+    *) aviso "Tu home ($HOME_REAL) es legible por otros usuarios (modo $mh). Considera: chmod 750 \"$HOME_REAL\"";;
+  esac
+
+  estado_py '
+c = {"ruta": arg[0], "invitado": arg[1], "desde": arg[2]}
+if not any(x["ruta"] == arg[0] and x["invitado"] == arg[1] for x in e["carpetas"]):
+    e["carpetas"].append(c)
+' "$carpeta" "$nombre" "$(fecha_hoy)"
+
+  # --- Enlace vscode:// -------------------------------------------------------
+  local host enlace
+  host="$(ts_host)"
+  enlace="vscode://vscode-remote/ssh-remote+${usuario}@${host}$(codificar_ruta "$carpeta")"
+
+  if portapapeles "$enlace"; then
+    ok "Enlace copiado al portapapeles."
+  else
+    aviso "No pude copiar al portapapeles (instala xclip o wl-clipboard); cópialo a mano."
+  fi
+
+  # Paquete del modo sin llave: llave privada + instrucciones listas.
+  if [[ -n "$paquete" ]]; then
+    cat > "$paquete/LEEME.txt" <<EOF
+Acceso a la carpeta compartida "$(basename "$carpeta")"
+======================================================
+
+Necesitas (una sola vez):
+  1. VS Code de escritorio + extensión "Remote - SSH"  (https://code.visualstudio.com)
+  2. Tailscale (https://tailscale.com/download) con sesión iniciada
+  3. Aceptar la invitación de "nodo compartido" de Tailscale que te enviaré
+
+Configura tu llave (una sola vez):
+  1. Copia el archivo 'clave_carpeta_share' de esta carpeta a ~/.ssh/
+     (en Windows: C:\\Users\\TU_USUARIO\\.ssh\\)
+  2. Dale permisos privados (macOS/Linux):  chmod 600 ~/.ssh/clave_carpeta_share
+  3. Añade esto a tu archivo ~/.ssh/config (créalo si no existe):
+
+     Host $host
+         User $usuario
+         IdentityFile ~/.ssh/clave_carpeta_share
+
+Abrir la carpeta:
+  Abre este enlace en tu navegador (o pégalo en la barra de direcciones):
+
+  $enlace
+
+  Se abrirá tu VS Code conectado a la carpeta. La primera vez tardará un
+  poco (instala su componente remoto) y puede pedirte confirmar la huella
+  del servidor: acepta.
+
+Dentro de VS Code:
+  * Terminal → es una terminal real de la máquina anfitriona, confinada.
+  * conda activate <entorno> → usa los entornos del anfitrión (solo lectura)
+  * conda create -n mio ... → crea entornos TUYOS (en tu home de invitado)
+  * Notebooks: instala la extensión "Jupyter" y elige un kernel de conda.
+EOF
+    arreglar_dueno
+  fi
+
+  # --- Salida -----------------------------------------------------------------
+  if [[ $JSON -eq 1 ]]; then
+    python3 -c 'import json,sys; print(json.dumps({"modo": "ssh", "invitado": sys.argv[1], "usuario": sys.argv[2], "host": sys.argv[3], "enlace": sys.argv[4], "contrasena": None, "paquete": sys.argv[5] or None}))' \
+      "$nombre" "$usuario" "$host" "$enlace" "$paquete"
+  elif [[ $GUI -eq 1 ]]; then
+    if [[ -n "$paquete" ]]; then
+      gui_notificar "Enlace copiado. Envía TODO el paquete de acceso a tu invitado."
+      if es_macos; then open "$paquete" 2>/dev/null || true; fi
+      gui_dialogo "Carpeta compartida con el acceso '$nombre'. El enlace ya está en tu portapapeles. Envía al invitado la carpeta de acceso que se acaba de abrir ($paquete): contiene su llave y las instrucciones."
+    else
+      gui_notificar "Enlace para '$nombre' copiado al portapapeles."
+      gui_dialogo "Carpeta compartida con '$nombre'. El enlace ya está en tu portapapeles, listo para pegar en WhatsApp o correo: $enlace"
+    fi
+  else
+    printf '\n'
+    ok "Carpeta compartida: $carpeta"
+    printf '  Invitado: %s (usuario %s)\n\n' "$nombre" "$usuario"
+    printf '  Enlace (ya en tu portapapeles):\n  %s\n\n' "$enlace"
+    printf '  Instrucciones cortas para el invitado:\n'
+    printf '   1. Instala VS Code + extensión "Remote - SSH" y Tailscale.\n'
+    printf '   2. Acepta la invitación del nodo compartido de Tailscale (panel: https://login.tailscale.com/admin/machines → tu equipo → Share).\n'
+    if [[ -n "$paquete" ]]; then
+      printf '   3. Envíale el paquete completo: %s\n' "$paquete"
+      printf '      (contiene su llave privada + LEEME.txt con todos los pasos)\n'
+    else
+      printf '   3. Como ya te dio su llave pública, solo tiene que abrir el enlace.\n'
+    fi
+  fi
+}
+
+cmd_dejar_de_compartir() {
+  local carpeta="" con="" solo_descarga=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --con) con="${2:-}"; shift 2 || err "Falta el nombre tras --con";;
+      --descarga) solo_descarga=1; shift;;
+      --gui|--si|--json) shift;;
+      -*) err "Opción desconocida: $1";;
+      *) carpeta="$1"; shift;;
+    esac
+  done
+  [[ -n "$carpeta" ]] || err "Uso: carpeta-share dejar-de-compartir <carpeta> [--con <invitado> | --descarga]"
+  carpeta="$(ruta_absoluta "$carpeta")"
+
+  # ¿Qué invitados tienen esta carpeta? ¿Tiene un share web activo? ¿Y un
+  # enlace de solo descarga? --con limita la retirada a un invitado y
+  # --descarga, al enlace de descarga.
+  local afectados webinfo winv wpl wpp resto descarga quienes
+  afectados="$(estado_leer 'print("\n".join(sorted({c["invitado"] for c in e["carpetas"] if c["ruta"] == arg[0]})))' "$carpeta")"
+  descarga="$(estado_leer 'print("si" if any(d["ruta"] == arg[0] for d in e.get("descargas", [])) else "")' "$carpeta")"
+  if [[ -n "$con" ]]; then afectados="$con"; descarga=""; fi
+  if [[ $solo_descarga -eq 1 ]]; then
+    [[ -n "$descarga" ]] || err "Esa ruta no tiene enlace de descarga. Mira: carpeta-share estado"
+    afectados=""
+  fi
+  [[ -n "$afectados" || -n "$descarga" ]] || err "Esa carpeta no figura como compartida. Mira: carpeta-share estado"
+  webinfo=""
+  if [[ $solo_descarga -eq 0 ]]; then
+    webinfo="$(estado_leer '
+w = next((w for w in e.get("web", []) if w["ruta"] == arg[0]), None)
+print((w["invitado"] + "|" + str(w["puerto_local"]) + "|" + str(w["puerto_publico"])) if w else "")
+' "$carpeta")"
+  fi
+  # Detener code-server (proceso de otro usuario) y Funnel requiere root:
+  # escalamos ANTES de confirmar para no preguntar dos veces.
+  if [[ -n "$webinfo" ]]; then asegurar_root; fi
+
+  quienes="$(printf '%s' "$afectados" | tr '\n' ' ')"
+  if [[ -n "$descarga" ]]; then quienes="${quienes:+$quienes + }el enlace de descarga"; fi
+  confirmar "¿Retirar el acceso a '$carpeta' para: $quienes?" || err "Cancelado."
+  # Si más abajo hay que re-ejecutarse como administrador, no repreguntamos.
+  ARGS_ORIGINALES+=(--si)
+
+  if [[ -n "$descarga" ]]; then descarga_revocar "$carpeta"; fi
+
+  if [[ -n "$webinfo" ]]; then
+    winv="${webinfo%%|*}"
+    resto="${webinfo#*|}"
+    wpl="${resto%%|*}"
+    wpp="${resto#*|}"
+    info "Deteniendo el servidor web y despublicando la URL…"
+    pkill -u "${PREFIJO}${winv}" -f "bind-addr 127.0.0.1:$wpl" 2>/dev/null || true
+    funnel_desactivar "$wpp" "$wpl"
+    estado_py 'e["web"] = [w for w in e.get("web", []) if w["ruta"] != arg[0]]' "$carpeta"
+  fi
+
+  local nombre u
+  while IFS= read -r nombre; do
+    if [[ -z "$nombre" ]]; then continue; fi
+    u="${PREFIJO}${nombre}"
+    info "Retirando ACLs de $carpeta para $u…"
+    acl_quitar "$u" "$carpeta"
+    transito_quitar "$u" "$carpeta"
+    estado_py 'e["carpetas"] = [c for c in e["carpetas"] if not (c["ruta"] == arg[0] and c["invitado"] == arg[1])]' \
+      "$carpeta" "$nombre"
+    # Re-aplica tránsitos de lo que el invitado conserve (padres compartidos).
+    recomputar_transitos "$u" "$nombre"
+    ok "Acceso de '$nombre' retirado."
+  done <<< "$afectados"
+  if [[ $GUI -eq 1 ]]; then gui_notificar "Carpeta dejada de compartir."; fi
+}
+
+# =============================================================================
+# Estado
+# =============================================================================
+cmd_estado() {
+  estado_init
+  printf '── carpeta-share %s ─ estado ─────────────────────────\n\n' "$VERSION"
+
+  local tsb host
+  if tsb="$(ts_bin)"; then
+    host="$("$tsb" status --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("Self",{}).get("DNSName") or "").rstrip("."))' 2>/dev/null || true)"
+    if [[ -n "$host" ]]; then
+      printf 'Tailscale : activo — %s\n' "$host"
+    else
+      printf 'Tailscale : instalado pero apagado → corre: tailscale up\n'
+    fi
+  else
+    printf 'Tailscale : NO instalado → corre setup.sh\n'
+  fi
+
+  if (exec 3<>/dev/tcp/127.0.0.1/22) 2>/dev/null; then
+    exec 3>&- 2>/dev/null || true
+    printf 'SSH       : activo (puerto 22)\n'
+  else
+    if es_macos; then
+      printf 'SSH       : NO responde → Ajustes del Sistema → Compartir → Sesión remota\n'
+    else
+      printf 'SSH       : NO responde → sudo systemctl enable --now ssh\n'
+    fi
+  fi
+
+  printf '\nInvitados:\n'
+  estado_leer '
+if not e["invitados"]:
+    print("  (ninguno — crea uno con: carpeta-share invitado agregar <nombre> \"<llave>\")")
+for n, d in sorted(e["invitados"].items()):
+    est = "SUSPENDIDO" if d.get("suspendido") else "activo"
+    print("  - " + n + "  [usuario " + d.get("usuario", "?") + ", modo " + d.get("modo", "clave") + ", " + est + ", desde " + d.get("creado", "?") + "]")
+'
+  printf '\nCarpetas compartidas:\n'
+  estado_leer '
+if not e["carpetas"]:
+    print("  (ninguna)")
+for c in e["carpetas"]:
+    print("  - " + c["ruta"] + "  → " + c["invitado"] + "  (desde " + c.get("desde", "?") + ")")
+'
+  printf '\nEnlaces web activos (el invitado no instala nada):\n'
+  local hay=0 host_ts wruta winv2 wpp3 wpw u2
+  host_ts="$( (ts_host) 2>/dev/null || true)"
+  while IFS='|' read -r wruta winv2 wpp3 wpw; do
+    if [[ -z "$wruta" ]]; then continue; fi
+    hay=1
+    if [[ "$wpp3" == "443" ]]; then u2="https://$host_ts/"; else u2="https://$host_ts:$wpp3/"; fi
+    if [[ -n "$wpw" ]]; then
+      printf '  - %s\n      → %s  (invitado %s, contraseña: %s)\n' "$wruta" "$u2" "$winv2" "$wpw"
+    else
+      printf '  - %s\n      → %s  (invitado %s, SIN contraseña)\n' "$wruta" "$u2" "$winv2"
+    fi
+  done < <(estado_leer '
+for w in e.get("web", []):
+    print(w["ruta"] + "|" + w["invitado"] + "|" + str(w["puerto_publico"]) + "|" + w.get("contrasena", ""))
+')
+  if [[ $hay -eq 0 ]]; then printf '  (ninguno)\n'; fi
+
+  printf '\nEnlaces de solo descarga (un archivo, o una carpeta en .zip):\n'
+  local hayd=0 muertos=0 druta dtipo dtoken ddesde dn dm de dvida _o dult dpw dpp dpl
+  dpp="$(config_leer descargas_puerto_publico || true)"
+  dpl="$(config_leer descargas_puerto_local || true)"
+  while IFS='|' read -r druta dtipo dtoken ddesde dn dm de dvida _o dult dpw; do
+    if [[ -z "$druta" ]]; then continue; fi
+    hayd=1
+    if [[ "$dvida" != "vivo" ]]; then muertos=$((muertos + 1)); fi
+    printf '  - %s\n      → %s\n        %s · desde %s\n' "$druta" "$(descargas_url "$host_ts" "${dpp:-443}" "$dtoken")" \
+      "$(descarga_resumen "$dtipo" "$dn" "$dm" "$de" "$dvida" "$dult" "$dpw")" "$ddesde"
+  done < <(descargas_filas)
+  if [[ $muertos -gt 0 ]]; then
+    printf '  (%d caducado/s o agotado/s: ya no funcionan. Quítalos con: carpeta-share dejar-de-compartir <ruta> --descarga)\n' "$muertos"
+  fi
+  if [[ $hayd -eq 0 ]]; then
+    printf '  (ninguno)\n'
+  elif [[ -z "$dpl" ]] || ! descargas_vivo "$dpl"; then
+    aviso "El servidor de descargas está apagado (¿reiniciaste?). Relánzalo repitiendo: carpeta-share compartir <ruta> --descarga"
+  fi
+  printf '\nRecuerda: para el modo VS Code escritorio el invitado debe aceptar tu nodo\ncompartido de Tailscale (https://login.tailscale.com/admin/machines → ⋯ → Share).\nLos enlaces web no lo necesitan.\n'
+}
+
+cmd_actualizar() {
+  # Delegamos en instalar.sh --actualizar (git pull del repositorio de
+  # BosonCode, donde vive Link_space, y reinstalar).
+  local rp=""
+  if [[ -f "$CONFIG_DIR/ruta_instalacion" ]]; then
+    rp="$(cat "$CONFIG_DIR/ruta_instalacion")"
+  fi
+  if [[ -z "$rp" || ! -f "$rp/instalar.sh" ]]; then
+    err "No sé dónde está el repositorio. Entra a la carpeta de BosonCode y corre: git pull && ./setup.sh"
+  fi
+  info "Actualizando desde $rp…"
+  exec bash "$rp/instalar.sh" --actualizar
+}
+
+cmd_listar_descargas() {
+  # Rutas con enlace de descarga activo (lo consume setup.sh --uninstall).
+  estado_leer 'print("\n".join(d["ruta"] for d in e.get("descargas", [])))'
+}
+
+cmd_listar_invitados() {
+  # Solo invitados con acceso SSH (los de modo "web" no sirven para enlaces
+  # vscode://, que es donde consume esta lista la extensión).
+  estado_leer 'print("\n".join(n for n, d in e["invitados"].items() if d.get("modo") != "web"))'
+}
+
+# =============================================================================
+# Panel interactivo: ver conexiones en vivo y revocar accesos al momento
+# =============================================================================
+conexiones_web() {
+  # Nº de conexiones TCP establecidas hacia el puerto local de code-server.
+  # Cada pestaña de navegador abierta mantiene al menos un websocket, así
+  # que >0 significa "alguien lo tiene abierto ahora".
+  local p="$1" n=0
+  if command -v ss >/dev/null 2>&1; then
+    n="$(ss -Htn state established "sport = :$p" 2>/dev/null | wc -l | tr -d ' ')"
+  else
+    n="$(netstat -an -p tcp 2>/dev/null | awk -v a="127.0.0.1.$p" '$6 == "ESTABLISHED" && $4 == a { c++ } END { print c + 0 }')"
+  fi
+  printf '%d\n' "${n:-0}"
+}
+
+sesiones_ssh() {
+  # Sesiones SSH abiertas del usuario: sshd titula sus procesos como
+  # "sshd: usuario@..." (una por conexión), visibles sin root.
+  local u="$1" n
+  n="$(pgrep -f "sshd.*${u}@" 2>/dev/null | wc -l | tr -d ' ')"
+  printf '%d\n' "${n:-0}"
+}
+
+cmd_panel() {
+  if [[ ! -t 0 ]]; then err "El panel es interactivo: ejecútalo desde una terminal."; fi
+  estado_init
+  local host_ts
+  host_ts="$( (ts_host) 2>/dev/null || echo "?")"
+
+  while :; do
+    # Recolectamos los elementos en arreglos paralelos (compatibles bash 3.2).
+    local TIPOS=() RUTAS=() NOMBRES=() DATOS=()
+    local i=0 linea ruta inv pl pp pw usuario modo susp n url estado sel idx accion tipo token dpp
+    local dn dm de dvida dult _d _o
+
+    printf '\033[2J\033[H'
+    printf '════════════════ carpeta-share · panel ════════════════  %s\n\n' "$(date '+%H:%M:%S')"
+
+    printf '  CARPETAS COMPARTIDAS\n'
+    # --- Shares web (con estado de uso en vivo) ------------------------------
+    while IFS='|' read -r ruta inv pl pp pw; do
+      if [[ -z "$ruta" ]]; then continue; fi
+      i=$((i + 1)); TIPOS+=(web); RUTAS+=("$ruta"); NOMBRES+=("$inv"); DATOS+=("$pl")
+      n="$(conexiones_web "$pl")"
+      if [[ "$n" -gt 0 ]]; then
+        estado="$(printf '\033[32m● EN USO (%d conexión/es)\033[0m' "$n")"
+      else
+        estado="○ libre"
+      fi
+      if [[ "$pp" == "443" ]]; then url="https://$host_ts/"; else url="https://$host_ts:$pp/"; fi
+      printf '  %2d) [WEB] %s\n' "$i" "${ruta/#$HOME_REAL/~}"
+      printf '        invitado %-10s %s\n' "$inv" "$estado"
+      if [[ -n "$pw" ]]; then
+        printf '        %s  (contraseña: %s)\n' "$url" "$pw"
+      else
+        printf '        %s  (SIN contraseña)\n' "$url"
+      fi
+    done < <(estado_leer '
+for w in e.get("web", []):
+    print(w["ruta"] + "|" + w["invitado"] + "|" + str(w["puerto_local"]) + "|" + str(w["puerto_publico"]) + "|" + w.get("contrasena", ""))
+')
+
+    # --- Shares SSH (excluye los que ya salieron como web) -------------------
+    while IFS='|' read -r ruta inv; do
+      if [[ -z "$ruta" ]]; then continue; fi
+      i=$((i + 1)); TIPOS+=(ssh); RUTAS+=("$ruta"); NOMBRES+=("$inv"); DATOS+=("")
+      n="$(sesiones_ssh "${PREFIJO}${inv}")"
+      if [[ "$n" -gt 0 ]]; then
+        estado="$(printf '\033[32m● EN USO (%d sesión/es SSH)\033[0m' "$n")"
+      else
+        estado="○ libre"
+      fi
+      printf '  %2d) [SSH] %s\n' "$i" "${ruta/#$HOME_REAL/~}"
+      printf '        invitado %-10s %s\n' "$inv" "$estado"
+    done < <(estado_leer '
+webinv = {w["invitado"] for w in e.get("web", [])}
+for c in e["carpetas"]:
+    if c["invitado"] not in webinv:
+        print(c["ruta"] + "|" + c["invitado"])
+')
+
+    # --- Enlaces de solo descarga (archivo, o carpeta en .zip) ---------------
+    dpp="$(config_leer descargas_puerto_publico || true)"
+    while IFS='|' read -r ruta tipo token _d dn dm de dvida _o dult pw; do
+      if [[ -z "$ruta" ]]; then continue; fi
+      i=$((i + 1)); TIPOS+=(descarga); RUTAS+=("$ruta"); NOMBRES+=("enlace de descarga"); DATOS+=("$token")
+      printf '  %2d) [DESCARGA] %s\n' "$i" "${ruta/#$HOME_REAL/~}"
+      printf '        %s\n' "$(descarga_resumen "$tipo" "$dn" "$dm" "$de" "$dvida" "$dult" "$pw")"
+      printf '        %s\n' "$(descargas_url "$host_ts" "${dpp:-443}" "$token")"
+    done < <(descargas_filas)
+    if [[ $i -eq 0 ]]; then printf '      (ninguna)\n'; fi
+
+    # --- Invitados (para suspender/eliminar aunque no tengan carpeta) --------
+    printf '\n  INVITADOS\n'
+    local j0=$i
+    while IFS='|' read -r inv usuario modo susp; do
+      if [[ -z "$inv" ]]; then continue; fi
+      i=$((i + 1)); TIPOS+=(invitado); RUTAS+=(""); NOMBRES+=("$inv"); DATOS+=("$susp")
+      if [[ "$susp" == "True" ]]; then
+        estado="$(printf '\033[33mSUSPENDIDO\033[0m')"
+      else
+        estado="activo"
+      fi
+      printf '  %2d) %-12s usuario %-12s modo %-8s %s\n' "$i" "$inv" "$usuario" "$modo" "$estado"
+    done < <(estado_leer '
+for n, d in sorted(e["invitados"].items()):
+    print(n + "|" + d.get("usuario", "?") + "|" + d.get("modo", "clave") + "|" + str(d.get("suspendido", False)))
+')
+    if [[ $i -eq $j0 ]]; then printf '      (ninguno)\n'; fi
+
+    printf '\n  [número] gestionar · [Enter] refrescar · [q] salir\n  > '
+    read -r sel
+    case "$sel" in
+      q|Q) break;;
+      "") continue;;
+    esac
+    if ! [[ "$sel" =~ ^[0-9]+$ ]] || [[ "$sel" -lt 1 || "$sel" -gt $i ]]; then continue; fi
+    idx=$((sel - 1))
+
+    printf '\n  Elegiste: %s %s (%s)\n' "${TIPOS[$idx]}" "${RUTAS[$idx]}" "${NOMBRES[$idx]}"
+    case "${TIPOS[$idx]}" in
+      web)
+        printf '  [c] cerrar este enlace (apaga el servidor y la URL)\n'
+        printf '  [e] eliminar el invitado web por completo\n'
+        printf '  [v] volver\n  > '
+        read -r accion
+        case "$accion" in
+          c) "$0" dejar-de-compartir "${RUTAS[$idx]}" --si || true;;
+          e) "$0" invitado eliminar "${NOMBRES[$idx]}" --si || true;;
+        esac;;
+      ssh)
+        printf '  [c] dejar de compartir esta carpeta\n'
+        printf '  [s] suspender al invitado (corta sesiones, reversible)\n'
+        printf '  [e] eliminar al invitado por completo\n'
+        printf '  [v] volver\n  > '
+        read -r accion
+        case "$accion" in
+          c) "$0" dejar-de-compartir "${RUTAS[$idx]}" --con "${NOMBRES[$idx]}" --si || true;;
+          s) "$0" invitado suspender "${NOMBRES[$idx]}" || true;;
+          e) "$0" invitado eliminar "${NOMBRES[$idx]}" --si || true;;
+        esac;;
+      descarga)
+        printf '  [c] revocar este enlace (deja de funcionar al instante)\n'
+        printf '  [v] volver\n  > '
+        read -r accion
+        case "$accion" in
+          c) "$0" dejar-de-compartir "${RUTAS[$idx]}" --descarga --si || true;;
+        esac;;
+      invitado)
+        if [[ "${DATOS[$idx]}" == "True" ]]; then
+          printf '  [r] reactivar\n'
+        else
+          printf '  [s] suspender (corta sesiones, reversible)\n'
+        fi
+        printf '  [e] eliminar por completo\n'
+        printf '  [v] volver\n  > '
+        read -r accion
+        case "$accion" in
+          s) "$0" invitado suspender "${NOMBRES[$idx]}" || true;;
+          r) "$0" invitado reactivar "${NOMBRES[$idx]}" || true;;
+          e) "$0" invitado eliminar "${NOMBRES[$idx]}" --si || true;;
+        esac;;
+    esac
+    printf '\n  [Enter] para volver al panel… '
+    read -r _
+  done
+}
+
+# =============================================================================
+# Ayuda y despacho
+# =============================================================================
+ayuda() {
+  cat <<'EOF'
+carpeta-share — comparte carpetas con VS Code Remote-SSH + Tailscale
+
+USO:
+  carpeta-share compartir <carpeta> [opciones]
+      Comparte la carpeta y genera un enlace (queda en el portapapeles).
+
+      MODO WEB — el invitado NO instala nada (abre la URL en su navegador):
+        --web --con-contrasena   URL https con contraseña generada (recomendado)
+        --web --contrasena <tu-contraseña>   con una contraseña elegida por ti
+        --web --sin-contrasena   URL https abierta: cualquiera con el enlace entra
+
+      ATAJO: dentro de una carpeta, ejecuta 'linkspace' y elige la protección
+      de forma interactiva.
+
+      MODO VS CODE ESCRITORIO — enlace vscode:// (el invitado instala VS Code +
+      Remote-SSH + Tailscale una sola vez):
+        --con <invitado>      con la llave que el invitado ya te dio
+        --sin-clave [nombre]  sin llave previa: se genera aquí y te deja un
+                              paquete en ~/CarpetaShare-Accesos/ para enviarle
+
+      SOLO DESCARGA — enlace único (con token) para BAJAR algo y nada más;
+      quien lo abre no instala nada ni entra a tu equipo:
+        --descarga            acepta una carpeta (se baja como .zip) o un
+                              archivo suelto; usa el mismo Funnel que el modo web
+        --expira <30m|24h|7d> el enlace caduca pasado ese tiempo
+        --max-descargas <n>   deja de funcionar tras n descargas completas
+        --una-vez             igual que --max-descargas 1
+        --con-contrasena      pide una contraseña generada (o --contrasena <la-tuya>)
+        --con-ocultos         incluye en el .zip los archivos ocultos (.git, .env…),
+                              que por defecto se dejan fuera
+      Repetir el comando sobre la misma ruta conserva el enlace y cambia solo
+      lo que indiques. Atajo: linkspace descarga [ruta] [opciones]
+
+  carpeta-share panel
+      Panel interactivo: ve qué carpetas están compartidas, si alguien las
+      está usando AHORA (conexiones web / sesiones SSH) y cierra accesos,
+      suspende o elimina invitados desde ahí. Atajo: linkspace panel
+
+  carpeta-share dejar-de-compartir <carpeta> [--con <invitado> | --descarga]
+      Retira todos los accesos a esa ruta; --con solo los de un invitado y
+      --descarga solo revoca su enlace de descarga.
+  carpeta-share invitado agregar <nombre> "<llave-publica-ssh>"
+  carpeta-share invitado agregar <nombre> --github <usuario>
+      Con --github toma las llaves públicas de la cuenta de GitHub del invitado.
+  carpeta-share invitado suspender|reactivar|eliminar <nombre>
+  carpeta-share estado
+  carpeta-share actualizar
+      Trae la última versión del repositorio y reinstala (git pull + setup).
+      Atajo: linkspace actualizar
+
+OPCIONES GLOBALES:
+  --si     no pedir confirmaciones
+  --gui    diálogos/notificaciones gráficas (lo usan Finder y VS Code)
+  --json   salida JSON (lo usa la extensión de VS Code)
+EOF
+}
+
+main() {
+  # Extrae flags globales (se dejan en la línea de comandos: los subparsers
+  # las ignoran, y así sobreviven a una re-ejecución con root).
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --gui) GUI=1;;
+      --si) SI=1;;
+      --json) JSON=1;;
+    esac
+  done
+
+  local CMD="${1:-ayuda}"
+  shift || true
+
+  case "$CMD" in
+    compartir)           cmd_compartir "$@";;
+    dejar-de-compartir)  cmd_dejar_de_compartir "$@";;
+    estado)              cmd_estado;;
+    panel)               cmd_panel;;
+    actualizar)          cmd_actualizar;;
+    listar-invitados)    cmd_listar_invitados;;
+    listar-descargas)    cmd_listar_descargas;;
+    invitado)
+      local SUB="${1:-}"
+      shift || true
+      case "$SUB" in
+        agregar)   cmd_invitado_agregar "$@";;
+        suspender) cmd_invitado_suspender "$@";;
+        reactivar) cmd_invitado_reactivar "$@";;
+        eliminar)  cmd_invitado_eliminar "$@";;
+        *) ayuda; err "Subcomando de invitado desconocido: '${SUB:-}'";;
+      esac;;
+    ayuda|--help|-h)     ayuda;;
+    version|--version)   echo "$VERSION";;
+    *) ayuda; err "Comando desconocido: $CMD";;
+  esac
+}
+
+main "$@"

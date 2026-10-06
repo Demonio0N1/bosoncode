@@ -22,6 +22,11 @@
 #   ./setup.sh --ai copilot   GitHub Copilot (necesita una cuenta con Copilot)
 #   ./setup.sh --no-ai        se salta ese paso      (con -y se elige Continue)
 #
+#   Link_space (enlaces de un solo uso para entregar archivos a quien no está
+#   en tu red; viene en linkspace/ y la app lo usa desde este equipo):
+#   ./setup.sh --no-linkspace se salta sus comandos y el clic derecho
+#   ./setup.sh --linkspace    los (re)instala sin preguntar
+#
 # Instala Tailscale si falta, comprueba que la sesión esté iniciada, deja
 # code-server en marcha y anuncia el equipo para que la app lo encuentre sin
 # escribir ninguna dirección.
@@ -43,6 +48,8 @@ SIN_PREGUNTAR=0
 CSM_MODO=preguntar
 # preguntar | continue | copilot | no
 IA_MODO=preguntar
+# preguntar | si | no
+LINKSPACE_MODO=preguntar
 # `--ai` lleva el valor en el argumento siguiente (o pegado con «=»). El bucle
 # va de uno en uno, así que se recuerda que el próximo es ese valor.
 ESPERA_IA=0
@@ -70,6 +77,8 @@ for arg in "$@"; do
     --ai) ESPERA_IA=1 ;;
     --ai=*) elegir_ia "${arg#--ai=}" ;;
     --no-ai) IA_MODO=no ;;
+    --linkspace) LINKSPACE_MODO=si ;;
+    --no-linkspace) LINKSPACE_MODO=no ;;
     # Ya no hace falta: es lo que hace ./setup.sh a secas. Se acepta en
     # silencio para no romper a quien lo tenga escrito en una nota o un alias.
     --service|--install-service) ;;
@@ -891,6 +900,74 @@ case "$(uname -s)" in
   *) rojo "Este script es para macOS y Linux. Detectado: $(uname -s)"; exit 1 ;;
 esac
 
+# ---------- Link_space: enlaces para compartir ----------
+# Viene dentro del repositorio (linkspace/). serve.sh ya deja su copia en
+# ~/.ivscode/linkspace para la app; este paso instala además los comandos
+# (linkspace, carpeta-share) en /usr/local/bin, que pide administrador, el
+# clic derecho del gestor de archivos y la extensión de VS Code si hay npm.
+LINKSPACE_RESULTADO=""   # instalado | ya-estaba | fallo | saltado
+paso_linkspace() {
+  local numero="$1" respuesta
+  titulo "$numero · Link_space"
+  nota "enlaces de un solo uso para entregar un archivo o una carpeta a quien no"
+  nota "está en tu red, por Tailscale Funnel. La app ya puede crearlos desde este"
+  nota "equipo (serve.sh dejó Link_space en ~/.ivscode/linkspace); este paso"
+  nota "instala además los comandos linkspace y carpeta-share y el clic derecho."
+
+  if [ ! -f ./linkspace/instalar.sh ]; then
+    falta "no encuentro linkspace/instalar.sh junto a este script"
+    LINKSPACE_RESULTADO=fallo; return 0
+  fi
+  if [ "$LINKSPACE_MODO" != si ] && [ -x /usr/local/bin/carpeta-share ]; then
+    if cmp -s ./linkspace/bin/carpeta-share /usr/local/bin/carpeta-share; then
+      ok "ya está instalado y al día"
+      LINKSPACE_RESULTADO=ya-estaba; return 0
+    fi
+    nota "está instalado pero es otra versión: lo actualizo"
+  fi
+
+  case "$LINKSPACE_MODO" in
+    no)
+      gris "  · saltado (--no-linkspace)"
+      LINKSPACE_RESULTADO=saltado; return 0 ;;
+    preguntar)
+      if [ "$SIN_PREGUNTAR" = 1 ]; then
+        :
+      elif [ -t 0 ]; then
+        nota "pide la contraseña de administrador para dejar los comandos en /usr/local/bin."
+        printf '\n    ¿Instalar los comandos de Link_space y el clic derecho? [S/n] '
+        read -r respuesta || respuesta=n
+        case "${respuesta:-s}" in
+          [nN]*)
+            nota "de acuerdo. Cuando quieras:  ./setup.sh --linkspace"
+            LINKSPACE_RESULTADO=saltado; return 0 ;;
+        esac
+      else
+        nota "no hay terminal donde pedir la contraseña de administrador: lo salto (para instalarlo: ./setup.sh --linkspace)"
+        LINKSPACE_RESULTADO=saltado; return 0
+      fi ;;
+  esac
+
+  if bash ./linkspace/instalar.sh; then
+    LINKSPACE_RESULTADO=instalado
+  else
+    falta "Link_space no se instaló (el motivo está más arriba)"
+    LINKSPACE_RESULTADO=fallo
+  fi
+}
+
+resumen_linkspace() {
+  case "$LINKSPACE_RESULTADO" in
+    instalado|ya-estaba)
+      ok "Link_space"
+      nota "entregar algo a quien no está en tu red:  linkspace descarga <ruta> --una-vez"
+      nota "y en la app: clic derecho sobre un archivo › Share with Link_space…" ;;
+    fallo)
+      falta "Link_space no quedó instalado (el motivo está más arriba)"
+      nota "reintentar:  ./setup.sh --linkspace" ;;
+  esac
+}
+
 # ---------- --uninstall: quitar lo que puso este script y salir ----------
 # Todo lo que instala vive en sitios propios, así que se puede deshacer entero.
 # Lo que NO se toca importa tanto como lo que sí: el código del usuario está en
@@ -927,6 +1004,9 @@ if [ "$DESINSTALAR" = 1 ]; then
   fi
   if [ "$CSM_MODO" = si ]; then
     nota "  · Claude Sessions Monitor: su agente, su hub y ~/.ivscode/csm"
+  fi
+  if [ -x /usr/local/bin/carpeta-share ]; then
+    nota "  · Link_space: sus comandos de /usr/local/bin, el clic derecho y la extensión de VS Code"
   fi
   nota "NO se toca: tu código, tu sesión de Tailscale, ni Tailscale."
   # Continue se va con ~/.ivscode/extensions, pero su configuración está en
@@ -1043,6 +1123,12 @@ EOF
   if [ "$PURGAR" = 1 ]; then
     rm -rf "$HOME/.local/share/code-server" "$HOME/.config/code-server"
     ok "ajustes del editor borrados"
+  fi
+
+  # Link_space se niega a irse si quedan invitados o enlaces activos: lo dice
+  # él y aquí no se fuerza, que serían accesos huérfanos.
+  if [ -x /usr/local/bin/carpeta-share ] && [ -f ./linkspace/instalar.sh ]; then
+    bash ./linkspace/instalar.sh --uninstall || falta "Link_space no se desinstaló (el motivo está más arriba)"
   fi
 
   titulo "Desinstalado"
@@ -1422,6 +1508,7 @@ RC_SERVIDOR=0
 
 paso_csm 7
 paso_ia 8 servicio "$RC_SERVIDOR"
+paso_linkspace 9
 
 titulo "Resumen"
 if [ "$RC_SERVIDOR" = 0 ]; then
@@ -1433,6 +1520,7 @@ else
 fi
 resumen_csm
 resumen_ia
+resumen_linkspace
 echo ""
 # El código de salida es el del servidor: CSM es opcional y su fallo ya se ha
 # dicho; que el editor no arranque, en cambio, sí es un fallo de este script.

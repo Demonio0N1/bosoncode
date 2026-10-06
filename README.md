@@ -217,6 +217,7 @@ what keeps the iPad from losing its server because a window was closed.
 ./setup.sh --password     # show this machine's password again
 ./setup.sh --csm          # install Claude Sessions Monitor without asking
 ./setup.sh --no-csm       # skip that step
+./setup.sh --no-linkspace # skip Link_space (sharing links, see linkspace/)
 ./setup.sh -y             # yes to everything: Claude Sessions Monitor and Continue
 ./setup.sh --ai continue  # add Continue without asking (or: --ai copilot)
 ./setup.sh --no-ai        # skip the AI assistant step
@@ -325,12 +326,14 @@ Options:
 `--install-service` installs a systemd **user** service on Linux (with lingering
 enabled, so it survives logout) or a LaunchAgent on macOS.
 
-By default `serve.sh` also installs [Link_space](https://github.com/Demonio0N1/Link_space)
-into `~/.ivscode/linkspace`, without root. It is what the app uses for
-"Share with Link_space…": a public, one-time download link for any file or
-folder on this computer, served through Tailscale Funnel. The first link needs
-Funnel enabled in your tailnet; if it isn't, the app shows you the link to turn
-it on. `--no-linkspace` skips it; `--install-service` keeps it up to date.
+[Link_space](linkspace/) ships inside this repository. `serve.sh` copies it to
+`~/.ivscode/linkspace`, without root: it is what the app uses for "Share with
+Link_space…", a public, one-time download link for any file or folder on this
+computer, served through Tailscale Funnel. `./setup.sh` additionally installs
+its commands (`linkspace`, `carpeta-share`) and the right-click menu of your
+file manager. The first link needs Funnel enabled in your tailnet; if it isn't,
+the app shows you the link to turn it on. `--no-linkspace` skips it in both
+scripts.
 
 ### 3. Your password
 

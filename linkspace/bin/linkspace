@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# =============================================================================
+# linkspace — comparte la carpeta ACTUAL con un enlace web (VS Code en el
+# navegador) en un solo paso:
+#
+#   cd mi-proyecto
+#   linkspace
+#
+# Pregunta cómo proteger el enlace (contraseña generada, la tuya, o sin
+# contraseña) y te da la URL lista para enviar. Es azúcar sintáctico sobre:
+#   carpeta-share compartir "$PWD" --web …
+# =============================================================================
+set -euo pipefail
+
+CLI="/usr/local/bin/carpeta-share"
+if command -v carpeta-share >/dev/null 2>&1; then CLI="$(command -v carpeta-share)"; fi
+if [[ ! -x "$CLI" ]]; then
+  printf '\033[31m✗ No encuentro carpeta-share. Ejecuta setup.sh primero.\033[0m\n' >&2
+  exit 1
+fi
+
+# Subcomandos que delegan en el CLI:
+#   linkspace panel             → panel de conexiones (ver/cerrar accesos en vivo)
+#   linkspace actualizar        → git pull + reinstalar la última versión
+#   linkspace descarga [ruta] [opciones]
+#                               → enlace de SOLO DESCARGA de un archivo o de una
+#                                 carpeta (en .zip); sin ruta, la carpeta actual.
+#                                 Opciones: --expira 24h, --una-vez,
+#                                 --max-descargas 3, --con-contrasena…
+case "${1:-}" in
+  panel)              exec "$CLI" panel;;
+  actualizar|update)  exec "$CLI" actualizar;;
+  descarga)
+    shift
+    RUTA="$PWD"
+    if [[ $# -gt 0 && "$1" != --* ]]; then RUTA="$1"; shift; fi
+    exec "$CLI" compartir "$RUTA" --descarga ${@+"$@"};;
+esac
+
+# Acepta una ruta opcional; sin argumentos comparte la carpeta actual.
+CARPETA="${1:-$PWD}"
+if [[ ! -d "$CARPETA" ]]; then
+  printf '\033[31m✗ No es una carpeta: %s\033[0m\n' "$CARPETA" >&2
+  exit 1
+fi
+
+printf '📁 Carpeta a compartir: \033[1m%s\033[0m\n\n' "$CARPETA"
+printf '¿Proteger el enlace con contraseña?\n'
+printf '  1) Sí, generar una segura (recomendado)\n'
+printf '  2) Sí, escribir la mía\n'
+printf '  3) No — cualquiera con el enlace podrá entrar\n\n'
+read -r -p 'Opción [1]: ' OP
+OP="${OP:-1}"
+
+case "$OP" in
+  1)
+    exec "$CLI" compartir "$CARPETA" --web --con-contrasena
+    ;;
+  2)
+    # La contraseña se lee sin eco y viaja por variable de entorno, no por
+    # argumentos: así no queda visible en la lista de procesos.
+    while :; do
+      read -r -s -p 'Contraseña (mínimo 8 caracteres): ' PW; printf '\n'
+      if [[ ${#PW} -lt 8 ]]; then printf '  Muy corta, intenta de nuevo.\n'; continue; fi
+      read -r -s -p 'Repítela: ' PW2; printf '\n'
+      if [[ "$PW" == "$PW2" ]]; then break; fi
+      printf '  No coinciden, intenta de nuevo.\n'
+    done
+    CS_CONTRASENA="$PW" exec "$CLI" compartir "$CARPETA" --web
+    ;;
+  3)
+    exec "$CLI" compartir "$CARPETA" --web --sin-contrasena
+    ;;
+  *)
+    printf '\033[31m✗ Opción inválida: %s\033[0m\n' "$OP" >&2
+    exit 1
+    ;;
+esac

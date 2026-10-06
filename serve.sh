@@ -66,49 +66,41 @@ esac
 # ---------- Link_space: enlaces de descarga para la app ----------
 # La app ofrece «Share with Link_space…» sobre cualquier archivo o carpeta de
 # este equipo: un enlace público de un solo uso, por Tailscale Funnel, que crea
-# aquí mismo el CLI de Link_space (https://github.com/Demonio0N1/Link_space).
-# Se deja una copia del repositorio en ~/.ivscode/linkspace y la app lo ejecuta
-# desde ahí: sin root y sin tocar /usr/local/bin, como todo lo demás de este
-# script. Al arrancar solo se instala si falta; --install-service lo actualiza.
+# aquí mismo el CLI de Link_space. Link_space viene DENTRO de este repositorio
+# (carpeta linkspace/); de ahí se copia a ~/.ivscode/linkspace, que es donde la
+# app lo busca: sin root y sin tocar /usr/local/bin, como todo lo demás de este
+# script. Instalar sus comandos y el clic derecho es cosa de ./setup.sh.
 LINKSPACE_DIR="$IVSCODE_DIR/linkspace"
-LINKSPACE_REPO="https://github.com/Demonio0N1/Link_space"
+LINKSPACE_ORIGEN="$(cd "$(dirname "$0")" && pwd)/linkspace"
 instalar_linkspace() {
-  # $1 = "actualizar": trae la última versión si ya estaba.
   [ "$LINKSPACE" = 1 ] || return 0
-  if [ -x "$LINKSPACE_DIR/carpeta-share/bin/carpeta-share" ]; then
-    if [ "${1:-}" = actualizar ] && [ -d "$LINKSPACE_DIR/.git" ] && command -v git >/dev/null 2>&1; then
-      if git -C "$LINKSPACE_DIR" pull --ff-only -q 2>/dev/null; then
-        echo "→ Link_space actualizado."
-      else
-        echo "⚠ No pude actualizar Link_space (sin red, o con cambios locales); sigue la versión de antes."
-      fi
-    fi
+  # En macOS el servicio corre desde la copia de ~/.ivscode: origen y destino
+  # son el mismo sitio, y lo que hay ya se copió al instalar el servicio.
+  [ "$LINKSPACE_ORIGEN" = "$LINKSPACE_DIR" ] && return 0
+  if [ ! -x "$LINKSPACE_ORIGEN/bin/carpeta-share" ]; then
+    [ -x "$LINKSPACE_DIR/bin/carpeta-share" ] && return 0
+    echo "⚠ No encuentro linkspace/ junto a este script: la app no podrá crear enlaces de descarga desde este equipo."
     return 0
   fi
-  echo "→ Instalando Link_space (enlaces de descarga desde la app)…"
+  # Solo si cambió algo: el servicio pasa por aquí en cada arranque.
+  if [ -x "$LINKSPACE_DIR/bin/carpeta-share" ] \
+     && diff -rq -x node_modules -x out -x '*.vsix' "$LINKSPACE_ORIGEN" "$LINKSPACE_DIR" >/dev/null 2>&1; then
+    return 0
+  fi
   mkdir -p "$IVSCODE_DIR"
   # ${VAR:?}: si la variable estuviera vacía, el rm se niega en vez de borrar
   # otra cosa.
   rm -rf "${LINKSPACE_DIR:?}.tmp"
-  if command -v git >/dev/null 2>&1 \
-     && git clone -q --depth 1 "$LINKSPACE_REPO.git" "$LINKSPACE_DIR.tmp" 2>/dev/null; then
-    :
-  elif curl -fsSL "$LINKSPACE_REPO/archive/refs/heads/main.tar.gz" -o "$IVSCODE_DIR/linkspace.tar.gz" 2>/dev/null \
-       && mkdir -p "$LINKSPACE_DIR.tmp" \
-       && tar -xzf "$IVSCODE_DIR/linkspace.tar.gz" -C "$LINKSPACE_DIR.tmp" --strip-components=1; then
-    rm -f "${IVSCODE_DIR:?}/linkspace.tar.gz"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --exclude node_modules --exclude out --exclude '*.vsix' "$LINKSPACE_ORIGEN/" "$LINKSPACE_DIR.tmp/"
   else
-    rm -rf "${LINKSPACE_DIR:?}.tmp" "${IVSCODE_DIR:?}/linkspace.tar.gz"
-    echo "⚠ No pude descargar Link_space: la app no podrá crear enlaces de descarga desde este equipo."
-    echo "  Vuelve a ejecutar este script con red, o instálalo a mano desde $LINKSPACE_REPO"
-    return 0
+    cp -R "$LINKSPACE_ORIGEN" "$LINKSPACE_DIR.tmp"
+    rm -rf "${LINKSPACE_DIR:?}.tmp/vscode-extension/node_modules" "${LINKSPACE_DIR:?}.tmp/vscode-extension/out"
   fi
   rm -rf "${LINKSPACE_DIR:?}"
   mv "$LINKSPACE_DIR.tmp" "$LINKSPACE_DIR"
-  chmod +x "$LINKSPACE_DIR"/carpeta-share/bin/* 2>/dev/null || true
-  echo "→ Link_space instalado en $LINKSPACE_DIR"
-  echo "  El primer enlace necesita Tailscale Funnel habilitado en tu tailnet; si no lo está,"
-  echo "  la app te enseña el enlace para activarlo."
+  chmod +x "$LINKSPACE_DIR"/bin/* "$LINKSPACE_DIR/instalar.sh" 2>/dev/null || true
+  echo "→ Link_space (enlaces de descarga desde la app) copiado a $LINKSPACE_DIR"
 }
 
 # ---------- --install-idb: toques en el simulador de iOS ----------
@@ -366,7 +358,7 @@ PLIST
 if [ "$INSTALL_SERVICE" = 1 ]; then
   SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
   ensure_password
-  instalar_linkspace actualizar
+  instalar_linkspace
   if [ "$PLATFORM" = linux ]; then
     mkdir -p "$HOME/.config/systemd/user"
     cat > "$HOME/.config/systemd/user/ivscode.service" <<EOF
