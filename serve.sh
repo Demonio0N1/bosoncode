@@ -1348,6 +1348,45 @@ def fs_op(machine, op, path, target=""):
     if rc != 0:
         raise RuntimeError((err or out)[-200:])
 
+# ---- Ejecutar una línea de shell para la app --------------------------------
+#
+# Lo que la app necesita LEER (el estado de un repo, lo que contesta
+# Link_space) iba por el canal del terminal, entre marcas y limpiando colores
+# y secuencias de cursor de tmux, que a veces se llevaban saltos de línea.
+# Aquí la salida llega limpia y separada: código, stdout y stderr. Con `-l`
+# para que el PATH sea el del usuario (docker, tailscale, /usr/local/bin),
+# como en su terminal.
+def run_command(machine, cmd, cwd="", timeout=90):
+    machine = valid_machine(machine)
+    if not str(cmd).strip():
+        raise ValueError("sin comando")
+    try:
+        timeout = max(1, min(int(float(timeout or 90)), 900))
+    except (TypeError, ValueError):
+        timeout = 90
+    home = "/root" if machine else os.path.expanduser("~")
+    folder = cwd if str(cwd).startswith("/") else home
+    if machine:
+        args = ["docker", "exec", "-w", folder, "ivsc_" + machine, "sh", "-lc", cmd]
+        if DOCKER_VIA_SG:
+            args = ["sg", "docker", "-c", " ".join(shlex.quote(x) for x in args)]
+        cwd_host = None
+    else:
+        shell = os.environ.get("SHELL") or ("/bin/zsh" if sys.platform == "darwin" else "/bin/bash")
+        args = [shell, "-lc", cmd]
+        cwd_host = folder if os.path.isdir(folder) else home
+    tope = 200_000
+    def texto(b):
+        b = b or b""
+        return b[-tope:].decode("utf-8", "replace")
+    try:
+        r = subprocess.run(args, capture_output=True, cwd=cwd_host, timeout=timeout, stdin=subprocess.DEVNULL)
+    except FileNotFoundError as e:
+        return {"exit": 127, "stdout": "", "stderr": str(e)}
+    except subprocess.TimeoutExpired as e:
+        return {"exit": 124, "stdout": texto(e.stdout), "stderr": texto(e.stderr), "timeout": True}
+    return {"exit": r.returncode, "stdout": texto(r.stdout), "stderr": texto(r.stderr)}
+
 # ---- Ejecutar un script: con qué intérprete ------------------------------
 #
 # El explorador del iPad ejecuta scripts en ESTA máquina y tiene que ofrecer
@@ -2709,6 +2748,11 @@ class Handler(BaseHTTPRequestHandler):
                 fs_op(data.get("machine", ""), data.get("op", ""),
                       data.get("path", ""), data.get("target", ""))
                 self._send(200, {"ok": True})
+                return
+            if self.path == "/run":
+                data = json.loads(self._body() or b"{}")
+                self._send(200, run_command(data.get("machine", ""), data.get("cmd", ""),
+                                            data.get("cwd", ""), data.get("timeout", 90)))
                 return
             if self.path == "/upload":
                 name = os.path.basename(self.headers.get("X-Filename", "archivo"))
