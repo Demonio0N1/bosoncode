@@ -20,7 +20,7 @@
 # =============================================================================
 set -euo pipefail
 
-VERSION="1.4.0"
+VERSION="1.4.1"
 PREFIJO="cs-"                      # prefijo de los usuarios invitados del sistema
 SSHD_CONFIG="/etc/ssh/sshd_config"
 
@@ -1604,6 +1604,29 @@ cmd_actualizar() {
 
 cmd_listar_descargas() {
   # Rutas con enlace de descarga activo (lo consume setup.sh --uninstall).
+  # Con --json, cada enlace entero: ruta, tipo, enlace, usos, caducidad,
+  # estado (vivo/caducado/agotado) y contraseña (lo consume ZeroSpin).
+  if [[ $JSON -eq 1 ]]; then
+    local host pp
+    host="$( (ts_host) 2>/dev/null || true)"
+    pp="$(config_leer descargas_puerto_publico || true)"
+    descargas_filas | python3 -c '
+import json, sys
+host, pp, montaje = sys.argv[1], sys.argv[2] or "443", sys.argv[3]
+base = ("https://%s%s/" % (host, montaje)) if pp == "443" else ("https://%s:%s%s/" % (host, pp, montaje))
+out = []
+for linea in sys.stdin:
+    linea = linea.rstrip("\n")
+    if not linea:
+        continue
+    r, t, tk, d, n, m, e, vida, o, u, p = linea.split("|", 10)
+    out.append({"ruta": r, "tipo": t, "desde": d, "usados": int(n or 0), "max": int(m or 0) or None,
+                "expira": int(e or 0) or None, "vida": vida, "ocultos": o == "1", "ultima": u or None,
+                "contrasena": p or None, "enlace": (base + tk) if host else None})
+print(json.dumps(out))
+' "$host" "$pp" "$MONTAJE_DESCARGAS"
+    return
+  fi
   estado_leer 'print("\n".join(d["ruta"] for d in e.get("descargas", [])))'
 }
 
