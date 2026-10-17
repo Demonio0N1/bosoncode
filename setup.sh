@@ -11,8 +11,9 @@
 #                             añade --purge para llevarse también tus ajustes
 #                             del editor, y -y para no preguntar
 #
-#   Claude Sessions Monitor (opcional; se ofrece después de arrancar el editor):
-#   ./setup.sh --csm          lo instala sin preguntar
+#   Claude Sessions Monitor (opcional; se ofrece después de arrancar el editor;
+#   viene en csm/ y ZeroSpin enseña sus sesiones):
+#   ./setup.sh --csm          lo instala, o lo actualiza, sin preguntar
 #   ./setup.sh --no-csm       se salta ese paso
 #   ./setup.sh -y             dice que sí a todo, CSM incluido
 #   ./setup.sh --uninstall --csm   al desinstalar, quita también CSM
@@ -307,22 +308,24 @@ PY
 }
 
 # ---------- Claude Sessions Monitor ----------
-# CSM es un proyecto hermano: un panel web con las sesiones de Claude Code de
-# todas tus máquinas en una sola página, que también deja contestarles desde el
-# móvil. BosonCode no lo necesita. Se ofrece aquí porque quien prepara un
-# equipo para programar desde el iPad suele quererlo también, y este es el
-# momento más barato: la terminal está abierta y Tailscale recién configurado.
+# CSM es un panel web con las sesiones de Claude Code de todas tus máquinas en
+# una sola página, que también deja contestarles desde el móvil. ZeroSpin
+# enseña esas mismas sesiones en su barra lateral y las abre en vivo, con el
+# mismo panel por debajo. BosonCode no lo necesita. Se ofrece aquí porque
+# quien prepara un equipo para programar desde el iPad suele quererlo también,
+# y este es el momento más barato: la terminal está abierta y Tailscale recién
+# configurado.
 #
-# El código se descarga en ~/.ivscode/csm, junto a lo demás que trae este
-# script. Lo que CSM instala —el hub en ~/.local/share/csm-hub, el agente en
-# ~/.local/bin— lo pone su PROPIO setup.sh: aquí no se duplica nada de eso. Se
-# le llama y se le deja hacer su pregunta (¿panel propio o sumarse al de otra
+# Viene dentro del repositorio (csm/), como Link_space: ya no se descarga de
+# GitHub, así la versión que instala este script es siempre la que va con la
+# app. Se copia a ~/.ivscode/csm, junto a lo demás que trae este script, y
+# desde allí corre su PROPIO setup.sh, que es quien pone el hub en
+# ~/.local/share/csm-hub y el agente en ~/.local/bin: aquí no se duplica nada
+# de eso. Se le deja hacer su pregunta (¿panel propio o sumarse al de otra
 # máquina?), que solo él sabe responder bien porque busca los paneles que ya
 # hay en la tailnet.
 #
-# CSM_REPO se puede cambiar para probar un fork; CSM_PORT es el mismo que usa
-# el propio CSM.
-CSM_REPO="${CSM_REPO:-https://github.com/Demonio0N1/claude-sessions-monitor.git}"
+# CSM_PORT es el mismo que usa el propio CSM.
 CSM_DIR="$HOME/.ivscode/csm"
 CSM_PUERTO="${CSM_PORT:-4000}"
 CSM_RESULTADO=""   # instalado | ya-estaba | fallo | saltado
@@ -407,13 +410,14 @@ paso_csm() {
     else
       ok "ya está instalado y corriendo; esta máquina reporta a $(csm_url_panel 0)"
     fi
-    if [ -d "$CSM_DIR/.git" ]; then
-      nota "no lo reinstalo. Para actualizarlo:  cd ~/.ivscode/csm && git pull && ./setup.sh"
-    else
-      nota "no lo reinstalo. Para actualizarlo: git pull y ./setup.sh en la carpeta de CSM"
+    # Con --csm explícito se actualiza a la versión que trae este repositorio
+    # (su instalador es idempotente); sin él, no se toca lo que ya funciona.
+    if [ "$CSM_MODO" != si ]; then
+      nota "no lo reinstalo. Para actualizarlo a la versión de este repositorio:  ./setup.sh --csm"
+      CSM_RESULTADO=ya-estaba
+      return 0
     fi
-    CSM_RESULTADO=ya-estaba
-    return 0
+    nota "lo actualizo a la versión que viene en csm/"
   fi
 
   case "$CSM_MODO" in
@@ -424,7 +428,7 @@ paso_csm() {
       if [ "$SIN_PREGUNTAR" = 1 ]; then
         :
       elif [ -t 0 ]; then
-        nota "si dices que sí: lo descargo en ~/.ivscode/csm y ejecuto su"
+        nota "si dices que sí: copio csm/ a ~/.ivscode/csm y ejecuto su"
         nota "instalador, que te preguntará si este equipo tendrá su propio panel"
         nota "o si se suma al de otra máquina (te enseña los que encuentre)."
         nota "Necesita Node, Go y tmux; si faltan, los instala él y puede pedir sudo."
@@ -443,29 +447,7 @@ paso_csm() {
       fi ;;
   esac
 
-  if ! command -v git >/dev/null 2>&1; then
-    falta "hace falta git para descargarlo"
-    nota "instálalo y ejecuta:  ./setup.sh --csm"
-    CSM_RESULTADO=fallo; return 0
-  fi
-
-  if [ -d "$CSM_DIR/.git" ]; then
-    nota "actualizando la copia que ya había en ~/.ivscode/csm…"
-    git -C "$CSM_DIR" pull --ff-only -q 2>/dev/null \
-      || nota "no pude actualizarla (¿sin internet o con cambios locales?); sigo con la que hay"
-  else
-    nota "descargando en ~/.ivscode/csm…"
-    mkdir -p "$(dirname "$CSM_DIR")"
-    if ! git clone -q --depth 1 "$CSM_REPO" "$CSM_DIR" 2>/dev/null; then
-      falta "no pude descargar $CSM_REPO"
-      nota "¿hay internet? Reinténtalo con:  ./setup.sh --csm"
-      CSM_RESULTADO=fallo; return 0
-    fi
-  fi
-  ok "código en ~/.ivscode/csm"
-
-  if [ ! -f "$CSM_DIR/setup.sh" ]; then
-    falta "la copia descargada no trae setup.sh"
+  if ! csm_copiar; then
     CSM_RESULTADO=fallo; return 0
   fi
 
@@ -482,11 +464,29 @@ paso_csm() {
     echo ""
     falta "el instalador de Claude Sessions Monitor no terminó"
     nota "el editor NO se ve afectado: sigue funcionando igual."
-    nota "el motivo está justo arriba. Para reintentar:"
-    nota "  cd ~/.ivscode/csm && ./setup.sh"
+    nota "el motivo está justo arriba. Para reintentar:  ./setup.sh --csm"
     CSM_RESULTADO=fallo
   fi
   return 0
+}
+
+# Deja en ~/.ivscode/csm la copia de csm/ que viene con el repositorio, como
+# hace serve.sh con linkspace/. Lo que compiló una instalación anterior
+# (node_modules, web/dist, los binarios del agente) se queda: el instalador de
+# CSM lo rehace. Un .git de cuando se clonaba de GitHub se quita: un `git pull`
+# allí traería una versión distinta de la que va con la app.
+csm_copiar() {
+  if [ ! -f ./csm/setup.sh ]; then
+    falta "este repositorio no trae csm/ (¿una copia vieja?): haz git pull y vuelve a probar"
+    return 1
+  fi
+  mkdir -p "$CSM_DIR"
+  if ! cp -R ./csm/. "$CSM_DIR/"; then
+    falta "no pude copiar csm/ a ~/.ivscode/csm"
+    return 1
+  fi
+  [ -d "$CSM_DIR/.git" ] && rm -rf "${CSM_DIR:?}/.git"
+  ok "código en ~/.ivscode/csm, copiado de csm/"
 }
 
 # Quita CSM con sus propias herramientas: `csm-agent service uninstall` para el
@@ -506,11 +506,11 @@ csm_desinstalar() {
   fi
 
   if [ -d "$HOME/.local/share/csm-hub/app" ]; then
-    # hub-service.sh viene con el repositorio, no con lo instalado. Si la copia
-    # de ~/.ivscode/csm no está (se instaló CSM desde otra carpeta), se trae
-    # una solo para esto.
-    if [ ! -x "$servicio" ] && command -v git >/dev/null 2>&1; then
-      git clone -q --depth 1 "$CSM_REPO" "$CSM_DIR" 2>/dev/null || true
+    # hub-service.sh viene con el código, no con lo instalado. Si la copia de
+    # ~/.ivscode/csm no está (se instaló CSM desde otra carpeta), vale la que
+    # trae este repositorio.
+    if [ ! -x "$servicio" ] && [ -x ./csm/scripts/hub-service.sh ]; then
+      servicio=./csm/scripts/hub-service.sh
     fi
     if [ -x "$servicio" ] && "$servicio" uninstall >/dev/null 2>&1; then
       ok "hub de CSM quitado"

@@ -335,6 +335,15 @@ file manager. The first link needs Funnel enabled in your tailnet; if it isn't,
 the app shows you the link to turn it on. `--no-linkspace` skips it in both
 scripts.
 
+[Claude Sessions Monitor](csm/) ships inside this repository too. It is the
+panel that watches your Claude Code sessions on every computer (an agent per
+machine, a hub on port 4000) and lets you answer them from a phone. `./setup.sh`
+offers it after the editor is running (`--csm` installs or updates it without
+asking, `--no-csm` skips it): it copies `csm/` to `~/.ivscode/csm` and runs
+CSM's own installer from there. ZeroSpin lists those sessions in its sidebar,
+opens them live (screen, keys, prompt, pause, kill) and can attach a terminal
+to their tmux session.
+
 ### 3. Your password
 
 `serve.sh` generates a random password on first run and stores it in
@@ -578,6 +587,9 @@ bosoncode/
 ├── setup-machine.sh      # provisions a GPU container image (runs INSIDE a machine)
 ├── bridge.sh             # SSH bridge for hosts without Tailscale
 ├── backend/              # optional Docker Compose setup with GPU passthrough
+├── linkspace/            # Link_space: one-time download links (installed by setup.sh / serve.sh)
+├── csm/                  # Claude Sessions Monitor: hub, agent and web panel (setup.sh --csm)
+├── android/              # ZeroSpin for Android
 └── ipad/
     ├── project.yml       # XcodeGen manifest → generates the .xcodeproj
     ├── iVsCode/          # BosonCode (editor client + terminal)

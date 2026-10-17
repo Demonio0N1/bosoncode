@@ -1,0 +1,88 @@
+export type SessionStatus =
+  | 'active'
+  | 'waiting_input'
+  | 'waiting_choice'
+  | 'idle'
+  | 'paused'
+  | 'error'
+  | 'ended';
+
+export type ActionKind = 'send_prompt' | 'send_key' | 'pause' | 'resume' | 'kill' | 'force_kill';
+
+/** Acciones dirigidas a la máquina (no a una sesión): explorador de archivos,
+ *  sesiones/terminales nuevos, captura de pantalla, subir/bajar archivos. */
+export type MachineActionKind =
+  | 'list_dir'
+  | 'new_session'
+  | 'new_terminal'
+  | 'screenshot'
+  | 'put_file'
+  | 'get_file'
+  | 'delete_path'
+  | 'rename_path'
+  | 'mkdir'
+  | 'open_privacy';
+
+export interface DirEntry {
+  name: string;
+  path: string;
+  dir?: boolean;
+  size?: number;
+  mtime?: number;
+}
+
+/** Respuesta de list_dir. */
+export interface DirListing {
+  path: string;
+  parent?: string;
+  home: string;
+  entries: DirEntry[];
+}
+
+export interface SessionInfo {
+  id: string;
+  globalId: string;
+  kind: 'tmux' | 'process';
+  agent?: string; // 'claude' | 'codex' | 'opencode' | 'cursor-agent' | undefined (legado/no detectado)
+  tmuxSession?: string;
+  pid: number;
+  cwd: string;
+  project: string;
+  startedAt: number;
+  status: SessionStatus;
+  lastEvent?: string;
+  lastEventAt?: number;
+}
+
+/** Permisos de macOS que reporta el agente. */
+export interface MachinePerms {
+  fullDisk?: boolean;
+  signed?: boolean;
+}
+
+export interface MachineInfo {
+  id: string;
+  name: string;
+  os: string;
+  arch: string;
+  version: string;
+  perms?: MachinePerms;
+}
+
+export interface MachineState {
+  info: MachineInfo;
+  online: boolean;
+  lastSeen: number;
+  sessions: SessionInfo[];
+}
+
+export type HubToApp =
+  | { type: 'state'; machines: MachineState[] }
+  | { type: 'output'; sessionId: string; data: string; full: boolean }
+  | { type: 'action_result'; requestId: string; ok: boolean; message?: string; data?: unknown };
+
+export interface EventRow {
+  kind: string;
+  ts: number;
+  detail: string;
+}
