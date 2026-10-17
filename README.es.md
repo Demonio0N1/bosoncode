@@ -59,6 +59,11 @@ que las máquinas que ya añadiste están disponibles también aquí.
 | **Nubes montadas** | OneDrive, Drive, Dropbox… se conceden una vez y se conservan |
 | **Arrastrar y soltar** | En los dos sentidos, incluidas fotos, que llegan como datos de imagen y no como archivos |
 | **Ejecutar en BosonCode** | Manda un notebook o un script a una máquina y ábrelo allí |
+| **Sesiones de Claude** | Las sesiones de Claude Code que [CSM](csm/) ve en tus equipos, en la barra lateral; ábrela en vivo —pantalla, teclas, mensaje, pausar, terminar— o engancha un terminal a su tmux |
+| **GitHub** | Tus repositorios como carpetas: editar, commit, ramas y pull requests |
+| **Notas y PDF** | Notas a mano con el Pencil; escribir sobre un PDF, firmarlo y ordenar sus páginas |
+| **Compartir con Link_space** | Un enlace público de un solo uso para descargar cualquier archivo o carpeta de un equipo |
+| **También en Android** | [ZeroSpin para Android](android/): los mismos equipos, archivos al estilo Finder, terminal, editor, sesiones de Claude y un widget en la pantalla de inicio |
 
 ### Lo que iPadOS no permite
 
@@ -113,6 +118,36 @@ Lo demás va solo: descarga code-server, instala las extensiones, publica el
 equipo y lo deja arrancando al encender. La primera vez tarda unos minutos
 descargando; no hace falta mirar, y si lo cortas se reanuda por donde iba.
 
+#### Lo que hace, paso a paso
+
+Nueve pasos, cada uno impreso al ejecutarse, para saber dónde está si se para:
+
+1. **Tailscale**: lo instala si falta.
+2. **Sesión de Tailscale**: inicia sesión, habilita Serve y hace operador a tu
+   usuario.
+3. **Servidor**: descarga un code-server independiente en `~/.ivscode`.
+4. **Simulador**: comprueba qué puede ofrecer este equipo (Xcode, `adb`, KVM).
+5. **HTTPS**: publica el editor, el gestor de archivos y el terminal en tu
+   tailnet (ver *Lo que publica el equipo*, más abajo).
+6. **Arranque**: deja el servidor como servicio que arranca al encender.
+7. **Claude Sessions Monitor**: opcional, ver más abajo.
+8. **Asistente de IA en el editor**: opcional, ver más abajo.
+9. **Link_space**: sus comandos y el clic derecho; pide `sudo`.
+
+Puedes ejecutarlo otra vez cuando quieras: cada paso es idempotente y dice *ya
+estaba* cuando no hay nada que hacer.
+
+#### Actualizar
+
+```bash
+cd bosoncode && git pull && ./setup.sh          # el servidor y Link_space
+./setup.sh --csm                                # …y también Claude Sessions Monitor
+```
+
+`./serve.sh --install-service` a secas refresca el servidor sin las preguntas.
+CSM conserva su token y sus datos entre actualizaciones, así que tus
+dispositivos siguen emparejados.
+
 #### Y al terminar
 
 ```
@@ -135,19 +170,37 @@ Si pierdes ese recuadro, lo recuperas con `./setup.sh --password`.
 #### Opcional: Claude Sessions Monitor
 
 Con el editor ya en marcha, el script ofrece una cosa más:
-[Claude Sessions Monitor](https://github.com/Demonio0N1/claude-sessions-monitor),
-un panel web con las sesiones de Claude Code de todas tus máquinas en una sola
-página, que además deja contestarles desde el móvil. BosonCode no lo necesita.
+[Claude Sessions Monitor](csm/) (CSM), que viene en este repositorio. Un agente
+en cada equipo vigila tus sesiones de Claude Code y las reporta a un hub
+(puerto 4000) de uno de ellos; un panel web las enseña todas en una sola página
+y deja contestarles desde el móvil. BosonCode no lo necesita; ZeroSpin sí lo usa.
 
-Si dices que sí, se descarga en `~/.ivscode/csm` y se ejecuta **su propio**
+Si dices que sí, `csm/` se copia a `~/.ivscode/csm` y se ejecuta **su propio**
 instalador, que pregunta si este equipo tendrá su panel o si se suma al de otra
 máquina (te enseña los que encuentre en tu tailnet). Necesita Node, Go y tmux, y
 los instala si faltan, así que puede pedir `sudo`. Al terminar, el resumen
-imprime la dirección del panel; ábrela una vez en cada dispositivo: el enlace
-lleva el token de emparejamiento.
+imprime la dirección del panel para un navegador: el enlace lleva el token de
+emparejamiento.
 
-Si ya está instalado y corriendo, no se reinstala nada. Si su instalación falla,
-el editor no se ve afectado: se dice el motivo y el comando para reintentar.
+**En ZeroSpin no hay que pegar nada.** En cuanto hay un equipo en la app, la
+barra lateral tiene una sección *Claude Sessions*: la app pregunta a tus equipos
+dónde está CSM y se empareja sola (*Look for CSM on your computers…* lo hace a
+mano). Cada sesión enseña su proyecto, su equipo y su estado: trabajando,
+esperándote, pidiendo permiso. Tócala y se abre en vivo, como en el panel: la
+pantalla, las teclas que Claude espera (1, 2, 3, Intro, Esc…), un campo de
+mensaje, Pausar y Terminar, y *Open Terminal* para engancharle un terminal de
+verdad a su sesión de tmux. Cuando Claude pide un permiso, un aviso deja
+aprobarlo o rechazarlo desde la pantalla bloqueada.
+
+**Lanza Claude con `csm`**, no con `claude`: `csm` lo arranca dentro de una
+sesión de tmux con el nombre del proyecto, que es lo que hace que la pantalla se
+vea y la sesión se pueda contestar (y sobrevive a que se corte el SSH). Una
+sesión lanzada fuera de tmux sale atenuada: CSM la ve y puede terminarla, pero
+no hay pantalla.
+
+Si ya está instalado y corriendo, no se reinstala nada salvo con `--csm`, que lo
+actualiza a la versión de `csm/`. Si su instalación falla, el editor no se ve
+afectado: se dice el motivo y el comando para reintentar.
 
 #### Opcional: un asistente de IA en el editor
 
@@ -217,7 +270,7 @@ servidor por haber cerrado una ventana.
 ./setup.sh --check        # solo diagnostica, no toca nada
 ./setup.sh --foreground   # lo arranca atado a esta terminal (para depurar)
 ./setup.sh --password     # vuelve a enseñar la contraseña de este equipo
-./setup.sh --csm          # instala Claude Sessions Monitor sin preguntar
+./setup.sh --csm          # instala (o actualiza) Claude Sessions Monitor sin preguntar
 ./setup.sh --no-csm       # se salta ese paso
 ./setup.sh --no-linkspace # sin Link_space (enlaces para compartir, ver linkspace/)
 ./setup.sh -y             # sí a todo: Claude Sessions Monitor y Continue
@@ -324,6 +377,21 @@ Opciones:
 *linger* activado, para que sobreviva al cierre de sesión) o un LaunchAgent en
 macOS.
 
+#### Lo que publica el equipo
+
+Todo va por `tailscale serve`, así que solo se llega desde tu tailnet, por el
+nombre del equipo: nunca por su IP y nunca desde internet:
+
+| Puerto | Qué | Quién lo usa |
+|---|---|---|
+| 9443 | code-server por HTTPS | El editor de BosonCode |
+| 9500 | El gestor por HTTPS: archivos, subidas, `/run` | ZeroSpin y la app de Android |
+| 39600 | El canal del terminal (TCP, un PTY dentro de tmux) | El terminal de las dos apps |
+| 4000 | El hub de CSM, HTTP sin cifrar dentro de la tailnet | ZeroSpin, la app de Android y el panel web |
+
+`tailscale serve status` lista los tres primeros; el hub es un servicio propio
+de CSM.
+
 [Link_space](linkspace/) viene dentro de este repositorio. `serve.sh` lo copia
 a `~/.ivscode/linkspace`, sin root: es lo que usa la app para «Share with
 Link_space…», un enlace público de un solo uso para descargar cualquier archivo
@@ -382,6 +450,13 @@ completa que imprime `setup.sh`.
 > **Con el iPad en otra red, el descubrimiento automático no puede funcionar.**
 > Es mDNS, que es multicast local, y Tailscale no lo transporta. Añadirlo por su
 > nombre es entonces la única vía, y funciona desde cualquier sitio.
+
+En **ZeroSpin** es la barra lateral: *Computers → Add Computer…*, o el equipo
+que sale en *Found on your network*, y la contraseña una vez. Desde ahí sus
+archivos se recorren como en el Finder, hasta la raíz `/`; *Open Terminal Here*
+y el editor están en los menús; y la sección *Claude Sessions* se rellena sola
+en cuanto CSM está instalado. **ZeroSpin para Android** va igual: Tailscale en
+el teléfono, con la misma cuenta, y *Añadir equipo* por su nombre.
 
 ---
 
@@ -536,6 +611,19 @@ open iVsCode.xcodeproj
 
 Pon tu propio equipo en `project.yml` (`DEVELOPMENT_TEAM`) antes de compilar.
 
+### ZeroSpin para Android
+
+La [app de Android](android/) habla con el mismo servidor; en el equipo no
+cambia nada. Necesita un JDK 17 y el SDK de Android (plataforma 36):
+
+```bash
+cd android
+./gradlew :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+`local.properties` (fuera del repositorio) apunta al SDK con `sdk.dir=…`.
+
 ### Añadir tu tailnet (hace falta para los notebooks)
 
 El editor, la terminal y todo lo demás funcionan tal cual en cualquier tailnet.
@@ -654,6 +742,22 @@ contraseña* rehace el contenedor con la actual y conserva su disco.
 
 **El emulador de Android no arranca.** La app te dirá el motivo. Si menciona
 KVM, es el grupo: mira más arriba, en la sección del emulador.
+
+**La sección *Claude Sessions* dice *CSM not answering*, o se queda vacía.** La
+app habla con el hub por el nombre de Tailscale del equipo, en el puerto 4000,
+así que lo primero es que Tailscale esté en marcha en ese equipo y en el iPad.
+Después, en el equipo del panel:
+
+```bash
+./setup.sh --check                                   # dice si CSM corre aquí
+~/.ivscode/csm/scripts/hub-service.sh status          # el hub y su dirección
+```
+
+Una sesión atenuada, sin pantalla, se lanzó con `claude` fuera de tmux: ciérrala
+y vuelve a lanzarla con `csm` en la misma carpeta; retoma la conversación con
+`--continue`. Si *Look for CSM on your computers…* no encuentra nada, CSM no
+está instalado en ningún equipo de la lista de la app: `./setup.sh --csm` en
+uno de ellos.
 
 **Se alcanzó el límite de inotify.** code-server vigila muchos archivos:
 
