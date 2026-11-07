@@ -7,6 +7,14 @@
 #   ./setup.sh --foreground   lo arranca aquí y ahora, atado a esta terminal
 #   ./setup.sh --check        solo diagnostica, no toca nada
 #   ./setup.sh --password     enseña la contraseña de este equipo
+#   ./setup.sh --estado       el estado del equipo en JSON (lo lee Boson Server)
+#   ./setup.sh --clave editor la contraseña del editor, a secas; --clave csm, el
+#                             enlace del panel de sesiones con su token
+#   ./setup.sh --servidor reiniciar|detener|arrancar   el servicio, sin más
+#   ./setup.sh --nueva-clave  cambia la contraseña del editor (la lee de la
+#                             entrada estándar; vacía, genera una) y reinicia
+#   ./setup.sh --operador     en Linux, el permiso para publicar (pide sudo)
+#   ./setup.sh --sesion-tailscale   inicia la sesión de Tailscale
 #   ./setup.sh --uninstall    quita el servicio y lo descargado (no tu código)
 #                             añade --purge para llevarse también tus ajustes
 #                             del editor, y -y para no preguntar
@@ -54,6 +62,15 @@ LINKSPACE_MODO=preguntar
 # `--ai` lleva el valor en el argumento siguiente (o pegado con «=»). El bucle
 # va de uno en uno, así que se recuerda que el próximo es ese valor.
 ESPERA_IA=0
+# Para Boson Server (la app de escritorio): el estado en JSON y las claves.
+ESTADO_JSON=0
+CLAVE=""
+ESPERA_CLAVE=0
+SERVIDOR_ACCION=""
+ESPERA_SERVIDOR=0
+NUEVA_CLAVE=0
+OPERADOR=0
+SESION_TS=0
 elegir_ia() {
   case "$1" in
     continue|Continue) IA_MODO=continue ;;
@@ -65,6 +82,12 @@ elegir_ia() {
 for arg in "$@"; do
   if [ "$ESPERA_IA" = 1 ]; then
     ESPERA_IA=0; elegir_ia "$arg"; continue
+  fi
+  if [ "$ESPERA_CLAVE" = 1 ]; then
+    ESPERA_CLAVE=0; CLAVE="$arg"; continue
+  fi
+  if [ "$ESPERA_SERVIDOR" = 1 ]; then
+    ESPERA_SERVIDOR=0; SERVIDOR_ACCION="$arg"; continue
   fi
   case "$arg" in
     --check) SOLO_COMPROBAR=1 ;;
@@ -80,6 +103,14 @@ for arg in "$@"; do
     --no-ai) IA_MODO=no ;;
     --linkspace) LINKSPACE_MODO=si ;;
     --no-linkspace) LINKSPACE_MODO=no ;;
+    --estado|--status|--json) ESTADO_JSON=1 ;;
+    --clave) ESPERA_CLAVE=1 ;;
+    --clave=*) CLAVE="${arg#--clave=}" ;;
+    --servidor) ESPERA_SERVIDOR=1 ;;
+    --servidor=*) SERVIDOR_ACCION="${arg#--servidor=}" ;;
+    --nueva-clave) NUEVA_CLAVE=1 ;;
+    --operador) OPERADOR=1 ;;
+    --sesion-tailscale) SESION_TS=1 ;;
     # Ya no hace falta: es lo que hace ./setup.sh a secas. Se acepta en
     # silencio para no romper a quien lo tenga escrito en una nota o un alias.
     --service|--install-service) ;;
@@ -91,6 +122,8 @@ for arg in "$@"; do
   esac
 done
 [ "$ESPERA_IA" = 1 ] && { echo "--ai necesita un valor: continue, copilot o ninguno"; exit 1; }
+[ "$ESPERA_CLAVE" = 1 ] && { echo "--clave necesita un valor: editor o csm"; exit 1; }
+[ "$ESPERA_SERVIDOR" = 1 ] && { echo "--servidor necesita un valor: reiniciar, detener o arrancar"; exit 1; }
 
 # ---------- presentación ----------
 verde()  { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -100,6 +133,27 @@ titulo() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 ok()     { verde "  ✓ $*"; }
 falta()  { rojo  "  ✗ $*"; }
 nota()   { gris  "    $*"; }
+# Para Boson Server (BOSON_APP=1): sin colores y con marcas que la app entiende
+# —«@@titulo», «@@ok», «@@falta» y «@@enlace url texto»—; lo demás son líneas
+# sueltas de registro que enseña tal cual.
+if [ "${BOSON_APP:-}" = 1 ]; then
+  verde()  { printf '%s\n' "$*"; }
+  rojo()   { printf '%s\n' "$*"; }
+  gris()   { printf '%s\n' "$*"; }
+  titulo() { printf '\n@@titulo %s\n' "$*"; }
+  ok()     { printf '@@ok %s\n' "$*"; }
+  falta()  { printf '@@falta %s\n' "$*"; }
+  nota()   { printf '    %s\n' "$*"; }
+fi
+# Un enlace que hay que abrir a mano (habilitar Serve, iniciar sesión). En la
+# app sale como botón; en la terminal, a la vista, como siempre.
+enlace_para_abrir() {
+  if [ "${BOSON_APP:-}" = 1 ]; then printf '@@enlace %s\n' "$*"; else printf '\n      %s\n\n' "$1"; fi
+}
+# Código de salida 10: «te toca a ti». Para la app no es un fallo, es «abre
+# el enlace, haz lo que pide y vuelve a intentarlo».
+TE_TOCA=10
+PENDIENTE=0
 
 # ---------- --password: enseñarla y salir ----------
 # La primera vez la imprime el arranque, pero eso fue hace semanas. Cuando
@@ -156,10 +210,16 @@ con_limite() {
   local segundos="$1"; shift
   "$@" &
   local hijo=$!
-  ( sleep "$segundos"; kill -TERM "$hijo" 2>/dev/null ) &
+  # El vigía va con la salida cerrada y se mata con su `sleep`: si heredara la
+  # salida y quedara vivo, `x="$(con_limite …)"` no terminaría hasta que el
+  # sleep agotara el plazo entero —era lo que hacía esperar 10 s a cada
+  # consulta de `--estado` aunque tailscale contestara al instante—, porque la
+  # sustitución de comandos espera a que todos suelten la tubería.
+  ( sleep "$segundos"; kill -TERM "$hijo" 2>/dev/null ) >/dev/null 2>&1 &
   local vigia=$!
   wait "$hijo" 2>/dev/null
   local rc=$?
+  pkill -P "$vigia" 2>/dev/null || true
   kill "$vigia" 2>/dev/null
   wait "$vigia" 2>/dev/null || true
   return "$rc"
@@ -188,8 +248,11 @@ asegurar_serve() {
         | sed -n 's#.*\(https://login\.tailscale\.com/f/serve[^ ]*\).*#\1#p' | head -1)"
       falta "Serve no está habilitado en esta cuenta de Tailscale"
       nota "es un ajuste de la CUENTA, no de este equipo, y es un clic:"
-      [ -n "$enlace" ] && printf '\n      %s\n\n' "$enlace"
-      if [ -t 0 ] && [ -e /dev/tty ]; then
+      [ -n "$enlace" ] && enlace_para_abrir "$enlace" "Habilitar Serve en Tailscale"
+      if [ "${BOSON_APP:-}" = 1 ]; then
+        nota "habilítalo en el navegador y vuelve a intentarlo"
+        return "$TE_TOCA"
+      elif [ -t 0 ] && [ -e /dev/tty ]; then
         printf '    Ábrelo, habilítalo y pulsa Intro para reintentar (Ctrl-C para dejarlo): '
         read -r _ </dev/tty || return 1
       else
@@ -900,6 +963,505 @@ case "$(uname -s)" in
   *) rojo "Este script es para macOS y Linux. Detectado: $(uname -s)"; exit 1 ;;
 esac
 
+buscar_tailscale() {
+  command -v tailscale 2>/dev/null && return
+  for c in /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+           /opt/homebrew/bin/tailscale /usr/local/bin/tailscale \
+           "$HOME/Applications/Tailscale.app/Contents/MacOS/Tailscale"; do
+    [ -x "$c" ] && { echo "$c"; return; }
+  done
+  return 1
+}
+
+# adb rara vez está en el PATH: se instala con el SDK, que vive en el home. Se
+# busca donde de verdad queda, igual que hace el gestor — decir "no está" cuando
+# sí está manda a reinstalar algo que ya tienes.
+buscar_adb() {
+  command -v adb 2>/dev/null && return
+  for c in "$HOME/Android/Sdk/platform-tools/adb" \
+           "$HOME/Library/Android/sdk/platform-tools/adb" \
+           /opt/homebrew/bin/adb /usr/local/bin/adb; do
+    [ -x "$c" ] && { echo "$c"; return; }
+  done
+  return 1
+}
+
+# ---------- --estado y --clave: lo que lee Boson Server ----------
+# `--estado` cuenta lo mismo que `--check`, pero en JSON y para un programa: la
+# app de escritorio (Boson Server) pinta sus pantallas con esto. Tres reglas:
+#
+#   · No lleva secretos. La contraseña del editor y el enlace de CSM con su
+#     token salen SOLO con `--clave`, cuando alguien los pide a propósito, y
+#     nunca mezclados con el estado, que acaba en registros y capturas.
+#   · No instala ni toca nada: mirar no cambia el equipo.
+#   · Responde aunque falte la mitad. Lo que no se sabe es `null`, no un error:
+#     un panel que se niega a abrirse porque Tailscale no está es un panel
+#     inútil justo cuando más falta hace.
+#
+# Lo recoge bash, que es donde ya están las comprobaciones de `--check`, y el
+# JSON lo escribe python3 (serve.sh ya lo exige) para no pelear con comillas.
+
+# Segundos que lleva vivo un proceso, a partir de `ps -o etime`, cuyo formato
+# ([[dd-]hh:]mm:ss) es el único que entienden igual macOS y Linux.
+segundos_vivo() {
+  local e; e="$(ps -o etime= -p "$1" 2>/dev/null | tr -d ' ')"
+  [ -n "$e" ] || return 0
+  python3 -c '
+import sys
+e = sys.argv[1]; d = 0
+if "-" in e:
+    d, e = e.split("-", 1); d = int(d)
+p = [int(x) for x in e.split(":")]
+while len(p) < 3:
+    p.insert(0, 0)
+print(d * 86400 + p[0] * 3600 + p[1] * 60 + p[2])' "$e" 2>/dev/null || true
+}
+
+# PID que escucha en un puerto TCP local, o nada. lsof en macOS, ss en Linux.
+pid_en_puerto() {
+  local p
+  p="$(lsof -nP -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+  [ -n "$p" ] || p="$(ss -ltnpH "sport = :$1" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1 || true)"
+  printf '%s' "$p"
+}
+
+# Una petición HTTP con una cabecera secreta sin que el secreto pase por la
+# línea de comandos (que `ps` enseña a todo el mundo): curl la lee de un archivo
+# que solo puede leer este usuario y que se borra al terminar.
+curl_con_cabecera() {
+  local cabecera="$1" url="$2" archivo
+  archivo="$(mktemp)" || return 1
+  chmod 600 "$archivo"
+  printf '%s\n' "$cabecera" > "$archivo"
+  curl -fsS -m 3 -H "@$archivo" "$url" 2>/dev/null
+  local rc=$?
+  rm -f "$archivo"
+  return "$rc"
+}
+
+estado_json() {
+  command -v python3 >/dev/null 2>&1 || {
+    echo '{"version": 1, "error": "hace falta python3 para el estado en JSON"}'
+    return 1
+  }
+
+  # --- el equipo ---
+  BS_SO="$PLATAFORMA" BS_ARQ="$(uname -m)" BS_USUARIO="$(id -un)" BS_HOME="$HOME"
+  BS_NOMBRE="$(hostname -s 2>/dev/null || hostname)"
+  if [ "$PLATAFORMA" = macos ]; then
+    BS_VERSION_SO="macOS $(sw_vers -productVersion 2>/dev/null || true)"
+  else
+    BS_VERSION_SO="$(. /etc/os-release 2>/dev/null; printf '%s' "${PRETTY_NAME:-Linux}")"
+  fi
+
+  # --- este repositorio y lo que dejó en ~/.ivscode ---
+  BS_REPO="$PWD"   # setup.sh entra en su carpeta nada más empezar
+  BS_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || true)"
+  BS_FECHA="$(git log -1 --format=%cs 2>/dev/null || true)"
+  BS_CODE_SERVER="$(version_de_paquete "$HOME/.ivscode/current/package.json")"
+  BS_VSCODE="$(ia_version_vscode)"
+  BS_CODE_SERVER_INSTALADO=0; [ -x "$HOME/.ivscode/current/bin/code-server" ] && BS_CODE_SERVER_INSTALADO=1
+  BS_COPIA_SERVE=0; [ -f "$HOME/.ivscode/serve.sh" ] && BS_COPIA_SERVE=1
+  # ¿La copia que corre como servicio es la de este repositorio (o de esta app)?
+  BS_SERVIDOR_AL_DIA=""
+  if [ -f "$HOME/.ivscode/serve.sh" ]; then
+    if cmp -s ./serve.sh "$HOME/.ivscode/serve.sh"; then BS_SERVIDOR_AL_DIA=1; else BS_SERVIDOR_AL_DIA=0; fi
+  fi
+  BS_LANZADOR=""
+  BS_PASSWORD_EXISTE=0; [ -f "$HOME/.ivscode/password" ] && BS_PASSWORD_EXISTE=1
+  BS_DNS_GUARDADO="$(cat "$HOME/.ivscode/ts_dns" 2>/dev/null || true)"
+
+  # --- el servicio y lo que escucha ---
+  local puerto="" info=""
+  BS_SERVICIO=ninguno BS_SERVICIO_ACTIVADO=0 BS_SERVICIO_CORRIENDO=0 BS_SERVICIO_PID=""
+  if [ "$PLATAFORMA" = linux ]; then
+    if [ -f "$HOME/.config/systemd/user/ivscode.service" ]; then
+      BS_SERVICIO=systemd
+      systemctl --user is-enabled ivscode.service >/dev/null 2>&1 && BS_SERVICIO_ACTIVADO=1
+      systemctl --user is-active --quiet ivscode.service 2>/dev/null && BS_SERVICIO_CORRIENDO=1
+      BS_SERVICIO_PID="$(systemctl --user show -p MainPID --value ivscode.service 2>/dev/null || true)"
+      [ "$BS_SERVICIO_PID" = 0 ] && BS_SERVICIO_PID=""
+      puerto="$(sed -n 's/^Environment=PORT=\([0-9]*\)$/\1/p' "$HOME/.config/systemd/user/ivscode.service" | head -1)"
+    fi
+    BS_REGISTRO="journalctl --user -u ivscode"
+  else
+    if [ -f "$HOME/Library/LaunchAgents/com.ivscode.serve.plist" ]; then
+      BS_SERVICIO=launchd BS_SERVICIO_ACTIVADO=1
+      info="$(launchctl print "gui/$(id -u)/com.ivscode.serve" 2>/dev/null || true)"
+      printf '%s' "$info" | grep -q 'state = running' && BS_SERVICIO_CORRIENDO=1
+      BS_SERVICIO_PID="$(printf '%s' "$info" | sed -n 's/^[[:space:]]*pid = \([0-9]*\).*/\1/p' | head -1)"
+      puerto="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:PORT' \
+                  "$HOME/Library/LaunchAgents/com.ivscode.serve.plist" 2>/dev/null || true)"
+      # Quién arranca el servidor: la app (Boson Server), la envoltura de antes
+      # (BosonCode Server.app, solo para el permiso de disco) o el script a pelo.
+      case "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' \
+                "$HOME/Library/LaunchAgents/com.ivscode.serve.plist" 2>/dev/null || true)" in
+        *"Boson Server.app"*)     BS_LANZADOR=app ;;
+        *"BosonCode Server.app"*) BS_LANZADOR=envoltura ;;
+        "") ;;
+        *)                        BS_LANZADOR=script ;;
+      esac
+    fi
+    BS_REGISTRO="$HOME/.ivscode/serve.log"
+  fi
+  BS_PUERTO="${puerto:-8443}"
+  BS_EDITOR_PID="$(pid_en_puerto "$BS_PUERTO")"
+  BS_EDITOR_RESPONDE=0
+  curl -fsS -m 2 "http://127.0.0.1:$BS_PUERTO/healthz" >/dev/null 2>&1 && BS_EDITOR_RESPONDE=1
+  BS_EDITOR_SEGUNDOS=""; [ -n "$BS_EDITOR_PID" ] && BS_EDITOR_SEGUNDOS="$(segundos_vivo "$BS_EDITOR_PID")"
+  # Sin contraseña el gestor contesta 401: es su manera de decir «aquí estoy».
+  BS_GESTOR_RESPONDE=0
+  case "$(curl -s -m 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:39500/machines 2>/dev/null)" in
+    200|401) BS_GESTOR_RESPONDE=1 ;;
+  esac
+  BS_TERMINAL_PID="$(pid_en_puerto 39600)"
+
+  # --- Tailscale ---
+  local ts err
+  ts="$(buscar_tailscale || true)"
+  BS_TS_RUTA="$ts" BS_TS_VERSION="" BS_TS_JSON="" BS_TS_SERVE_ERROR="" BS_TS_PUBLICACIONES="" BS_TS_SERVE_OK=""
+  if [ -n "$ts" ]; then
+    BS_TS_VERSION="$("$ts" version 2>/dev/null | head -1 || true)"
+    BS_TS_JSON="$(con_limite 10 "$ts" status --json 2>/dev/null || true)"
+    err="$(mktemp)"
+    if serve_json="$(con_limite 10 "$ts" serve status --json 2>"$err")"; then
+      BS_TS_SERVE_OK=1
+      BS_TS_PUBLICACIONES="$(printf '%s' "$serve_json" | publicaciones_ts 2>/dev/null || true)"
+    else
+      BS_TS_SERVE_OK=0
+      BS_TS_SERVE_ERROR="$(head -c 400 "$err" 2>/dev/null || true)"
+    fi
+    rm -f "$err"
+  fi
+
+  # --- Claude Sessions Monitor ---
+  BS_CSM_INSTALADO=0; csm_instalado && BS_CSM_INSTALADO=1
+  BS_CSM_ESTADO="$(csm_estado)"
+  BS_CSM_PUERTO="$CSM_PUERTO" BS_CSM_PUERTO_AGENTE="$(csm_puerto_agente)"
+  BS_CSM_URL="$(csm_url_panel 0)"
+  BS_CSM_HUB_SERVICIO=0
+  { [ -f "$HOME/Library/LaunchAgents/com.csm.hub.plist" ] || [ -f "$HOME/.config/systemd/user/csm-hub.service" ]; } \
+    && BS_CSM_HUB_SERVICIO=1
+  BS_CSM_AGENTE_SERVICIO=0
+  { [ -f "$HOME/Library/LaunchAgents/com.csm.agent.plist" ] || [ -f "$HOME/.config/systemd/user/csm-agent.service" ]; } \
+    && BS_CSM_AGENTE_SERVICIO=1
+  BS_CSM_VERSION="$(version_de_paquete "$HOME/.local/share/csm-hub/app/hub/package.json")"
+  BS_CSM_VERSION_REPO="$(version_de_paquete ./csm/hub/package.json)"
+  BS_CSM_PERMISOS="$(curl -fsS -m 2 "http://127.0.0.1:$BS_CSM_PUERTO_AGENTE/perms" 2>/dev/null || true)"
+  # Los equipos y sesiones del panel exigen el token; se lee del archivo y va
+  # en una cabecera, nunca en la línea de comandos ni en esta salida.
+  BS_CSM_STATE=""
+  if [ "$BS_CSM_ESTADO" = hub ] && [ -f "$HOME/.local/share/csm-hub/data/token.txt" ]; then
+    BS_CSM_STATE="$(curl_con_cabecera "Authorization: Bearer $(cat "$HOME/.local/share/csm-hub/data/token.txt")" \
+                      "http://127.0.0.1:$CSM_PUERTO/api/state" || true)"
+  fi
+
+  # --- asistente de IA ---
+  BS_IA_COPILOT_INTEGRADO="$(ia_copilot_integrado)"
+  BS_IA_EXTENSIONES="$(ia_extensiones | tr '\n' ' ')"
+  BS_IA_COPILOT=""
+  if [ "$BS_GESTOR_RESPONDE" = 1 ] && [ "$BS_PASSWORD_EXISTE" = 1 ]; then
+    BS_IA_COPILOT="$(curl_con_cabecera "X-Password: $(cat "$HOME/.ivscode/password")" \
+                       http://127.0.0.1:39500/copilot/status || true)"
+  fi
+
+  # --- Link_space ---
+  BS_LS_COMANDOS=0; [ -x /usr/local/bin/carpeta-share ] && BS_LS_COMANDOS=1
+  BS_LS_AL_DIA=0
+  [ "$BS_LS_COMANDOS" = 1 ] && cmp -s ./linkspace/bin/carpeta-share /usr/local/bin/carpeta-share && BS_LS_AL_DIA=1
+  BS_LS_EN_IVSCODE=0; [ -d "$HOME/.ivscode/linkspace" ] && BS_LS_EN_IVSCODE=1
+
+  # --- simulador y máquinas ---
+  BS_SIM_XCODE=0; [ -x /Applications/Xcode.app/Contents/Developer/usr/bin/simctl ] && BS_SIM_XCODE=1
+  BS_SIM_IDB=0; command -v idb >/dev/null 2>&1 && BS_SIM_IDB=1
+  BS_SIM_ADB="$(buscar_adb || true)"
+  BS_SIM_KVM=0; [ "$PLATAFORMA" = linux ] && [ -w /dev/kvm ] && BS_SIM_KVM=1
+  BS_DOCKER="$(command -v docker 2>/dev/null || true)"
+  BS_DOCKER_VERSION=""
+  [ -n "$BS_DOCKER" ] && BS_DOCKER_VERSION="$(con_limite 5 docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
+
+  export "${!BS_@}"
+  python3 - <<'PY'
+import datetime, json, os, re
+
+E = os.environ
+def s(k):
+    v = E.get(k, "")
+    return v or None
+def b(k):
+    v = E.get(k, "")
+    return None if v == "" else v == "1"
+def n(k):
+    v = E.get(k, "")
+    return int(v) if v.isdigit() else None
+def j(k):
+    try:
+        return json.loads(E.get(k, "") or "null")
+    except Exception:
+        return None
+
+# --- servidor ---
+editor_responde = b("BS_EDITOR_RESPONDE")
+servicio = s("BS_SERVICIO") or "ninguno"
+if editor_responde:
+    estado = "sirviendo"
+elif b("BS_SERVICIO_CORRIENDO"):
+    estado = "arrancando"
+elif servicio != "ninguno":
+    estado = "parado"
+else:
+    estado = "sin_instalar"
+
+# --- tailscale ---
+ts = j("BS_TS_JSON") or {}
+yo = ts.get("Self") or {}
+dns = (yo.get("DNSName") or "").rstrip(".") or None
+ips = ts.get("TailscaleIPs") or []
+ip4 = next((i for i in ips if "." in i), None)
+cuenta = None
+try:
+    cuenta = (ts.get("User") or {}).get(str(yo.get("UserID")), {}).get("LoginName")
+except Exception:
+    pass
+publicaciones = []
+for linea in (E.get("BS_TS_PUBLICACIONES") or "").splitlines():
+    partes = linea.split("\t")
+    if len(partes) < 3:
+        continue
+    nuestro = partes[0] == "quitar"
+    texto, _, motivo = partes[2].partition(" · ")
+    m = re.match(r"^(tcp|https) :(\d+)(\S*) → (\S+)(.*)$", texto)
+    if not m:
+        continue
+    tipo = "otro"
+    nombre = None
+    if nuestro:
+        if "terminal" in motivo: tipo = "terminal"
+        elif "gestor" in motivo: tipo = "gestor"
+        elif "editor" in motivo: tipo = "editor"
+        elif "máquina" in motivo:
+            tipo = "maquina"
+            mm = re.search(r"«([^»]*)»", motivo)
+            nombre = mm.group(1) if mm else None
+    publicaciones.append({
+        "tipo": tipo, "nombre": nombre, "nuestro": nuestro,
+        "protocolo": m.group(1), "puerto": int(m.group(2)), "ruta": m.group(3) or None,
+        "destino": m.group(4), "funnel": "Funnel" in m.group(5) + motivo,
+    })
+serve_error = s("BS_TS_SERVE_ERROR") or ""
+serve_ok = b("BS_TS_SERVE_OK")
+operador = None
+if E.get("BS_SO") == "linux" and serve_ok is not None:
+    operador = serve_ok or not re.search(r"access denied|operator", serve_error, re.I)
+serve_habilitado = None
+if re.search(r"not enabled", serve_error, re.I):
+    serve_habilitado = False
+elif publicaciones:
+    serve_habilitado = True
+editor_pub = next((p for p in publicaciones if p["tipo"] == "editor"), None)
+url = None
+if dns and editor_pub:
+    url = f"https://{dns}:{editor_pub['puerto']}"
+elif E.get("BS_DNS_GUARDADO") and editor_pub:
+    url = f"https://{E['BS_DNS_GUARDADO']}:{editor_pub['puerto']}"
+sesion = ts.get("BackendState") == "Running"
+
+# --- csm ---
+csm_estado = s("BS_CSM_ESTADO")
+if not csm_estado:
+    csm_estado = "parado" if b("BS_CSM_INSTALADO") else "ninguno"
+perms = j("BS_CSM_PERMISOS") or {}
+equipos = []
+sesiones = esperando = 0
+st = j("BS_CSM_STATE") or {}
+for m in (st.get("machines") or []):
+    ss = m.get("sessions") or []
+    esp = sum(1 for x in ss if str(x.get("status", "")).startswith("waiting"))
+    equipos.append({
+        "nombre": (m.get("info") or {}).get("name"),
+        "so": (m.get("info") or {}).get("os"),
+        "en_linea": bool(m.get("online")),
+        "sesiones": len(ss), "esperando": esp,
+    })
+    sesiones += len(ss); esperando += esp
+
+# --- ia ---
+copilot = j("BS_IA_COPILOT")
+if isinstance(copilot, dict):
+    copilot = {"estado": copilot.get("state") or None, "usuario": copilot.get("user") or None}
+else:
+    copilot = None
+
+doc = {
+    "version": 1,
+    "generado": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    "equipo": {
+        "nombre": s("BS_NOMBRE"), "so": s("BS_SO"), "version_so": s("BS_VERSION_SO"),
+        "arquitectura": s("BS_ARQ"), "usuario": s("BS_USUARIO"), "home": s("BS_HOME"),
+    },
+    "boson": {
+        "repositorio": s("BS_REPO"), "commit": s("BS_COMMIT"), "fecha": s("BS_FECHA"),
+        "copia_en_ivscode": b("BS_COPIA_SERVE"), "servidor_al_dia": b("BS_SERVIDOR_AL_DIA"),
+        "code_server": s("BS_CODE_SERVER"), "code_server_instalado": b("BS_CODE_SERVER_INSTALADO"),
+        "vscode": s("BS_VSCODE"),
+    },
+    "servidor": {
+        "estado": estado, "servicio": servicio,
+        "activado": b("BS_SERVICIO_ACTIVADO"), "corriendo": b("BS_SERVICIO_CORRIENDO"),
+        "pid_servicio": n("BS_SERVICIO_PID"), "puerto": n("BS_PUERTO"),
+        "editor": {"responde": editor_responde, "pid": n("BS_EDITOR_PID"), "segundos": n("BS_EDITOR_SEGUNDOS")},
+        "gestor": {"responde": b("BS_GESTOR_RESPONDE"), "puerto": 39500},
+        "terminal": {"escucha": n("BS_TERMINAL_PID") is not None, "puerto": 39600},
+        "url": url, "nombre": dns.split(".")[0] if dns else None,
+        "registro": s("BS_REGISTRO"), "password_existe": b("BS_PASSWORD_EXISTE"),
+        "lanzador": s("BS_LANZADOR"),
+    },
+    "tailscale": {
+        "instalado": bool(E.get("BS_TS_RUTA")), "ruta": s("BS_TS_RUTA"), "version": s("BS_TS_VERSION"),
+        "estado": ts.get("BackendState"), "sesion": sesion,
+        "dns": dns, "ip": ip4, "tailnet": ts.get("MagicDNSSuffix") or None, "cuenta": cuenta,
+        "certificados": bool(ts.get("CertDomains")) if ts else None,
+        "avisos": [str(h) for h in (ts.get("Health") or [])],
+        "serve_habilitado": serve_habilitado, "operador": operador,
+        "serve_consultable": serve_ok, "serve_error": serve_error.strip() or None,
+        "publicaciones": publicaciones,
+    },
+    "csm": {
+        "instalado": b("BS_CSM_INSTALADO"), "estado": csm_estado,
+        "puerto": n("BS_CSM_PUERTO"), "puerto_agente": n("BS_CSM_PUERTO_AGENTE"),
+        "url_panel": s("BS_CSM_URL"),
+        "hub_servicio": b("BS_CSM_HUB_SERVICIO"), "agente_servicio": b("BS_CSM_AGENTE_SERVICIO"),
+        "version": s("BS_CSM_VERSION"), "version_repositorio": s("BS_CSM_VERSION_REPO"),
+        "acceso_total_disco": perms.get("fullDisk") if "fullDisk" in perms else None,
+        "equipos": equipos, "sesiones": sesiones, "esperando": esperando,
+    },
+    "ia": {
+        "copilot_integrado": s("BS_IA_COPILOT_INTEGRADO"),
+        "extensiones": (E.get("BS_IA_EXTENSIONES") or "").split(),
+        "copilot": copilot,
+    },
+    "linkspace": {"comandos": b("BS_LS_COMANDOS"), "al_dia": b("BS_LS_AL_DIA"), "en_ivscode": b("BS_LS_EN_IVSCODE")},
+    "simulador": {
+        "xcode": b("BS_SIM_XCODE"), "idb": b("BS_SIM_IDB"), "adb": s("BS_SIM_ADB"), "kvm": b("BS_SIM_KVM"),
+        "docker": s("BS_DOCKER"), "docker_version": s("BS_DOCKER_VERSION"),
+    },
+}
+print(json.dumps(doc, ensure_ascii=False, indent=2))
+PY
+}
+
+# ---------- --servidor: arrancar, detener o reiniciar el servicio ----------
+servidor() {
+  local uid plist; uid="$(id -u)"
+  case "$1" in
+    reiniciar|detener|arrancar) ;;
+    *) echo "--servidor: «$1» no existe (reiniciar, detener o arrancar)" >&2; return 1 ;;
+  esac
+  if [ "$PLATAFORMA" = linux ]; then
+    if [ ! -f "$HOME/.config/systemd/user/ivscode.service" ]; then
+      falta "el servidor no está instalado como servicio"; nota "instálalo con ./setup.sh"; return 1
+    fi
+    case "$1" in
+      reiniciar) systemctl --user restart ivscode.service && ok "servidor reiniciado" ;;
+      detener)   systemctl --user stop ivscode.service && ok "servidor detenido hasta el próximo arranque" ;;
+      arrancar)  systemctl --user start ivscode.service && ok "servidor arrancado" ;;
+    esac
+    return
+  fi
+  plist="$HOME/Library/LaunchAgents/com.ivscode.serve.plist"
+  if [ ! -f "$plist" ]; then
+    falta "el servidor no está instalado como servicio"; nota "instálalo con ./setup.sh"; return 1
+  fi
+  case "$1" in
+    detener)
+      # bootout lo para ahora; el plist sigue ahí y vuelve en el próximo inicio
+      # de sesión. Es justo «detener hasta el próximo arranque».
+      launchctl bootout "gui/$uid/com.ivscode.serve" 2>/dev/null || true
+      ok "servidor detenido hasta el próximo inicio de sesión" ;;
+    reiniciar|arrancar)
+      if launchctl print "gui/$uid/com.ivscode.serve" >/dev/null 2>&1; then
+        if [ "$1" = reiniciar ]; then
+          launchctl kickstart -k "gui/$uid/com.ivscode.serve" && ok "servidor reiniciado"
+        else
+          launchctl kickstart "gui/$uid/com.ivscode.serve" && ok "servidor en marcha"
+        fi
+      else
+        launchctl bootstrap "gui/$uid" "$plist" && ok "servidor arrancado"
+      fi ;;
+  esac
+}
+
+# ---------- --nueva-clave: cambiar la contraseña del editor ----------
+# La contraseña entra por la ENTRADA ESTÁNDAR, nunca como argumento: los
+# argumentos los ve cualquiera con `ps`. Vacía, se genera una al azar como la
+# primera vez. Después se reinicia el servidor, que la lee al arrancar.
+nueva_clave() {
+  local clave=""
+  # `|| true`, no `|| clave=""`: sin salto de línea al final, read devuelve
+  # error PERO deja lo leído en la variable; borrarla tiraba la contraseña.
+  IFS= read -r clave || true
+  if [ -z "$clave" ]; then
+    clave="$(openssl rand -hex 8 2>/dev/null || head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    nota "contraseña nueva generada al azar"
+  fi
+  if [ "${#clave}" -lt 6 ]; then falta "la contraseña tiene que tener al menos 6 caracteres"; return 1; fi
+  mkdir -p "$HOME/.ivscode"
+  (umask 077; printf '%s' "$clave" > "$HOME/.ivscode/password")
+  chmod 600 "$HOME/.ivscode/password"
+  ok "contraseña guardada en ~/.ivscode/password"
+  nota "ZeroSpin la volverá a pedir en cada dispositivo"
+  if servidor reiniciar >/dev/null 2>&1; then
+    ok "servidor reiniciado con la contraseña nueva"
+  else
+    nota "el servidor no está como servicio: la contraseña vale desde el próximo arranque"
+  fi
+  return 0
+}
+
+# ---------- --operador: en Linux, el permiso para publicar por Tailscale ----------
+operador() {
+  local ts; ts="$(buscar_tailscale || true)"
+  [ -n "$ts" ] || { falta "tailscale no está instalado"; return 1; }
+  if [ "$PLATAFORMA" != linux ]; then ok "en macOS no hace falta"; return 0; fi
+  if "$ts" serve status >/dev/null 2>&1; then ok "ya tenías el permiso"; return 0; fi
+  nota "pide la contraseña de administrador una vez"
+  if sudo "$ts" set --operator="$(id -un)"; then
+    ok "permiso concedido a $(id -un)"
+  else
+    falta "no pude conceder el permiso"; nota "a mano:  sudo $ts set --operator=$(id -un)"; return 1
+  fi
+}
+
+# ---------- --sesion-tailscale: iniciar sesión ----------
+sesion_tailscale() {
+  local ts; ts="$(buscar_tailscale || true)"
+  [ -n "$ts" ] || { falta "tailscale no está instalado"; return 1; }
+  if "$ts" status >/dev/null 2>&1; then ok "la sesión ya está iniciada"; return 0; fi
+  if [ "$PLATAFORMA" = macos ]; then
+    open -a Tailscale 2>/dev/null || true
+    nota "inicia sesión en la app de Tailscale (o enciéndelo) y vuelve a intentarlo"
+    return "$TE_TOCA"
+  fi
+  nota "abre el enlace que aparece, inicia sesión y espera a que termine"
+  sudo "$ts" up && ok "sesión iniciada"
+}
+
+# `--clave editor` enseña la contraseña del editor; `--clave csm`, el enlace del
+# panel con su token. Solo eso, y solo a quien lo pide: así Boson Server puede
+# copiarlas al portapapeles sin tenerlas nunca en el estado.
+clave() {
+  case "$1" in
+    editor)
+      [ -f "$HOME/.ivscode/password" ] || { echo "todavía no hay contraseña: ejecuta ./setup.sh" >&2; return 1; }
+      cat "$HOME/.ivscode/password" ;;
+    csm)
+      local enlace; enlace="$(csm_url_panel 1)"
+      [ -n "$enlace" ] || { echo "Claude Sessions Monitor no está instalado" >&2; return 1; }
+      printf '%s\n' "$enlace" ;;
+    *) echo "--clave: «$1» no existe (editor o csm)" >&2; return 1 ;;
+  esac
+}
+
 # ---------- Link_space: enlaces para compartir ----------
 # Viene dentro del repositorio (linkspace/). serve.sh ya deja su copia en
 # ~/.ivscode/linkspace para la app; este paso instala además los comandos
@@ -967,6 +1529,15 @@ resumen_linkspace() {
       nota "reintentar:  ./setup.sh --linkspace" ;;
   esac
 }
+
+# ---------- --estado / --clave: contestar y salir ----------
+# Antes de --uninstall y de los pasos: mirar nunca debe depender de nada más.
+if [ "$ESTADO_JSON" = 1 ]; then estado_json; exit $?; fi
+if [ -n "$CLAVE" ]; then clave "$CLAVE"; exit $?; fi
+if [ -n "$SERVIDOR_ACCION" ]; then servidor "$SERVIDOR_ACCION"; exit $?; fi
+if [ "$NUEVA_CLAVE" = 1 ]; then nueva_clave; exit $?; fi
+if [ "$OPERADOR" = 1 ]; then operador; exit $?; fi
+if [ "$SESION_TS" = 1 ]; then sesion_tailscale; exit $?; fi
 
 # ---------- --uninstall: quitar lo que puso este script y salir ----------
 # Todo lo que instala vive en sitios propios, así que se puede deshacer entero.
@@ -1145,15 +1716,6 @@ gris "Sistema: $PLATAFORMA"
 # ---------- 1. Tailscale ----------
 # Va primero porque todo lo demás depende de él: sin red privada no hay HTTPS,
 # y sin HTTPS el editor pierde los notebooks y las vistas web.
-buscar_tailscale() {
-  command -v tailscale 2>/dev/null && return
-  for c in /Applications/Tailscale.app/Contents/MacOS/Tailscale \
-           /opt/homebrew/bin/tailscale /usr/local/bin/tailscale \
-           "$HOME/Applications/Tailscale.app/Contents/MacOS/Tailscale"; do
-    [ -x "$c" ] && { echo "$c"; return; }
-  done
-  return 1
-}
 
 titulo "1 · Tailscale"
 TS="$(buscar_tailscale || true)"
@@ -1225,6 +1787,13 @@ else
   if [ "$SOLO_COMPROBAR" = 1 ]; then
     nota "ejecuta: $TS up"
   else
+    if [ "${BOSON_APP:-}" = 1 ] && [ "$PLATAFORMA" = macos ]; then
+      # En el Mac la sesión se inicia en la propia app de Tailscale, no en
+      # este script: se abre y se le devuelve el turno a quien instala.
+      open -a Tailscale 2>/dev/null || true
+      nota "inicia sesión en la app de Tailscale (o enciéndelo) y vuelve a intentarlo"
+      exit "$TE_TOCA"
+    fi
     nota "abriendo el inicio de sesión; termínalo en el navegador y vuelve aquí"
     if [ "$PLATAFORMA" = linux ]; then sudo "$TS" up; else "$TS" up; fi
     ok "sesión iniciada"
@@ -1292,18 +1861,6 @@ if [ "$PLATAFORMA" = macos ]; then
 else
   gris "  · el simulador de iOS es de Apple y no existe en Linux"
 fi
-# adb rara vez está en el PATH: se instala con el SDK, que vive en el home. Se
-# busca donde de verdad queda, igual que hace el gestor — decir "no está" cuando
-# sí está manda a reinstalar algo que ya tienes.
-buscar_adb() {
-  command -v adb 2>/dev/null && return
-  for c in "$HOME/Android/Sdk/platform-tools/adb" \
-           "$HOME/Library/Android/sdk/platform-tools/adb" \
-           /opt/homebrew/bin/adb /usr/local/bin/adb; do
-    [ -x "$c" ] && { echo "$c"; return; }
-  done
-  return 1
-}
 ADB="$(buscar_adb || true)"
 if [ -n "$ADB" ]; then
   ok "adb: los dispositivos y emuladores Android se verán en la app"
@@ -1341,11 +1898,17 @@ fi
 
 titulo "5 · Publicación HTTPS"
 if [ "$SOLO_COMPROBAR" != 1 ]; then
-  URL_TS="$("$TS" serve status 2>/dev/null | sed -n 's#^\(https://[^ ]*\).*#\1#p' | head -1)"
+  URL_TS="$("$TS" serve status 2>/dev/null | sed -n 's#^\(https://[^ ]*\).*#\1#p' | head -1 || true)"
   if [ -n "$URL_TS" ]; then
     ok "ya publicaba · $URL_TS"
   else
-    asegurar_serve || nota "seguiré sin HTTPS: el editor funcionará, lo demás no"
+    RC_SERVE=0
+    asegurar_serve || RC_SERVE=$?
+    if [ "$RC_SERVE" = "$TE_TOCA" ]; then
+      PENDIENTE=1
+    elif [ "$RC_SERVE" != 0 ]; then
+      nota "seguiré sin HTTPS: el editor funcionará, lo demás no"
+    fi
   fi
 fi
 
@@ -1353,7 +1916,7 @@ if [ "$SOLO_COMPROBAR" = 1 ]; then
   # La pregunta que trae a cualquiera a `--check` es «¿puedo ya añadir este
   # equipo, y con qué dirección?». Diagnosticar y callar justo esa respuesta
   # deja al usuario buscando en otro sitio lo único que quería.
-  URL_TS="$("$TS" serve status 2>/dev/null | sed -n 's#^\(https://[^ ]*\).*#\1#p' | head -1)"
+  URL_TS="$("$TS" serve status 2>/dev/null | sed -n 's#^\(https://[^ ]*\).*#\1#p' | head -1 || true)"
   if [ -n "$URL_TS" ]; then
     ok "sí · $URL_TS"
     nota "el nombre y la contraseña:  ./setup.sh --password"
@@ -1524,4 +2087,7 @@ resumen_linkspace
 echo ""
 # El código de salida es el del servidor: CSM es opcional y su fallo ya se ha
 # dicho; que el editor no arranque, en cambio, sí es un fallo de este script.
+# Salvo que todo haya ido bien y quede algo por hacer a mano (habilitar Serve):
+# entonces es «te toca», para que la app lo diga en vez de dar por terminado.
+if [ "$RC_SERVIDOR" = 0 ] && [ "$PENDIENTE" = 1 ]; then exit "$TE_TOCA"; fi
 exit "$RC_SERVIDOR"

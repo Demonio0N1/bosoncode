@@ -360,6 +360,16 @@ if [ "$INSTALL_SERVICE" = 1 ]; then
   ensure_password
   instalar_linkspace
   if [ "$PLATFORM" = linux ]; then
+    # Desde Boson Server el servicio corre una COPIA en ~/.ivscode, como en el
+    # Mac: la app se actualiza o se mueve, y un AppImage ni siquiera tiene una
+    # ruta fija. Desde la terminal se deja como siempre, apuntando al
+    # repositorio, que es lo que permite editar serve.sh y reiniciar.
+    if [ "${BOSON_APP:-}" = 1 ] && [ "$SCRIPT_PATH" != "$IVSCODE_DIR/serve.sh" ]; then
+      cp "$SCRIPT_PATH" "$IVSCODE_DIR/serve.sh"
+      chmod +x "$IVSCODE_DIR/serve.sh"
+      SCRIPT_PATH="$IVSCODE_DIR/serve.sh"
+      echo "→ Instalado desde una copia en $SCRIPT_PATH"
+    fi
     mkdir -p "$HOME/.config/systemd/user"
     cat > "$HOME/.config/systemd/user/ivscode.service" <<EOF
 [Unit]
@@ -405,7 +415,17 @@ EOF
       echo "  Si actualizas el repositorio, vuelve a ejecutar --install-service."
     fi
 
-    if construir_envoltura; then
+    ARGUMENTOS=""
+    if [ -n "${BOSON_SERVER_APP:-}" ] && [ -x "$BOSON_SERVER_APP" ]; then
+      # Boson Server (la app) hace de lanzador: `boson-server --servir` ejecuta
+      # ~/.ivscode/serve.sh y nada más. El permiso de disco se concede a la
+      # app, que es la que se ve en Ajustes, y la envoltura de antes sobra.
+      PROGRAMA="$BOSON_SERVER_APP"
+      ARGUMENTOS="<string>--servir</string>"
+      ENVOLTURA=2
+      rm -rf "$APP_ENVOLTURA"
+      echo "→ El servicio lo lanza Boson Server"
+    elif construir_envoltura; then
       PROGRAMA="$APP_ENVOLTURA/Contents/MacOS/BosonCodeServer"
       ENVOLTURA=1
       echo "→ Aplicación creada en $APP_ENVOLTURA"
@@ -426,7 +446,7 @@ EOF
 <dict>
   <key>Label</key><string>com.ivscode.serve</string>
   <key>ProgramArguments</key>
-  <array><string>$PROGRAMA</string></array>
+  <array><string>$PROGRAMA</string>${ARGUMENTOS:-}</array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>NAME</key><string>$NAME</string>
@@ -445,7 +465,11 @@ EOF
     launchctl unload "$PLIST" 2>/dev/null || true
     launchctl load -w "$PLIST"
     echo "✔ LaunchAgent instalado y corriendo (logs: ~/.ivscode/serve.log)"
-    if [ "$ENVOLTURA" = 1 ]; then
+    if [ "$ENVOLTURA" = 2 ]; then
+      echo ""
+      echo "  Para entrar en Escritorio, Documentos y Descargas, concede a Boson Server"
+      echo "  el Acceso total al disco: la app tiene el botón en «Claves»."
+    elif [ "$ENVOLTURA" = 1 ]; then
       echo ""
       echo "  ┌─ Para entrar en Escritorio, Documentos y Descargas ──────────────"
       echo "  │  macOS protege esas tres carpetas y el permiso se da a mano."
