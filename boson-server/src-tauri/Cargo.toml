@@ -1,0 +1,32 @@
+[package]
+name = "boson-server"
+version = "1.0.0"
+description = "Boson Server: el servidor de BosonCode, con ventana"
+authors = ["Boson Code"]
+edition = "2021"
+
+[lib]
+name = "boson_server_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Perfil de release por defecto a propósito: con codegen-units, opt-level,
+# lto o strip ajustados, rustc dejaba de encontrar las bibliotecas de las
+# macros (phf_macros, tauri_macros, zerofrom_derive: «can't find crate»,
+# E0463) con Rust 1.96 en macOS 27. El binario pesa más y da igual.
+# Las macros (y los scripts de compilación) van con símbolos de depuración:
+# sin ellos, el enlazador de Xcode 27.2 (ld-27106) produce una dylib con la
+# tabla de cadenas de LINKEDIT desalineada y dyld de macOS 27 se niega a
+# cargarla («mis-aligned LINKEDIT string pool»), que rustc cuenta como «can't
+# find crate». Con depuración el enlazador la alinea y todo compila.
+[profile.release.build-override]
+debug = true

@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "generado": "2026-11-07T16:00:00-05:00",
+  "equipo": {
+    "nombre": "estudio-mac",
+    "so": "macos",
+    "version_so": "macOS 27.0.1",
+    "arquitectura": "arm64",
+    "usuario": "ejemplo",
+    "home": "/Users/ejemplo"
+  },
+  "boson": {
+    "repositorio": "/Applications/Boson Server.app/Contents/Resources/scripts",
+    "commit": "aa68435",
+    "fecha": "2026-10-17",
+    "copia_en_ivscode": true,
+    "code_server": "4.134.0",
+    "code_server_instalado": true,
+    "vscode": "1.135.0",
+    "servidor_al_dia": true
+  },
+  "servidor": {
+    "estado": "sirviendo",
+    "servicio": "launchd",
+    "activado": true,
+    "corriendo": true,
+    "pid_servicio": 632,
+    "puerto": 8443,
+    "editor": {
+      "responde": true,
+      "pid": 903,
+      "segundos": 277518
+    },
+    "gestor": {
+      "responde": true,
+      "puerto": 39500
+    },
+    "terminal": {
+      "escucha": true,
+      "puerto": 39600
+    },
+    "url": "https://estudio-mac.tailf00d.ts.net:9443",
+    "nombre": "estudio-mac",
+    "registro": "/Users/ejemplo/.ivscode/serve.log",
+    "password_existe": true,
+    "lanzador": "app"
+  },
+  "tailscale": {
+    "instalado": true,
+    "ruta": "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "version": "1.104.4",
+    "estado": "Running",
+    "sesion": true,
+    "dns": "estudio-mac.tailf00d.ts.net",
+    "ip": "100.64.0.12",
+    "tailnet": "tailf00d.ts.net",
+    "cuenta": "ejemplo@example.com",
+    "certificados": true,
+    "avisos": [],
+    "serve_habilitado": true,
+    "operador": null,
+    "serve_consultable": true,
+    "serve_error": null,
+    "publicaciones": [
+      {
+        "tipo": "editor",
+        "nombre": null,
+        "nuestro": true,
+        "protocolo": "https",
+        "puerto": 9443,
+        "ruta": "/",
+        "destino": "http://127.0.0.1:8443",
+        "funnel": false
+      },
+      {
+        "tipo": "gestor",
+        "nombre": null,
+        "nuestro": true,
+        "protocolo": "https",
+        "puerto": 9500,
+        "ruta": "/",
+        "destino": "http://127.0.0.1:39500",
+        "funnel": false
+      },
+      {
+        "tipo": "terminal",
+        "nombre": null,
+        "nuestro": true,
+        "protocolo": "tcp",
+        "puerto": 39600,
+        "ruta": null,
+        "destino": "127.0.0.1:39600",
+        "funnel": false
+      },
+      {
+        "tipo": "maquina",
+        "nombre": "ubuntu-1",
+        "nuestro": true,
+        "protocolo": "https",
+        "puerto": 9443,
+        "ruta": "/m-1",
+        "destino": "http://127.0.0.1:10100",
+        "funnel": false
+      },
+      {
+        "tipo": "otro",
+        "nombre": null,
+        "nuestro": false,
+        "protocolo": "https",
+        "puerto": 443,
+        "ruta": "/dl",
+        "destino": "http://127.0.0.1:13480",
+        "funnel": true
+      }
+    ]
+  },
+  "csm": {
+    "instalado": true,
+    "estado": "hub",
+    "puerto": 4000,
+    "puerto_agente": 8787,
+    "url_panel": "http://100.64.0.12:4000",
+    "hub_servicio": true,
+    "agente_servicio": true,
+    "version": "0.1.0",
+    "version_repositorio": "0.1.0",
+    "acceso_total_disco": true,
+    "equipos": [
+      {
+        "nombre": "estudio-mac",
+        "so": "darwin",
+        "en_linea": true,
+        "sesiones": 2,
+        "esperando": 0
+      },
+      {
+        "nombre": "torre-linux",
+        "so": "linux",
+        "en_linea": true,
+        "sesiones": 1,
+        "esperando": 1
+      },
+      {
+        "nombre": "portatil-viejo",
+        "so": "linux",
+        "en_linea": false,
+        "sesiones": 0,
+        "esperando": 0
+      }
+    ],
+    "sesiones": 3,
+    "esperando": 1
+  },
+  "ia": {
+    "copilot_integrado": "0.63.0",
+    "extensiones": [
+      "ms-python.python@2026.4.0",
+      "ms-toolsai.jupyter@2025.9.1",
+      "detachhead.basedpyright@1.40.1"
+    ],
+    "copilot": {
+      "estado": "NotSignedIn",
+      "usuario": null
+    }
+  },
+  "linkspace": {
+    "comandos": false,
+    "al_dia": false,
+    "en_ivscode": true
+  },
+  "simulador": {
+    "xcode": true,
+    "idb": true,
+    "adb": "/opt/homebrew/bin/adb",
+    "kvm": false,
+    "docker": "/usr/local/bin/docker",
+    "docker_version": null
+  }
+}

@@ -60,7 +60,8 @@ have already added are available to it.
 | **GitHub** | Your repositories as folders: edit, commit, branches and pull requests |
 | **Notes and PDFs** | Handwritten notes with the Pencil; write on, sign and rearrange PDFs |
 | **Share with Link_space** | A public, one-time download link for any file or folder on a computer |
-| **Android too** | [ZeroSpin for Android](android/): the same computers, Finder-style files, terminal, editor, Claude sessions and a home-screen widget |
+| **Opens any file** | ZeroSpin is in “Open in…” and the share sheet for every file type — a `.bib`, a `.djvu`, a ZIP from WhatsApp — and keeps it in Downloads: preview it, uncompress it, send it to a computer |
+| **Android too** | [ZeroSpin for Android](android/): the same computers, Finder-style files, terminal, editor, Claude sessions, a home-screen widget, and “Open with” / “Share” for any file: keep it on the phone or send it to a computer’s ZeroSpin folder |
 
 ### What iPadOS does not allow
 
@@ -84,7 +85,16 @@ code gets around them:
 
 ### Installing
 
-Three lines on the computer:
+**With a window: Boson Server.** The server app for Mac and Linux
+(`boson-server/`): download the DMG, the `.deb` or the AppImage from
+[Releases](https://github.com/Demonio0N1/bosoncode/releases), open it and press
+"Install the server". It does the same as the script below, step by step and in
+plain sight, and then stays in the menu bar (Mac) or the tray (Linux) showing
+whether the computer is serving, the address and password for ZeroSpin (with a
+pairing QR), the state of Tailscale, Claude Sessions Monitor and the AI
+assistant. How it is built: [boson-server/README.md](boson-server/README.md).
+
+**From the terminal.** Three lines on the computer:
 
 ```bash
 git clone https://github.com/Demonio0N1/bosoncode.git
@@ -182,7 +192,7 @@ carries the pairing token.
 
 **In ZeroSpin nothing has to be pasted.** Once a computer is in the app, the
 sidebar gets a *Claude Sessions* section: the app asks your computers where CSM
-is and pairs by itself (*Look for CSM on your computers…* does it by hand).
+is and pairs by itself (*Look for CSM…* does it by hand).
 Each session shows its project, its computer and its state — working, waiting
 for you, asking permission. Tap one and it opens live, like in the panel: the
 screen, the keys Claude expects (1, 2, 3, Enter, Esc…), a message field, Pause

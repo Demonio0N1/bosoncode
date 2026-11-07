@@ -63,7 +63,8 @@ que las máquinas que ya añadiste están disponibles también aquí.
 | **GitHub** | Tus repositorios como carpetas: editar, commit, ramas y pull requests |
 | **Notas y PDF** | Notas a mano con el Pencil; escribir sobre un PDF, firmarlo y ordenar sus páginas |
 | **Compartir con Link_space** | Un enlace público de un solo uso para descargar cualquier archivo o carpeta de un equipo |
-| **También en Android** | [ZeroSpin para Android](android/): los mismos equipos, archivos al estilo Finder, terminal, editor, sesiones de Claude y un widget en la pantalla de inicio |
+| **Abre cualquier archivo** | ZeroSpin sale en «Abrir en…» y en la hoja de compartir para cualquier tipo —un `.bib`, un `.djvu`, un ZIP de WhatsApp— y lo guarda en Downloads: se ve, se descomprime o se manda a un equipo |
+| **También en Android** | [ZeroSpin para Android](android/): los mismos equipos, archivos al estilo Finder, terminal, editor, sesiones de Claude, un widget en la pantalla de inicio, y «Abrir con» / «Compartir» para cualquier archivo: se queda en el teléfono o va a la carpeta ZeroSpin de un equipo |
 
 ### Lo que iPadOS no permite
 
@@ -87,7 +88,16 @@ los sortee:
 
 ### Instalación
 
-Tres líneas en el ordenador:
+**Con ventana: Boson Server.** Es la app del servidor para Mac y Linux
+(`boson-server/`): descarga el DMG, el `.deb` o el AppImage de
+[Releases](https://github.com/Demonio0N1/bosoncode/releases), ábrela y pulsa
+«Instalar el servidor». Hace lo mismo que el script de abajo, paso a paso y a la
+vista, y después se queda en la barra de menús (Mac) o en la bandeja (Linux)
+enseñando si el equipo está sirviendo, la dirección y la contraseña para
+ZeroSpin (con un QR para emparejar), el estado de Tailscale, Claude Sessions
+Monitor y el asistente de IA. Cómo está hecha: [boson-server/README.md](boson-server/README.md).
+
+**Desde la terminal.** Tres líneas en el ordenador:
 
 ```bash
 git clone https://github.com/Demonio0N1/bosoncode.git
@@ -184,7 +194,7 @@ emparejamiento.
 
 **En ZeroSpin no hay que pegar nada.** En cuanto hay un equipo en la app, la
 barra lateral tiene una sección *Claude Sessions*: la app pregunta a tus equipos
-dónde está CSM y se empareja sola (*Look for CSM on your computers…* lo hace a
+dónde está CSM y se empareja sola (*Look for CSM…* lo hace a
 mano). Cada sesión enseña su proyecto, su equipo y su estado: trabajando,
 esperándote, pidiendo permiso. Tócala y se abre en vivo, como en el panel: la
 pantalla, las teclas que Claude espera (1, 2, 3, Intro, Esc…), un campo de
@@ -755,7 +765,7 @@ Después, en el equipo del panel:
 
 Una sesión atenuada, sin pantalla, se lanzó con `claude` fuera de tmux: ciérrala
 y vuelve a lanzarla con `csm` en la misma carpeta; retoma la conversación con
-`--continue`. Si *Look for CSM on your computers…* no encuentra nada, CSM no
+`--continue`. Si *Look for CSM…* no encuentra nada, CSM no
 está instalado en ningún equipo de la lista de la app: `./setup.sh --csm` en
 uno de ellos.
 
