@@ -162,6 +162,15 @@ func upsertHub(hubs []HubEntry, h HubEntry) []HubEntry {
 			return hubs
 		}
 	}
+	// El mismo token es el mismo hub aunque llegue con otra dirección: en la
+	// máquina del hub, su instalador lo registra como 127.0.0.1 cuando ya
+	// estaba por su IP de tailscale. Con dos entradas al mismo hub el agente
+	// se conectaba dos veces y el hub cerraba una y otra, sin parar.
+	for _, e := range hubs {
+		if e.Token != "" && e.Token == h.Token {
+			return hubs
+		}
+	}
 	return append(hubs, h)
 }
 

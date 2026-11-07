@@ -247,4 +247,9 @@ echo "  Otras máquinas: curl -fsSL \"http://${TS_IP:-<ip>}:$HUB_PORT/install.sh
 echo "                  (o ./setup.sh allí y elegir este panel cuando pregunte)"
 echo "  Sesiones:       cd <proyecto> && csm   (agrega ~/.local/bin a tu PATH si hace falta)"
 echo "  Servidor:       ./scripts/hub-service.sh status|start|stop|logs"
-[ -z "$TS_IP" ] && warn "tailscale no detectado: instala https://tailscale.com para acceder desde el celular"
+# Con `if`, y no con `&&`: siendo la última línea, un `[ -z ] && …` que no se
+# cumple dejaba el script con exit 1 aunque todo hubiera ido bien, y quien lo
+# llama (el setup.sh de bosoncode) lo daba por fallido.
+if [ -z "$TS_IP" ]; then
+  warn "tailscale no detectado: instala https://tailscale.com para acceder desde el celular"
+fi
