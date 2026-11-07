@@ -51,16 +51,37 @@ jobs:
         working-directory: boson-server
         run: npm ci
 
+      # Las credenciales de Apple solo se ponen si existen: una variable
+      # vacía no es «sin firma» para Tauri, es un certificado que no puede
+      # importar, y el job de Mac moría ahí.
+      - name: Firma de Apple, si hay secretos
+        if: matrix.plataforma == 'macos-latest'
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASS: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTIDAD: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          ID_APPLE: ${{ secrets.APPLE_ID }}
+          PASS_APPLE: ${{ secrets.APPLE_PASSWORD }}
+          EQUIPO: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$CERT" ] && [ -n "$IDENTIDAD" ]; then
+            {
+              echo "APPLE_CERTIFICATE=$CERT"
+              echo "APPLE_CERTIFICATE_PASSWORD=$CERT_PASS"
+              echo "APPLE_SIGNING_IDENTITY=$IDENTIDAD"
+              echo "APPLE_ID=$ID_APPLE"
+              echo "APPLE_PASSWORD=$PASS_APPLE"
+              echo "APPLE_TEAM_ID=$EQUIPO"
+            } >> "$GITHUB_ENV"
+            echo "Con firma y notarización."
+          else
+            echo "Sin secretos de Apple: el DMG saldrá sin firmar."
+          fi
+
       - name: Compilar y adjuntar al borrador de la versión
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: boson-server
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
