@@ -1,7 +1,7 @@
 {
   "name": "boson-server",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Boson Server: el servidor de BosonCode, con ventana. Mac y Linux.",
   "type": "module",
   "scripts": {

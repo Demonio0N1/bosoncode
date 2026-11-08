@@ -108,6 +108,8 @@ code, .mono { font-family: var(--mono); }
 .nav svg { flex-shrink: 0; }
 .lateral .pie { margin-top: auto; display: flex; flex-direction: column; gap: 4px; padding: 0 6px; font-size: 11px; color: var(--texto3); }
 .contenido { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 16px; padding: 22px 28px 24px; overflow-y: auto; }
+/* Con ratón, macOS enseña la barra de desplazamiento siempre: que sea fina y sin pista. */
+.contenido, .registro, .dialogo { scrollbar-width: thin; scrollbar-color: var(--borde-campo) transparent; }
 .app.mac .contenido { padding-top: 24px; }
 
 /* ---------- piezas ---------- */
@@ -149,8 +151,10 @@ code, .mono { font-family: var(--mono); }
 .fila .mono { color: var(--texto2); }
 .fila .gris { color: var(--texto2); }
 
-.lista { display: flex; flex-direction: column; padding: 0; }
-.lista .fila { padding: 11px 0; border-bottom: 1px solid var(--borde); gap: 12px; }
+/* Lista de comprobaciones: la tarjeta no lleva relleno para que los separadores
+   vayan de borde a borde; el relleno lo pone cada fila. */
+.lista { display: flex; flex-direction: column; padding: 0; gap: 0; flex-shrink: 0; }
+.lista .fila { padding: 12px 16px; border-bottom: 1px solid var(--borde); gap: 12px; }
 .lista .fila:last-child { border-bottom: 0; }
 .lista .texto { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .lista .texto b { font-weight: 600; }

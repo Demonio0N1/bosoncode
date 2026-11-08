@@ -63,19 +63,17 @@ export function Sesiones({ e, t, lanzar }: Comunes) {
       </header>
 
       <section className="tarjeta">
-        <div className="fila">
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-            <h2>{c.instalado ? t.csm.instalado(c.version) : t.csm.ninguno}{c.instalado && c.version_repositorio ? ` · ${hayNueva ? t.csm.nuevaVersion(c.version_repositorio) : t.csm.alDia}` : ""}</h2>
-            <span className="nota">{c.estado === "hub" ? t.csm.instaladoNota : c.estado === "agente" && c.url_panel ? t.csm.agenteNota(c.url_panel) : c.instalado ? t.csm.instaladoNota : t.csm.noNota}</span>
-          </div>
-          {c.instalado && c.url_panel && (
-            <div className="botones">
-              <Boton primario onClick={abrirPanel}>{t.csm.abrirPanel}</Boton>
-              <BotonCopiar obtener={() => leerClave("csm")} etiqueta={t.csm.copiarEnlace} t={t} />
-              <Boton primario={!!hayNueva} onClick={actualizar}>{t.csm.actualizar}</Boton>
-            </div>
-          )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+          <h2>{c.instalado ? t.csm.instalado(c.version) : t.csm.ninguno}{c.instalado && c.version_repositorio ? ` · ${hayNueva ? t.csm.nuevaVersion(c.version_repositorio) : t.csm.alDia}` : ""}</h2>
+          <span className="nota">{c.estado === "hub" ? t.csm.instaladoNota : c.estado === "agente" && c.url_panel ? t.csm.agenteNota(c.url_panel) : c.instalado ? t.csm.instaladoNota : t.csm.noNota}</span>
         </div>
+        {c.instalado && c.url_panel && (
+          <div className="botones">
+            <Boton primario onClick={abrirPanel}>{t.csm.abrirPanel}</Boton>
+            <BotonCopiar obtener={() => leerClave("csm")} etiqueta={t.csm.copiarEnlace} t={t} />
+            <Boton primario={!!hayNueva} onClick={actualizar}>{t.csm.actualizar}</Boton>
+          </div>
+        )}
         {!c.instalado && (
           <div className="botones">
             <Boton primario disabled={!instalado} onClick={instalarPanel}>{t.csm.instalarPanel}</Boton>

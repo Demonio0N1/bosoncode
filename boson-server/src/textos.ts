@@ -125,7 +125,7 @@ const es = {
   },
   ajustes: {
     sub: "Boson Server, esta ventana.",
-    idioma: "Idioma", sistema: "El del sistema", espanol: "Español", ingles: "Inglés",
+    general: "General", idioma: "Idioma", sistema: "El del sistema", espanol: "Español", ingles: "Inglés",
     acerca: "Acerca de", repo: "Scripts de", commit: (c: string, f: string) => `versión ${c} del ${f}`,
     arranque: "Arrancar Boson Server al iniciar sesión", arranqueNota: "Se abre escondida, solo con el icono en la barra.",
     actualizaciones: "Actualizaciones", buscar: "Buscar actualizaciones", buscando: "Buscando…", alDia: "Tienes la última versión.", hay: (v: string) => `Hay una versión nueva: ${v}`, descargar: "Descargar", sinRed: "No pude consultar (¿sin conexión?).",
@@ -267,7 +267,7 @@ const en: typeof es = {
   },
   ajustes: {
     sub: "Boson Server, this window.",
-    idioma: "Language", sistema: "System", espanol: "Spanish", ingles: "English",
+    general: "General", idioma: "Language", sistema: "System", espanol: "Spanish", ingles: "English",
     acerca: "About", repo: "Scripts from", commit: (c, f) => `version ${c} from ${f}`,
     arranque: "Launch Boson Server at login", arranqueNota: "It opens hidden, with just the menu bar icon.",
     actualizaciones: "Updates", buscar: "Check for updates", buscando: "Checking…", alDia: "You have the latest version.", hay: (v) => `A newer version is available: ${v}`, descargar: "Download", sinRed: "Could not check (offline?).",

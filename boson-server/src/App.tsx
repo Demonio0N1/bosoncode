@@ -38,7 +38,7 @@ export interface Comunes {
   discoApp: boolean | null;
 }
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 const CADA = 15_000;
 const enTauri = "__TAURI_INTERNALS__" in window;
 

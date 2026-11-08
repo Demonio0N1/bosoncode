@@ -29,7 +29,7 @@ export function Ajustes({ e, t, idioma, cambiarIdioma, version, arranque, cambia
         </div>
       </header>
       <section className="tarjeta">
-        <Etiqueta>{t.ajustes.idioma}</Etiqueta>
+        <Etiqueta>{t.ajustes.general}</Etiqueta>
         <div className="fila">
           <label htmlFor="idioma" className="crece">{t.ajustes.idioma}</label>
           <select id="idioma" className="selector" value={idioma} onChange={(ev) => cambiarIdioma(ev.target.value as Idioma)}>
