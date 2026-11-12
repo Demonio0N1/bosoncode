@@ -1024,7 +1024,7 @@ SETUPEOF
   chmod +x "$IVSCODE_DIR/setup-machine.sh"
   cat > "$IVSCODE_DIR/manager.py" <<'PYEOF'
 import fcntl, hmac, json, os, pty, re, select, shlex, shutil, signal, socket
-import struct, subprocess, sys, tarfile, termios, threading, time, urllib.parse
+import platform, struct, subprocess, sys, tarfile, termios, threading, time, urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1198,6 +1198,20 @@ def machines():
             "url": "https://%s:%d/m-%s/" % (HOST_DNS, HTTPS_PORT, short),
             "port": int(port),
         })
+    # Los adoptados: contenedores ajenos con el editor dentro. Cuentan como en
+    # marcha solo si el editor responde, que es lo que se va a abrir.
+    for nombre, a in _adoptados().items():
+        rc, estado, _ = sh("docker", "inspect", "-f", "{{.State.Running}}", nombre)
+        vivo = rc == 0 and estado.strip() == "true"
+        result.append({
+            "name": nombre,
+            "os": a.get("image") or "?",
+            "status": "running" if vivo and _editor_vivo(nombre) else "stopped",
+            "url": "https://%s:%d/m-%s/" % (HOST_DNS, HTTPS_PORT, nombre),
+            "port": int(a.get("port") or 0),
+            "adopted": True,
+            "image": a.get("image", ""),
+        })
     return result
 
 # token efimero para las descargas iniciadas desde la pagina (arrastrar desde
@@ -1253,7 +1267,7 @@ def clip_copy(path, machine):
 def session_cwd(machine):
     """Directorio de trabajo actual de la terminal (panel de tmux)."""
     if machine:
-        rc, out, _ = sh("docker", "exec", "ivsc_" + machine, "tmux",
+        rc, out, _ = sh("docker", "exec", _cont(machine), "tmux",
                         "display-message", "-p", "-t", "ivscode",
                         "-F", "#{pane_current_path}")
     else:
@@ -1274,14 +1288,14 @@ def resolve_dest(machine, dest):
     if d == "@zerospin":
         target = os.path.join(home, "ZeroSpin")
         if machine:
-            sh("docker", "exec", "ivsc_" + machine, "mkdir", "-p", target)
+            sh("docker", "exec", _cont(machine), "mkdir", "-p", target)
         else:
             os.makedirs(target, exist_ok=True)
         return target
     if not d.startswith("/"):
         return home
     if machine:
-        rc, out, err = sh("docker", "exec", "ivsc_" + machine, "sh", "-c",
+        rc, out, err = sh("docker", "exec", _cont(machine), "sh", "-c",
                           '[ -d "$0" ] && echo dir || { [ -e "$0" ] && echo file || echo none; }', d)
         kind = out.strip()
     else:
@@ -1314,6 +1328,270 @@ def valid_machine(m):
         raise ValueError("nombre de maquina invalido")
     return m
 
+# ---------- contenedores ajenos adoptados ----------
+# Un contenedor que no creo ZeroSpin (postgres, jupyter, lo que sea) tambien
+# puede ser una maquina: se le copia el editor dentro, se arranca con la
+# contrasena del equipo y se publica como las demas. Se apuntan aqui por
+# nombre, con su puerto y a donde llega el host para hablar con el editor.
+ADOPTADOS_FILE = os.path.expanduser("~/.ivscode/adoptados.json")
+_ADOPT_LOCK = threading.Lock()
+
+
+def _adoptados():
+    try:
+        with open(ADOPTADOS_FILE) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _guardar_adoptados(d):
+    tmp = ADOPTADOS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f, indent=1)
+    os.replace(tmp, ADOPTADOS_FILE)
+
+
+def _cont(machine):
+    """El contenedor de una maquina: ivsc_<nombre> si la creo ZeroSpin, o el
+    contenedor tal cual si es uno adoptado."""
+    if machine in _adoptados():
+        return machine
+    return "ivsc_" + machine
+
+
+# Busca el editor entre los procesos del contenedor sin depender de pgrep,
+# que las imagenes minimas no traen.
+_BUSCA_EDITOR = ("for p in /proc/[0-9]*; do tr '\\0' ' ' < $p/cmdline 2>/dev/null "
+                 "| grep -q /opt/code-server/ && echo ${p#/proc/}; done")
+
+
+def _editor_vivo(name):
+    rc, out, _ = sh("docker", "exec", name, "sh", "-c", _BUSCA_EDITOR, timeout=20)
+    return rc == 0 and bool(out.strip())
+
+
+def containers():
+    """Todos los contenedores del equipo, no solo los de ZeroSpin."""
+    rc, out, err = sh("docker", "ps", "-a", "--format",
+                      '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}\t{{.Label "ivscode.machine"}}')
+    if rc != 0:
+        return []
+    adopt = _adoptados()
+    res = []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        name, image, status, ports = parts[:4]
+        label = parts[4] if len(parts) > 4 else ""
+        if name.startswith("ivsc_fwd_"):
+            continue            # los auxiliares de puerto de los adoptados
+        res.append({
+            "name": name,
+            "image": image,
+            "status": "running" if status.startswith("Up") else "stopped",
+            "ports": ports[:80],
+            "zerospin": label == "1" or name.startswith("ivsc_"),
+            "adopted": name in adopt,
+            "usable": re.fullmatch(r"[a-zA-Z0-9_-]{1,30}", name) is not None,
+        })
+    return res
+
+
+def container_check(name):
+    """Si se puede instalar el editor dentro, y por que no si no se puede."""
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,30}", name):
+        raise ValueError("el nombre del contenedor lleva caracteres que ZeroSpin no admite: "
+                         "renombralo con letras, numeros, - o _")
+    rc, out, _ = sh("docker", "inspect", "-f", "{{.State.Running}}\t{{.Config.Image}}", name)
+    if rc != 0:
+        raise RuntimeError("ese contenedor no existe")
+    estado, _, image = out.strip().partition("\t")
+    info = {"name": name, "image": image, "running": estado == "true", "arch": "",
+            "arch_ok": None, "glibc": None, "distro": "", "tools": {}, "free_mb": None,
+            "host_arch": platform.machine(), "ok": False, "why": ""}
+    if not info["running"]:
+        info["why"] = "el contenedor esta parado: arrancalo primero"
+        return info
+    rc, arch, _ = sh("docker", "exec", name, "uname", "-m", timeout=20)
+    arch = arch.strip()
+    info["arch"] = arch
+    norm = lambda a: {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(a, a)
+    info["arch_ok"] = norm(arch) == norm(platform.machine())
+    rc, out, _ = sh("docker", "exec", name, "sh", "-c",
+                    "ls /lib/ld-musl-* 2>/dev/null | head -1; echo ---; "
+                    "ls /lib/*-linux-gnu/libc.so.6 /lib64/libc.so.6 /usr/lib/libc.so.6 "
+                    "/lib/libc.so.6 /usr/lib64/libc.so.6 2>/dev/null | head -1", timeout=20)
+    musl, _, glibc = (out or "").partition("---")
+    info["glibc"] = bool(glibc.strip()) and not musl.strip()
+    rc, out, _ = sh("docker", "exec", name, "sh", "-c",
+                    '. /etc/os-release 2>/dev/null; echo "$PRETTY_NAME"', timeout=20)
+    info["distro"] = out.strip()
+    for tool in ("bash", "git", "curl"):
+        rc, out, _ = sh("docker", "exec", name, "sh", "-c", "command -v " + tool, timeout=20)
+        info["tools"][tool] = rc == 0 and bool(out.strip())
+    rc, out, _ = sh("docker", "exec", name, "sh", "-c",
+                    "df -Pm / 2>/dev/null | tail -1 | awk '{print $4}'", timeout=20)
+    try:
+        info["free_mb"] = int(out.strip())
+    except ValueError:
+        pass
+    problemas = []
+    if not info["glibc"]:
+        problemas.append("usa musl (Alpine) o no tiene glibc: el editor no puede correr dentro")
+    if not info["arch_ok"]:
+        problemas.append("es de otra arquitectura (%s) que este equipo (%s)" % (arch, platform.machine()))
+    if any(m["name"] == name and not m.get("adopted") for m in machines()):
+        problemas.append("ya hay una maquina de ZeroSpin con ese nombre")
+    if info["free_mb"] is not None and info["free_mb"] < 400:
+        problemas.append("quedan menos de 400 MB libres dentro")
+    info["ok"] = not problemas
+    info["why"] = "; ".join(problemas)
+    return info
+
+
+def _lanzar_editor_adoptado(name, port):
+    """Arranca el editor dentro y devuelve la direccion por la que el host le llega."""
+    rc, out, err = sh("docker", "exec", "-d", "-e", "PASSWORD=" + PASSWORD, name,
+                      "/opt/code-server/bin/code-server", "--bind-addr", "0.0.0.0:%d" % port,
+                      "--auth", "password", "--disable-telemetry")
+    if rc != 0:
+        raise RuntimeError("no pude arrancar el editor: " + (err or out)[-200:])
+    rc, out, _ = sh("docker", "inspect", "-f",
+                    "{{.HostConfig.NetworkMode}}\t{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{$v.IPAddress}}{{end}}",
+                    name)
+    modo, _, redes = (out or "").strip().partition("\t")
+    red, _, ip = redes.strip().partition(" ")
+    ip = ip.split()[0] if ip.strip() else ""
+    if modo == "host" or not ip:
+        dest = "http://127.0.0.1:%d" % port
+    elif IS_MAC:
+        # Docker Desktop no deja llegar a la IP del contenedor desde el Mac:
+        # un contenedor auxiliar en su misma red publica el puerto en localhost.
+        sh("docker", "rm", "-f", "ivsc_fwd_" + name)
+        rc, out, err = sh("docker", "run", "-d", "--name", "ivsc_fwd_" + name, "--network", red,
+                          "-p", "127.0.0.1:%d:%d" % (port, port), "alpine/socat",
+                          "TCP-LISTEN:%d,fork,reuseaddr" % port, "TCP:%s:%d" % (ip, port), timeout=300)
+        if rc != 0:
+            raise RuntimeError("no pude publicar el puerto: " + (err or out)[-200:])
+        dest = "http://127.0.0.1:%d" % port
+    else:
+        dest = "http://%s:%d" % (ip, port)
+    for _ in range(60):
+        try:
+            with urllib.request.urlopen(dest + "/healthz", timeout=2) as r:
+                if r.status == 200:
+                    return dest
+        except Exception:
+            pass
+        time.sleep(0.5)
+    raise RuntimeError("el editor arranco pero no responde en " + dest)
+
+
+def _parar_editor_adoptado(name):
+    if IS_MAC:
+        sh("docker", "rm", "-f", "ivsc_fwd_" + name)
+    sh("docker", "exec", name, "sh", "-c",
+       "for p in $(" + _BUSCA_EDITOR + "); do kill $p 2>/dev/null; done", timeout=30)
+
+
+def _tamano_mb(ruta):
+    total = 0
+    for raiz, _d, archivos in os.walk(ruta):
+        for a in archivos:
+            try:
+                total += os.path.getsize(os.path.join(raiz, a))
+            except OSError:
+                pass
+    return total // (1024 * 1024)
+
+
+def adopt(name):
+    """Instala el editor dentro de un contenedor ajeno y lo publica como una
+    maquina mas. Tarda (copiar 200 MB), asi que va como trabajo y devuelve
+    su id para ir leyendo las lineas."""
+    info = container_check(name)
+    if not info["ok"]:
+        raise RuntimeError(info["why"])
+    job = secrets.token_hex(6)
+    with _TRABAJOS_LOCK:
+        for viejo in list(_TRABAJOS)[:-4]:
+            _TRABAJOS.pop(viejo, None)
+        _TRABAJOS[job] = {"log": [], "errores": [], "done": False, "ok": False,
+                          "proc": None, "titulo": name}
+
+    def trabajo():
+        try:
+            with _ADOPT_LOCK:
+                port = free_port()
+                _apunta(job, "▸ copiando el editor dentro de %s (%d MB)" % (name, _tamano_mb(CS_DIR)))
+                rc, out, err = sh("docker", "exec", name, "mkdir", "-p", "/opt/code-server")
+                if rc != 0:
+                    raise RuntimeError((err or out)[-200:])
+                rc, out, err = sh("docker", "cp", CS_DIR + "/.", name + ":/opt/code-server", timeout=1800)
+                if rc != 0:
+                    raise RuntimeError("no pude copiar el editor: " + (err or out)[-200:])
+                _apunta(job, "▸ arrancando el editor en el puerto %d" % port)
+                dest = _lanzar_editor_adoptado(name, port)
+                _apunta(job, "▸ publicando como /m-%s/" % name)
+                mount(name, port, dest)
+                d = _adoptados()
+                d[name] = {"port": port, "dest": dest, "image": info.get("image", "")}
+                _guardar_adoptados(d)
+            _apunta(job, "✓ listo")
+            with _TRABAJOS_LOCK:
+                _TRABAJOS[job]["ok"] = True
+        except Exception as e:
+            _apunta(job, "✗ %s" % e)
+        finally:
+            with _TRABAJOS_LOCK:
+                if job in _TRABAJOS:
+                    _TRABAJOS[job]["done"] = True
+    threading.Thread(target=trabajo, daemon=True).start()
+    return job
+
+
+def unadopt(name):
+    """Deja de usar el contenedor: quita el editor de dentro y la publicacion.
+    El contenedor y lo que tenga el usuario no se tocan."""
+    with _ADOPT_LOCK:
+        d = _adoptados()
+        d.pop(name, None)
+        unmount(name)
+        _parar_editor_adoptado(name)
+        sh("docker", "exec", name, "rm", "-rf", "/opt/code-server", timeout=120)
+        _guardar_adoptados(d)
+
+
+def adopted_action(name, action):
+    """start/stop/restart de una maquina adoptada: se arranca o se para el
+    EDITOR de dentro, nunca el contenedor del usuario."""
+    a = _adoptados().get(name) or {}
+    if action in ("stop", "restart"):
+        unmount(name)
+        _parar_editor_adoptado(name)
+    if action in ("start", "restart"):
+        rc, estado, _ = sh("docker", "inspect", "-f", "{{.State.Running}}", name)
+        if rc == 0 and estado.strip() != "true":
+            rc, out, err = sh("docker", "start", name)
+            if rc != 0:
+                raise RuntimeError((err or out)[-200:])
+        port = int(a.get("port") or free_port())
+        rc, out, _ = sh("docker", "exec", name, "test", "-x", "/opt/code-server/bin/code-server")
+        if rc != 0:
+            raise RuntimeError("el editor ya no esta dentro de %s: usa «Dejar de usar» y vuelve a instalarlo" % name)
+        if not _editor_vivo(name):
+            dest = _lanzar_editor_adoptado(name, port)
+        else:
+            dest = a.get("dest") or "http://127.0.0.1:%d" % port
+        mount(name, port, dest)
+        with _ADOPT_LOCK:
+            d = _adoptados()
+            d[name] = {"port": port, "dest": dest, "image": a.get("image", "")}
+            _guardar_adoptados(d)
+
 def fs_list(machine, path):
     machine = valid_machine(machine)
     if path in ("", "~"):
@@ -1323,7 +1601,7 @@ def fs_list(machine, path):
     entries = []
     if machine:
         # formato: tipo|tamaño|mtime|nombre
-        rc, out, err = sh("docker", "exec", "ivsc_" + machine, "sh", "-c",
+        rc, out, err = sh("docker", "exec", _cont(machine), "sh", "-c",
                           "cd %s 2>/dev/null && ls -A | while IFS= read -r f; do "
                           "if [ -d \"$f\" ]; then t=d; else t=f; fi; "
                           "s=$(stat -c %%s \"$f\" 2>/dev/null || echo 0); "
@@ -1366,7 +1644,7 @@ def fs_op(machine, op, path, target=""):
     if op not in cmds:
         raise ValueError("operacion invalida")
     if machine:
-        rc, out, err = sh("docker", "exec", "ivsc_" + machine, *cmds[op])
+        rc, out, err = sh("docker", "exec", _cont(machine), *cmds[op])
     else:
         rc, out, err = sh(*cmds[op])
     if rc != 0:
@@ -1391,7 +1669,7 @@ def run_command(machine, cmd, cwd="", timeout=90):
     home = "/root" if machine else os.path.expanduser("~")
     folder = cwd if str(cwd).startswith("/") else home
     if machine:
-        args = ["docker", "exec", "-w", folder, "ivsc_" + machine, "sh", "-lc", cmd]
+        args = ["docker", "exec", "-w", folder, _cont(machine), "sh", "-lc", cmd]
         if DOCKER_VIA_SG:
             args = ["sg", "docker", "-c", " ".join(shlex.quote(x) for x in args)]
         cwd_host = None
@@ -1467,7 +1745,7 @@ def run_envs(machine, path):
     ext = os.path.splitext(path)[1].lstrip(".").lower()
     folder = os.path.dirname(path) or "/"
     if machine:
-        rc, out, err = sh("docker", "exec", "ivsc_" + machine, "sh", "-c", DETECT_ENVS,
+        rc, out, err = sh("docker", "exec", _cont(machine), "sh", "-c", DETECT_ENVS,
                           "detect", folder, ext, timeout=20)
     else:
         env = dict(os.environ)
@@ -1505,9 +1783,9 @@ def run_envs(machine, path):
         envs.append({"kind": kind, "label": label, "path": exe, "command": command})
     return {"folder": folder, "envs": envs}
 
-def mount(name, port):
+def mount(name, port, dest=None):
     sh("tailscale", "serve", "--bg", "--https=%d" % HTTPS_PORT,
-       "--set-path=/m-" + name, "http://127.0.0.1:%d" % port)
+       "--set-path=/m-" + name, dest or "http://127.0.0.1:%d" % port)
 
 def unmount(name):
     sh("tailscale", "serve", "--https=%d" % HTTPS_PORT, "--set-path=/m-" + name, "off")
@@ -1755,6 +2033,74 @@ def _has_idb():
     return _idb() is not None
 
 
+# Emuladores Android que lanzo este gestor, por nombre de AVD: para saber si
+# siguen vivos mientras Android arranca y adb aun no los lista.
+_EMULADORES = {}
+
+
+def _avd_serial(nombre):
+    """El serial (emulator-5554) del emulador que corre ese AVD, o None."""
+    adb = _adb()
+    if not adb:
+        return None
+    rc, txt, _ = sh(adb, "devices", timeout=20)
+    if rc != 0:
+        return None
+    for line in txt.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 2 or not parts[0].startswith("emulator-"):
+            continue
+        rc, avd, _ = sh(adb, "-s", parts[0], "emu", "avd", "name", timeout=10)
+        if rc == 0 and avd.splitlines() and avd.splitlines()[0].strip() == nombre:
+            return parts[0]
+    return None
+
+
+def sim_boot_status(kind, dev):
+    """En que punto del arranque va: off, launched, booting o ready.
+
+    Arrancar un emulador Android tarda un minuto y `sim_boot` vuelve a los
+    cuatro segundos; sin esto la app se quedaba mirando una pantalla negra sin
+    saber si iba o no. Para un AVD devuelve ademas el serial con el que ya se
+    le puede pedir la pantalla.
+    """
+    if kind == "ios":
+        simctl = _simctl()
+        if not simctl:
+            return {"stage": "off"}
+        rc, txt, _ = sh(simctl, "list", "devices", "--json", timeout=30)
+        estado = ""
+        if rc == 0:
+            try:
+                for devices in json.loads(txt).get("devices", {}).values():
+                    for d in devices:
+                        if d.get("udid") == dev:
+                            estado = d.get("state", "")
+            except Exception:
+                pass
+        if estado == "Booted":
+            return {"stage": "ready"}
+        if estado == "Booting":
+            return {"stage": "booting"}
+        return {"stage": "off"}
+    adb = _adb()
+    if dev.startswith("avd:"):
+        nombre = dev[4:]
+        serial = _avd_serial(nombre)
+        if not serial:
+            proceso = _EMULADORES.get(nombre)
+            vivo = proceso is not None and proceso.poll() is None
+            return {"stage": "launched" if vivo else "off"}
+    else:
+        serial = dev
+    if not adb:
+        return {"stage": "off"}
+    rc, out, _ = sh(adb, "-s", serial, "shell", "getprop", "sys.boot_completed", timeout=15)
+    if rc == 0 and out.strip() == "1":
+        return {"stage": "ready", "serial": serial}
+    return {"stage": "booting", "serial": serial}
+
+
 def sim_devices():
     """Todo lo que esta maquina puede enseñar, ya arrancado o por arrancar."""
     out = []
@@ -1850,6 +2196,7 @@ def sim_boot(kind, dev):
             [emu, "-avd", nombre, "-no-window", "-no-audio", "-no-boot-anim",
              "-no-metrics", "-gpu", "swiftshader_indirect", "-no-snapshot-load"],
             stdout=salida, stderr=subprocess.STDOUT, start_new_session=True)
+        _EMULADORES[nombre] = proceso
 
         # Comprobar que sigue vivo, y si no, DECIR POR QUE.
         #
@@ -2171,6 +2518,9 @@ def _build_ios(job, path, dev):
     esquema = esquemas[0]
     _apunta(job, "▸ esquema: %s" % esquema)
 
+    # Las lineas «▸ compilando / instalando / lanzando» son las que la app
+    # convierte en pasos con su tiempo; el resto del registro es contexto.
+    _apunta(job, "▸ compilando")
     rc = _corre(job, ["xcodebuild"] + destino + [
         "-scheme", esquema, "-configuration", "Debug", "-sdk", "iphonesimulator",
         "-destination", "id=%s" % dev, "-derivedDataPath", ".build",
@@ -2206,12 +2556,16 @@ def _build_android(job, path, dev):
         raise RuntimeError("adb no esta instalado en este equipo")
     gradlew = os.path.join(path, "gradlew")
     cmd = [gradlew] if os.access(gradlew, os.X_OK) else ["gradle"]
+    # installDebug compila e instala de una vez: la fase de instalar la marca
+    # gradle con «> Task :app:installDebug», y la app la reconoce.
+    _apunta(job, "▸ compilando")
     rc = _corre(job, cmd + ["installDebug"], path)
     if rc != 0:
         raise RuntimeError("la compilacion fallo")
     # monkey con un solo evento es la forma corta de "abre la app de inicio"
     # sin tener que averiguar cual es la actividad principal.
     paquete = os.path.basename(path.rstrip("/"))
+    _apunta(job, "▸ lanzando %s" % paquete)
     _corre(job, [adb, "-s", dev, "shell", "monkey", "-p", paquete,
                  "-c", "android.intent.category.LAUNCHER", "1"], path)
     return paquete
@@ -2638,6 +2992,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/machines":
                 self._send(200, {"machines": machines()})
+            elif parsed.path == "/containers":
+                self._send(200, {"containers": containers()})
+            elif re.fullmatch(r"/containers/([a-zA-Z0-9_.-]+)/check", parsed.path):
+                self._send(200, container_check(parsed.path.split("/")[2]))
             elif parsed.path == "/download":
                 q = urllib.parse.parse_qs(parsed.query)
                 machine = valid_machine((q.get("machine") or [""])[0])
@@ -2677,6 +3035,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"cwd": session_cwd(machine)})
             elif parsed.path == "/sim/devices":
                 self._send(200, {"devices": sim_devices(), "mac": IS_MAC})
+            elif parsed.path == "/sim/boot/status":
+                q = urllib.parse.parse_qs(parsed.query)
+                self._send(200, sim_boot_status((q.get("kind") or ["ios"])[0],
+                                                (q.get("id") or [""])[0]))
             elif parsed.path == "/sim/frame":
                 q = urllib.parse.parse_qs(parsed.query)
                 ancho = max(240, min(1400, int((q.get("w") or ["640"])[0])))
@@ -2828,6 +3190,18 @@ class Handler(BaseHTTPRequestHandler):
                 repair(m.group(1))
                 self._send(200, {"ok": True})
                 return
+            m = re.fullmatch(r"/containers/([a-zA-Z0-9_.-]+)/adopt", self.path)
+            if m:
+                self._send(200, {"job": adopt(m.group(1))})
+                return
+            m = re.fullmatch(r"/containers/([a-zA-Z0-9_.-]+)/(start|stop)", self.path)
+            if m:
+                # Un contenedor del usuario, tal cual: lo pidio el explicitamente.
+                rc, out, err = sh("docker", m.group(2), m.group(1), timeout=120)
+                if rc != 0:
+                    raise RuntimeError((err or out)[-200:])
+                self._send(200, {"ok": True})
+                return
             m = re.fullmatch(r"/machines/([a-zA-Z0-9_-]+)/(start|stop|restart)", self.path)
             if not m:
                 self._send(404, {"error": "no existe"})
@@ -2835,6 +3209,10 @@ class Handler(BaseHTTPRequestHandler):
             name, action = m.groups()
             if action in ("start", "restart") and not _ensure_docker():
                 raise RuntimeError("Docker esta cerrado y no he podido arrancarlo.")
+            if name in _adoptados():
+                adopted_action(name, action)
+                self._send(200, {"ok": True})
+                return
             rc, out, err = sh("docker", action, "ivsc_" + name)
             if rc != 0:
                 raise RuntimeError((err or out)[-200:])
@@ -2861,6 +3239,13 @@ class Handler(BaseHTTPRequestHandler):
         name = m.group(1)
         q = urllib.parse.parse_qs(parsed.query)
         with_volume = (q.get("volume") or ["0"])[0] == "1"
+        if name in _adoptados():
+            try:
+                unadopt(name)
+                self._send(200, {"ok": True})
+            except Exception as e:
+                self._send(500, {"error": str(e)})
+            return
         rc, out, err = sh("docker", "rm", "-f", "ivsc_" + name)
         if rc != 0:
             self._send(500, {"error": (err or out)[-200:]})
@@ -2919,7 +3304,7 @@ def _term_client(client):
         if machine:
             if not re.fullmatch(r"[a-zA-Z0-9_-]+", machine):
                 return
-            argv = ["docker", "exec", "-it", "ivsc_" + machine, "sh", "-lc",
+            argv = ["docker", "exec", "-it", _cont(machine), "sh", "-lc",
                     "if command -v tmux >/dev/null; then "
                     "printf '%s\\n' 'set -g mouse on' 'set -g history-limit 50000' "
                     "> /tmp/ivscode.tmux.conf; "
