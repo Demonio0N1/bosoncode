@@ -694,10 +694,38 @@ ia_esperar_editor() {
 #     rellenar código. Si no hay Ollama, Claude Haiku 4.5 —
 #     claude-haiku-4-5-20251001—, con dos advertencias que se dejan escritas en
 #     el propio archivo (ver abajo).
+# ¿Hay una clave de Anthropic de verdad en ~/.continue/.env (no comentada)?
+ia_tiene_clave() {
+  grep -qE '^ANTHROPIC_API_KEY=[^[:space:]]+' "$HOME/.continue/.env" 2>/dev/null
+}
+
+# Una configuración anterior con «Claude Haiku (autocompletar)» y sin clave
+# llama a Anthropic a cada tecla, recibe 401 y saca un aviso por intento.
+# Se le quita ese modelo; el chat se queda como estaba.
+ia_reparar_autocompletar() {
+  local cfg="$HOME/.continue/config.yaml"
+  grep -q 'Claude Haiku 4.5 (autocompletar)' "$cfg" 2>/dev/null || return 0
+  ia_tiene_clave && return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$cfg" <<'PYEOF'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s2 = re.sub(r"\n  # Autocompletar con Claude Haiku 4\.5(?:.*\n)+?  - name: Claude Haiku 4\.5 \(autocompletar\)\n(?:    .*\n)+", "\n", s)
+s2 = re.sub(r"\n  - name: Claude Haiku 4\.5 \(autocompletar\)\n(?:    .*\n)+", "\n", s2)
+if s2 != s:
+    open(p, "w").write(s2)
+    print("reparado")
+PYEOF
+  nota "quitado el autocompletado con Claude de ~/.continue/config.yaml: sin clave"
+  nota "en ~/.continue/.env pedía a Anthropic a cada tecla y avisaba de un 401."
+}
+
 ia_config_continue() {
   local dir="$HOME/.continue" ollama="" local_autocompletar=0
   if [ -f "$dir/config.yaml" ]; then
     nota "ya tienes ~/.continue/config.yaml: lo dejo como está"
+    ia_reparar_autocompletar
     return 0
   fi
   mkdir -p "$dir"
@@ -739,7 +767,9 @@ for n in nombres[:3]:
     echo "    model: claude-opus-5-5"
     echo "    apiKey: \${{ secrets.ANTHROPIC_API_KEY }}"
     echo "    roles: [chat, edit, apply]"
-    if [ "$local_autocompletar" = 0 ]; then
+    # El autocompletado con Claude solo si ya hay clave: sin ella, Continue
+    # pediría a Anthropic a cada tecla y avisaría de un 401 cada vez.
+    if [ "$local_autocompletar" = 0 ] && ia_tiene_clave; then
       echo "  # Autocompletar con Claude Haiku 4.5, el más rápido. Dos avisos:"
       echo "  #  · la documentación de Continue advierte que los modelos de chat como"
       echo "  #    Claude no se entrenan con el formato de relleno (FIM) que usa el"
@@ -767,9 +797,13 @@ for n in nombres[:3]:
   nota "  chat y edición: Claude Opus 5.5"
   if [ "$local_autocompletar" = 1 ]; then
     nota "  autocompletar: un modelo local de Ollama (sin clave ni coste)"
-  else
+  elif ia_tiene_clave; then
     nota "  autocompletar: Claude Haiku 4.5 (Continue avisa de que Claude no está"
     nota "  hecho para autocompletar; con Ollama y un modelo «coder» va mejor)"
+  else
+    nota "  autocompletar: apagado. Con un modelo «coder» de Ollama se activa"
+    nota "  solo; con Claude, pon la clave en ~/.continue/.env y borra config.yaml"
+    nota "  antes de volver a lanzar ./setup.sh --ai continue"
   fi
   nota "Claude necesita una CLAVE DE API de Anthropic: se paga por uso, aparte de"
   nota "cualquier suscripción de Claude (Pro/Max no la incluye). Créala en"
